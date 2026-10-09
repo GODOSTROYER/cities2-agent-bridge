@@ -240,6 +240,25 @@ function Test-OccupancyRectFree($occ, [double]$x0, [double]$z0, [double]$x1, [do
     for ($i = $i0; $i -le $i1; $i++) { for ($j = $j0; $j -le $j1; $j++) { if ($occ.Grid[$i, $j]) { return $false } } }
     $true
 }
+# Rotated lot test for building placement: samples the box every half cell; any lot (1)
+# or road (2) cell blocks. rotationDeg follows the bridge convention (local +Z = lot front).
+function Test-OccupancyBoxFree($occ, [double]$cx, [double]$cz, [double]$halfW, [double]$halfD, [double]$rotationDeg) {
+    $r = $rotationDeg * [Math]::PI / 180; $cos = [Math]::Cos($r); $sin = [Math]::Sin($r); $step = $occ.Cell / 2
+    for ($u = -$halfW; $u -le $halfW; $u += $step) { for ($v = -$halfD; $v -le $halfD; $v += $step) {
+        # Unity Y rotation: x' = x cos + z sin, z' = -x sin + z cos
+        $px = $cx + $u * $cos + $v * $sin; $pz = $cz - $u * $sin + $v * $cos
+        $i = [int][Math]::Floor(($px - $occ.MinX) / $occ.Cell); $j = [int][Math]::Floor(($pz - $occ.MinZ) / $occ.Cell)
+        if ($i -lt 0 -or $j -lt 0 -or $i -ge $occ.W -or $j -ge $occ.H -or $occ.Grid[$i, $j]) { return $false } } }
+    $true
+}
+# Finds a value by property name anywhere in a nested object (prefab rawData layouts vary).
+function Find-BridgeValue($obj, [string]$name) {
+    if ($null -eq $obj -or $obj -is [string] -or $obj -is [ValueType]) { return $null }
+    if ($obj -is [Collections.IEnumerable] -and $obj -isnot [Collections.IDictionary]) { foreach ($x in $obj) { $f = Find-BridgeValue $x $name; if ($null -ne $f) { return $f } }; return $null }
+    foreach ($p in $obj.PSObject.Properties) { if ($p.Name -eq $name) { return $p.Value }; $f = Find-BridgeValue $p.Value $name; if ($null -ne $f) { return $f } }
+    $null
+}
+
 # Connector test: a road strip of +-halfWidth must not touch any building lot. Roads are
 # allowed (the link starts on one), so only value 1 blocks.
 function Test-OccupancySegmentFree($occ, $a, $b, [double]$halfWidth = 6) {
@@ -273,4 +292,4 @@ function Clear-BridgeRollingSaves {
     [pscustomobject]@{ kept = @($saves | Select-Object -First $KeepNewest | ForEach-Object BaseName); recycled = $removed }
 }
 
-Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab, Clear-BridgeRollingSaves, Get-BridgeOccupancy, Test-OccupancyRectFree, Test-OccupancySegmentFree, Set-OccupancyPolygon, Set-OccupancySegment
+Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab, Clear-BridgeRollingSaves, Get-BridgeOccupancy, Test-OccupancyRectFree, Test-OccupancySegmentFree, Test-OccupancyBoxFree, Find-BridgeValue, Set-OccupancyPolygon, Set-OccupancySegment

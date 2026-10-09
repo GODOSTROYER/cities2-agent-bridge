@@ -295,13 +295,32 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         # place <prefab name> -X x -Z z [-R 300 -Max 150000]: roadside site search + native placement.
         $name = $pos -join ' '
         $pf = Resolve-BridgePrefab $name 'building'
-        $found = Invoke-Bridge find_building_sites @{ prefabIndex = $pf.index; prefabVersion = $pf.version; x = [double](Opt 'x' 0); z = [double](Opt 'z' 0); radius = [double](Opt 'r' 300) }
+        $px = [double](Opt 'x' 0); $pz = [double](Opt 'z' 0); $pr = [double](Opt 'r' 300)
+        $found = Invoke-Bridge find_building_sites @{ prefabIndex = $pf.index; prefabVersion = $pf.version; x = $px; z = $pz; radius = $pr }
         $cands = @($found.(Get-ResultArrayName $found) | Select-Object -First 16 | ForEach-Object { @{ position = @{ x = [double]$_.position.x; z = [double]$_.position.z }; rotation = [double]$_.rotation } })
+        # Large lots: the mod's finder ignores roads/intersections and samples 3 points per
+        # edge. Use the occupancy raster (lots + roads) with the prefab's real lot size,
+        # sliding along every nearby road edge on both sides.
+        $lot = Find-BridgeValue (Invoke-Bridge get_prefab_details @{ index = $pf.index; version = $pf.version }).rawData 'm_LotSize'
+        if ($lot -and ([double]$lot.x * [double]$lot.y) -ge 64) {
+            $hw = [double]$lot.x * 4; $hd = [double]$lot.y * 4
+            $occ = Get-BridgeOccupancy -MinX ($px - $pr - 120) -MinZ ($pz - $pr - 120) -MaxX ($px + $pr + 120) -MaxZ ($pz + $pr + 120)
+            $roadsNear = @((Invoke-Bridge get_network_edges @{ x = $px; z = $pz; radius = $pr }).edges | Where-Object { $_.prefab -match '^(?!Highway).*Road' })
+            $big = foreach ($e in $roadsNear) { $a = $e.curve[0]; $b = $e.curve[-1]; $len = [Math]::Sqrt([Math]::Pow($b.x - $a.x, 2) + [Math]::Pow($b.z - $a.z, 2)); if ($len -lt 2 * $hw) { continue }
+                $tx = ($b.x - $a.x) / $len; $tz = ($b.z - $a.z) / $len
+                for ($s = $hw + 4; $s -le $len - $hw - 4; $s += 8) { foreach ($side in -1, 1) {
+                    $ox = - $tz * $side; $oz = $tx * $side; $cx = $a.x + $tx * $s + $ox * (9 + $hd); $cz = $a.z + $tz * $s + $oz * (9 + $hd)
+                    $rot = [Math]::Atan2(- $ox, - $oz) * 180 / [Math]::PI
+                    if (Test-OccupancyBoxFree $occ $cx $cz $hw $hd $rot) { [pscustomobject]@{ x = $cx; z = $cz; rot = $rot; d = [Math]::Sqrt([Math]::Pow($cx - $px, 2) + [Math]::Pow($cz - $pz, 2)) } } } } }
+            $big = @($big | Sort-Object d | Select-Object -First 16)
+            "place: lot $($lot.x)x$($lot.y) cells; $($big.Count) raster-clear roadside spots"
+            if ($big) { $cands = @($big | ForEach-Object { @{ position = @{ x = [double]$_.x; z = [double]$_.z }; rotation = [double]$_.rot } }) }
+        }
         if (!$cands) { "place: no roadside site for $name near $(Opt 'x' 0),$(Opt 'z' 0)"; break }
         $op = Invoke-Bridge place_building @{ prefabIndex = $pf.index; prefabVersion = $pf.version; position = $cands[0].position; rotation = $cands[0].rotation; candidates = $cands; maxCost = [long](Opt 'max' 150000) }
         $r = Wait-BridgeOperation $op.id
         if ($r.status -eq 'complete') { "place: $name at {0:N0},{1:N0} cost {2}" -f $r.snappedPosition.x, $r.snappedPosition.z, (Money $r.previewCost) }
-        else { "place: FAILED $name - $($r.error) (attempts $(@($r.attempts).Count))" }
+        else { "place: FAILED $name - $($r.error) (attempts $(@($r.attempts).Count)) reasons [$(@($r.placementErrors | ForEach-Object { $_.reasons } | Select-Object -Unique) -join ',')]" }
     }    'save' {
         # Default: rolling save (older bridge saves -> Recycle Bin). -Keep: permanent keep-<label>.
         $keep = [bool](Opt 'keep' $false)
