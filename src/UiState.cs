@@ -159,7 +159,7 @@ namespace CitiesIIAgentBridge
                 var call = new object[] { id, null };
                 if (!(bool)tryGet.Invoke(dictionary, call)) continue;
                 string text = System.Text.RegularExpressions.Regex.Replace((string)call[1] ?? "", "<[^>]+>|\\s+", " ").Trim();
-                output[id] = text.Length > 300 ? text.Substring(0, 300) + "…" : text;
+                output[id] = text.Length > 300 ? text.Substring(0, 300) + "\u2026" : text;
             }
             return output;
         }

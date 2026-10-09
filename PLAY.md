@@ -2,6 +2,22 @@
 
 Read this instead of COMMANDS.md; LEARNINGS.md has the why.
 
+## Preferred: MCP tools
+Use the `cs2` MCP server (HARNESS.md section 4b). Its tools replace most verbs below. Preconditions below still apply.
+
+Core loop:
+1. `snapshot`: money, net, population, demand, jobs, utilities, shortages, ui. Non-pausing.
+2. Decide. Read `demandWhy` and `jobs.vacantByEdu` before zoning. Judge power by `util.power` use vs production and import, not plant load.
+3. `save` and wait for `complete`.
+4. Act, plan first: `grow`, `build_grid`, `link`, `buy_tile`, `place_service` with `plan: true`. Check `prefabs` costs and `monthlyUpkeep` before building, then repeat without `plan`.
+5. `run` (`seconds`, `speed`, `cashFloor`). It ends paused.
+6. `events` (`since` = last `utc`) or `snapshot`. Save again.
+
+Rules:
+- `snapshot`, `events` and `ui` are safe during `run`. Every other tool pauses the game. `services` and `prefabs` do not check for an active run, so do not call them during one.
+- After a `timeout` error, do not resend the mutation. Read `snapshot` first.
+- `monthlyUpkeep` is set only by `place_service`. Road and tile upkeep show in `snapshot` expense after the next budget period.
+
 Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
 
 ## Preconditions
@@ -26,7 +42,7 @@ Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
 | `fix` | clears safe pause blockers (tutorial, milestone) | 1 line per fix, then ui |
 | `sites [-Cols 3 -Rows 2 -N 3]` | free dry flat owned land near roads | 0-3 lines |
 | `grid -X x -Z z [-Cols -Rows -Zone res\|com\|ind\|resmed -Plan]` | road grid, zone, connect | ~5-10 lines |
-| `grow [-Cols -Rows -Plan]` | pick zone by demand, find site, build grid | 1 line + grid lines |
+| `grow [-Cols -Rows -Plan -Zone res\|resmed\|com\|ind\|off]` | pick zone by demand, find site, build grid | 1 line + grid lines |
 | `zone -X x -Z z [-R 300 -Zone res]` | zone all zonable cells in radius | 1 line |
 | `run [-Seconds 600 -Speed 4 -Floor 150000]` | bounded simulation, auto-fixes tutorials | 1 summary line + triage lines |
 | `save [label]` | checkpoint, waits for `complete` | 1 line |

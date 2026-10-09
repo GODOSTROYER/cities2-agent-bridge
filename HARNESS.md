@@ -10,29 +10,32 @@
 ## 2. Architecture
 
 ```
- Agent (LLM with shell)
-   |
-   |  play.ps1 / autoplay.ps1 / grid.ps1 / services.ps1 / run-session.ps1 / upgrade.ps1
-   v
- lib\BridgeClient.psm1   (Invoke-Bridge, paging, batching, occupancy raster, rolling saves)
-   |
-   v
- bridge.ps1 <command> -ArgsJson {...}     writes  requests\<id>.json
-   |                                      reads   responses\<id>.json
-   v
- %LOCALAPPDATA%\CitiesIIAgentBridge\
-   requests\   responses\   session.json (heartbeat, status, gameMode)   STOP (latch file)
+ Agent (LLM with MCP client or shell)
+   |                                        |
+   |  cs2 MCP server (mcp\src\server.ts)    |  play.ps1 / autoplay.ps1 / grid.ps1 / services.ps1 / run-session.ps1 / upgrade.ps1
+   |  mailbox client (mcp\src\bridge.ts)    |
+   |  mutations also run play.ps1 or        |
+   |  upgrade.ps1 as child processes        v
+   |                                  lib\BridgeClient.psm1   (Invoke-Bridge, paging, batching, occupancy raster, rolling saves)
+   |                                        |
+   |                                        v
+   |                                  bridge.ps1 <command> -ArgsJson {...}     writes  requests\<id>.json
+   |                                        |                                  reads   responses\<id>.json
+   v                                        v
+ %LOCALAPPDATA%\CitiesIIAgentBridge\  (requests\  responses\  session.json  STOP latch  events.jsonl)
    ^
    |  Mod.Tick every 250 ms (game main thread) -> Mailbox.Pump -> Dispatch(command)
    v
  CitiesIIAgentBridge.dll (in game)  ->  ECS systems, tools, UI state, game settings
 ```
 
+- **Two entry paths.** The cs2 MCP server (section 4b) writes requests to the mailbox itself through `mcp\src\bridge.ts`; its mutating tools also run `play.ps1` or `upgrade.ps1` as child processes. Both use the same protocol and files.
+
 - **Request/response.** The client writes one compact JSON request and waits for a response with the same id. Every response is `{ok, result | error}`; always check `ok`.
 - **Async work.** Construction, batches and simulation return `status: queued`. Poll `get_operation`, `get_batch` or `get_simulation_step`. `queued` only means accepted.
 - **Heartbeat.** The mod rewrites `session.json` with `heartbeatUtc`. The client refuses to send if the heartbeat is more than 10 s old or the status is not `ready`.
 - **16 KB limit.** The mod rejects any request file over 16384 bytes with `request_too_large`, applying nothing. The client keeps requests under 15000 bytes and refuses to send bigger ones.
-- **Analysis pauses the game.** With controls on, every non-status command pauses the city first (`analysisPausesGame`). With controls off, the game must already be at speed 0 or the command fails with `pause_game_before_analysis_or_enable_bridge_controls`. Status polls (`ping`, `get_capabilities`, `get_operation`, `get_batch`, `get_simulation_step`, `get_pause_state`, `get_ui_state`, `resolve_pause_blocker`, `load_save`, `quit_game`) do not pause.
+- **Analysis pauses the game.** With controls on, every non-status command pauses the city first (`analysisPausesGame`). With controls off, the game must already be at speed 0 or the command fails with `pause_game_before_analysis_or_enable_bridge_controls`. Status polls (`ping`, `get_capabilities`, `get_snapshot`, `get_operation`, `get_batch`, `get_simulation_step`, `get_pause_state`, `get_ui_state`, `resolve_pause_blocker`, `load_save`, `quit_game`) do not pause.
 - **Controls.** Mutations need the in-game checkbox "Allow local bridge controls" (`RequireControl`). It resets off on every city load unless `KeepControlsAcrossLoads` is on.
 - **STOP latch.** `bridge.ps1 stop` writes a `STOP` file. While it exists the mod refuses control and clears the checkbox. Do not remove it without the owner's permission.
 
@@ -40,9 +43,9 @@
 
 | file | role | key behaviours |
 |---|---|---|
-| `play.ps1` | agent front end | Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `buy`, `grow`, `zone`, `run`, `link`, `place`, `save`, `prefab`, `raw`, `help`. Terse output; `raw` strips noisy fields unless `-Full`. `grow` picks the zone by demand (res low, resmed, com, ind; needs demand >= 20 and an unlocked prefab) and steps the grid down 3x2 -> 2x2 -> 2x1 -> 1x1 when land is short. |
+| `play.ps1` | agent front end | Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `buy`, `grow`, `zone`, `run`, `link`, `place`, `save`, `prefab`, `raw`, `help`. Terse output; `raw` strips noisy fields unless `-Full`. `grow` picks the zone by demand (res, resmed, com, ind, off (office); needs demand >= 20 and an unlocked prefab; `-Zone` overrides; reads unemployment from `get_snapshot`) and steps the grid down 3x2 -> 2x2 -> 2x1 -> 1x1 when land is short. |
 | `autoplay.ps1` | growth loop | Per cycle: wait for the road tool to clear, `grow -BuyTiles` if residential/commercial demand >= 50 and cash > floor + 150k, `services.ps1` every 3rd cycle, `run` for 120 s, budget autopilot. Stops on `STOPPED` from `run`, or on a milestone with `-UntilMilestone`. Ends with `save`. |
-| `grid.ps1` | road grid builder | World-aligned grid (110 m blocks, max 62 roads). Adds four 64 m outward stubs (`-NoStubs` disables). Connector from the nearest existing road node, up to 400 m, validated with `plan_neighborhood`. Native pre-flight of each road (`build_road previewOnly`) when capability `roadPreview` exists; rejected stubs are dropped, a lost connector is rebuilt from another candidate. Executes with `execute_neighborhood` (before/after saves), then zones and checks connectivity by graph search. `-PlanOnly` changes nothing. `-AllowDemolition` may remove one house to open a street. |
+| `grid.ps1` | road grid builder | World-aligned grid (110 m blocks, max 62 roads). Adds four 64 m outward stubs (`-NoStubs` disables). Connector from the nearest existing road node, up to 400 m, validated with `plan_neighborhood`. Native pre-flight of each road (`build_road previewOnly`) when capability `roadPreview` exists; rejected stubs are dropped, a lost connector is rebuilt from another candidate. Executes with `execute_neighborhood` (before/after saves), then zones and checks connectivity by graph search. `-PlanOnly` changes nothing. `-AllowDemolition` may remove one house to open a street. Connector fallback drops stale edge ids (`stale_point_entity`) and retries with native snapping. |
 | `zone-fill.ps1` | zoning | Zones only `Visible`, unzoned cells, one block-attached rectangle per block. Blocked duplicate cells are skipped. Verifies with a re-read of cells, not operation claims. `-WhatIf` is read-only. |
 | `run-session.ps1` | bounded simulation | Chains `simulate_step` (max 50 s each, speed <= 4) to `-TotalSeconds`. Logs to `journals\run-session.jsonl`. Shortage triage: continues while only `_shortfall` issues exist and the count is not rising for 3 steps. `-ResolveTutorials` clears tutorial, milestone and signature popups (max 10). Stops paused, with a reason, on anything else. |
 | `services.ps1` | basic services | Detects police, fire, clinic, school and landfill by prefab regex, targets population-based need, and places via `play.ps1 place` near the homes or industry that lack coverage. Needs cash >= 300k. Counts only; not real coverage. |
@@ -74,7 +77,58 @@ Commands added by this fork (upstream commands are documented in COMMANDS.md).
 - **`quit_game`.** At the main menu: quits with no save needed. In a city: requires `afterSave` = name of a `.cok` written in the last 5 min; otherwise refuses. Calls the game's quit; never kills the process.
 - **`load_save`.** Main menu only (`load_save_only_from_main_menu`). Loads an exact `name`, or the newest save whose name starts with `prefix` (default `CitiesIIAgentBridge-autosave-`). Needed because CS2's Continue and `-continuelastsave` do not pick up bridge saves.
 - **`KeepControlsAcrossLoads` setting** (`ModsSettings/CitiesIIAgentBridge`, default off). When on, "Allow local bridge controls" survives city loads and game restarts. Any local program that can write the mailbox can then change the city. The STOP latch still wins.
-- **`get_capabilities`** flags relevant here: `roadPreview`, `placementErrorReasons`, `analysisPausesGame: true`, `construction: native_preview_and_apply`, `controlEnabled`.
+- **`get_capabilities`** flags relevant here: `roadPreview`, `placementErrorReasons`, `analysisPausesGame: true`, `construction: native_preview_and_apply`, `controlEnabled`, `snapshot`, `events`, `prefabCosts`.
+- **`get_snapshot`** (no args; non-pausing, in the `statusOnly` list of `Mod.Dispatch`). Rebuilt on the game main thread from `Tick` every ~256 simulation frames, or every 5 s while paused. The command returns the cache plus `ageFrames`, `ageSec`, `liveFrame`, `liveSpeed`. About 1.5-1.7 KB; build cost about 2 ms (`perfMs`). Fields:
+  - `v`, `frame`, `speed`, `utc`, `happy`, `health`; `city` {`name`, `money`, `pop`, `moveIn`, `net`}; `income` / `expense` (top 5 sources each); `tax` {R, C, I, O}.
+  - `demand` {rL, rM, rH, c, i, o}; `demandWhy` (2 most negative native demand factors for rL, c, i, o); `worstHappy` (3 worst happiness factors).
+  - `jobs` {unemp %, homeless, workers, eligible, jobs, vacant, vacantByEdu[5], eduCitizens[5]}.
+  - `util` {power {prod, use, met, pct, import, export, plantCap}, water {cap, use, pct}, sewage {cap, use, pct}}.
+  - `shortages` (persistent, by type); `servicePenalties` {buildings, byFactor}; `buildings` {total, building, abandoned, condemned, onFire}.
+  - `ui` {blocker, fixable, tutorial?, milestonePopup?, signatures?, dialog?, tool?, focus}; `milestone` {achieved, xp, nextXp, blockedBy?}; `chirps` (3, 90 chars each).
+  - `bytes`, `perfMs`, `errors[]`. A failed probe lands in `errors[]` instead of throwing.
+- **`events.jsonl`** under `%LOCALAPPDATA%\CitiesIIAgentBridge`, rotated to `events.1.jsonl` at 1 MB. One compact line `{seq, type, frame, utc, data}`. Types:
+  - `city_loaded`, `city_unloaded`, `milestone`, `milestone_popup`, `tutorial`, `signature`.
+  - `ui_blocker` (error_dialog, menu_screen, unknown_ui_panel).
+  - `net_negative` / `net_positive` (throttled 2048 frames); `utility_high` (> 90%) / `utility_ok` (< 85%).
+  - `shortage` (new type); `fire` (new burning building, with prefab, x, z); `abandoned` / `condemned` (count rising, throttled 4096 frames).
+  - `seq` restarts with each game process, so filter by `utc` (the `since` argument of the MCP `events` tool).
+- **`get_prefab_details` costs.** `costs` {`construction`, `monthlyUpkeep` (ServiceUpkeepData money), `consumptionUpkeep` (ConsumptionData `m_Upkeep`), `netUpkeep` for networks}.
+
+## 4b. MCP server (cs2)
+
+Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridge.ts` (mailbox client).
+
+- **Setup.** Node >= 22.18 (native TypeScript type stripping, no build step). `cd mcp; npm install` (`@modelcontextprotocol/sdk` 1.32.1, `zod` 3). Registered in `.mcp.json` at the repo root (`command` node, `args` `mcp/src/server.ts`). `CS2_MAILBOX` overrides the mailbox folder.
+- **Protocol** (copies `bridge.ps1`): session.json heartbeat <= 10 s and status `ready`; request written as `.tmp` then renamed; response polled every 50 ms and deleted after reading; 15000-byte client limit (mod 16384); culture-safe manual ISO parse; never resends a mutation after a timeout.
+- **Tools (18).**
+
+| tool | args | does | pauses |
+|---|---|---|---|
+| `snapshot` | none | cached city state (section 4) | no |
+| `events` | since, limit, types | tail of events.jsonl | no |
+| `ui` | none | speed, blocker, popups, tool, chirps | no |
+| `fix_popup` | none | dismisses milestone, signature and tutorial popups | yes |
+| `run` | seconds (1-1800), speed (1, 2, 4), cashFloor | bounded simulate loop; passes popups; one summary line | yes, ends paused |
+| `build_grid` | x, z, cols, rows, zone, plan | `play.ps1 grid` | yes |
+| `grow` | zone, cols, rows, plan, buyTiles | `play.ps1 grow` | yes |
+| `link` | x, z, road, max, plan | `play.ps1 link` | yes |
+| `zone` | x, z, radius, zone | `play.ps1 zone` (free) | yes |
+| `place_service` | prefab, x, z, radius, maxCost, plan | places an exact building prefab; plan shows costs | yes |
+| `prefabs` | filter, kind, limit, costs | prefab search with construction and upkeep | yes |
+| `set_tax` | area, rate | tax rate for R, C, I or O | yes |
+| `set_service_budget` | service, budget (50-150) | budget by exact or unique partial name | yes |
+| `services` | none | name, budget, buildings (array length), workers, workplaces | yes |
+| `buy_tile` | n (1-3), max, plan | buys tiles within a cost cap | yes |
+| `save` | none | `play.ps1 save` | yes |
+| `restart` | build, noInstall | `upgrade.ps1`: save, quit, relaunch, load newest autosave | yes |
+| `query` | command (read-only allow-list), args, maxChars | raw read | yes |
+
+- **Pausing rules.** `snapshot`, `events` and `ui` never pause and are safe during `run`. Mutating tools and `query` refuse with `run_in_progress` while `run` is active. `services` and `prefabs` do not check, so do not call them during a run.
+- **Cost and upkeep.** Mutating tools return `cost` (money before minus after). `monthlyUpkeep` comes from prefab costs and is set only by `place_service`; `build_grid`, `grow`, `link` and `buy_tile` return `null` and note that road and tile upkeep show in snapshot expense after the next budget period. `zone` and `set_tax` cost 0.
+- **Tests** (run from `mcp\`):
+  - `node test/smoke.ts`: offline; tool list and events.
+  - `node test/live.ts concurrency 90`: live; `run` while polling `snapshot`.
+  - `node test/live.ts call <tool> '<json>'`: one live tool call.
 
 ## 5. Typical agent loop
 
@@ -119,6 +173,7 @@ Derived from `git log` (26 commits) and FAILURES.md (numbers in brackets).
 - Growth considers medium-density and commercial demand, not only low residential [autoplay, commit cc744a3].
 - Caller-side bugs fixed: negative-number argument binding, `$args` reuse, `-Plan` lost on re-invocation, `Get-BridgePaged` array wrapping, reserved and one-letter helper names, reused typed variables [5, 6, 9, 10, 11, 12, 22].
 - Operator rules encoded: no queries during a run [8]; never kill a running player's tool session [23].
+- Live view and typed tools (2026-10-10): `get_snapshot` and `events.jsonl` in the mod; cs2 MCP server with 18 tools; prefab costs; office zoning fixed; power judged by use vs production; demand factors read before zoning; connector fallback no longer aborts zoning [30-36].
 
 ## 8. Known gaps / needs improvement
 

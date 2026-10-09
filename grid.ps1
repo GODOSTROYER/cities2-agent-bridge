@@ -194,7 +194,12 @@ if ($batch.status -ne 'complete') {
             $sp = @{ x = [double]$cand.p.x; z = [double]$cand.p.z }
             if ($cand.edge) { $sp.index = [int]$cand.edge.index; $sp.version = [int]$cand.edge.version; $sp.curvePosition = [double]$cand.t }
             $link = @{ prefabIndex = $road; prefabVersion = $RoadPrefabVersion; start = $sp; end = @{ x = [double]$cand.c[0]; z = [double]$cand.c[1] }; maxCost = $MaxCostPerRoad }
-            $pv = Wait-BridgeOperation (Invoke-Bridge build_road ($link + @{ previewOnly = $true })).id
+            # Building the grid renumbers edges (FAILURES #6/#30): a candidate's edge id may be
+            # stale now. Fall back to native snapping at the same point; never abort zoning.
+            $op = Invoke-Bridge build_road ($link + @{ previewOnly = $true }) -AllowError
+            if (!$op.ok -and "$($op.error)" -match 'stale_point_entity') { $link.start = @{ x = $sp.x; z = $sp.z }; $op = Invoke-Bridge build_road ($link + @{ previewOnly = $true }) -AllowError }
+            if (!$op.ok) { continue }
+            $pv = Wait-BridgeOperation $op.result.id
             if ($pv.status -ne 'complete') { continue }
             $r = Wait-BridgeOperation (Invoke-Bridge build_road $link).id
             if ($r.status -eq 'complete') { "Connector rebuilt from $($cand.node) ($([int]$cand.d) m)"; $best = $cand; $connectorLost = $false; break }

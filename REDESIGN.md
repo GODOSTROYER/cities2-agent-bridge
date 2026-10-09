@@ -1,9 +1,9 @@
 # Harness redesign: live play through an MCP server
 
-Status: Phase 1 not started. Owner approved 2026-10-10. Branch: `agent-harness`.
+Status: Phase 1 complete (2026-10-10, verified live). Phase 2 in progress.
 
 ## Why
-The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (29 entries):
+The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (36 entries):
 - **The agent is blind while the game runs.** Every bridge read except a few status calls runs `PauseAnalysis()` (Mod.cs Dispatch). So the agent either watches or plays, and problems (24% unemployment, a -₡113k/period budget) surfaced late.
 - **Decisions are hard-coded thresholds in scripts**, so the agent patches rules instead of reasoning about the city.
 - **It's slow.** Spatial work happens in PowerShell: the occupancy raster, site search and connector search take 1–4 minutes per cycle.
@@ -66,6 +66,20 @@ Haiku (operator, routine events)     ──MCP tools──▶        │  mailbo
    - Confirm events appear.
    - Then play a few cycles purely through MCP tools and record cost per decision in tokens.
 5. **Keep everything working.** play.ps1 and autoplay.ps1 stay usable until Phase 3. Run `tests/HarnessTests.ps1` and `tests/PackageTests.ps1` (they must pass), log any failure in FAILURES.md (root cause, fix, prevention), commit with the attribution trailer, and push to `agent-harness` (never main, never force).
+
+## Phase 1 results (2026-10-10, live)
+- `snapshot` during `run(90)`: 18 calls, speed stayed 4, frame 3,217,356 -> 3,228,684; run ended `done` (no `game_paused`).
+- Events seen: `city_loaded`, `fire` (NA_ResidentialLow01_L2_3x6 at -263,-1103), `condemned`, `net_positive` (net -1,875 -> +26,379).
+- Frame rate ~130 frames/s at speed 4 after a fresh launch, for both the MCP run and the old `run-session.ps1` (earlier sessions ~228/s). Environmental: the snapshot costs ~2 ms per build.
+- Round Rock before: pop 1,427; money 275,810; net -62,235/period; unemployment 18.1%; taxes R15 C13 I15 O10; power use 19% of production.
+- Decisions:
+  - C tax 13 -> 10, I 15 -> 11 (native demand factor Taxes -240 for commercial, -450 for industrial).
+  - Office 2x1 grid (4,064; 537 cells); unemployment fell to 6.3% in 5 min (jobs 606 -> 931).
+  - Bought tile 59644 (25,356; map tile upkeep rose ~11k/period).
+  - Medium-density residential 2x2 (5,568; 1,105 cells).
+  - Industrial 2x1 at the tile's south edge, 250 m from homes (5,184; 588 cells).
+- After: pop 2,295; money 212,357; net +80,528/period; unemployment 14.2%; xp 10,609 / 13,600 for milestone 5; power 39% of production.
+- Tokens per decision: ~1-2k for snapshot, one action and the run summary.
 
 ## Phase 2: spatial and economic intelligence in the mod
 - `find_free_lots(width, depth, near, maxLink, avoid=[industry|highway|water])`: occupancy in C# using the game's own zone, lot and network data. It replaces Get-BridgeOccupancy, Find-Sites and the connector search.

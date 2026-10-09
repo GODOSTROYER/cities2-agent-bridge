@@ -89,6 +89,14 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Field case: completing the commercial-zone tutorial step via bridge zoning queued the next tutorial card (Industrial Zones 1/4), which paused the game. Turning tutorials off in game options avoids it entirely.
 - Settings: `Keep bridge controls enabled across city loads` (owner opt-in, default off, persisted in `ModsSettings/CitiesIIAgentBridge`). When off, "Allow local bridge controls" resets on every city load as before. The STOP latch still wins.
 
+## Live view (mod 0.5.1-local + MCP)
+
+- `get_snapshot` is non-pausing: the mod rebuilds it every ~256 frames (every 5 s while paused), so reading it during `run` is safe. Every other read pauses the game (see above).
+- Judge power by use vs production and import/export, not plant load. Plants run flat out because surplus is exported; Round Rock used 19-39% of production (FAILURES #33).
+- Read `demandWhy` before zoning or changing taxes. Taxes C13/I15 gave native factor Taxes -240 (C) and -450 (I) (FAILURES #34).
+- Frame rate: ~130 frames/s at speed 4 after a fresh launch, versus ~228/s in earlier sessions. The old `run-session.ps1` showed the same drop, so it is the environment, not the snapshot (~2 ms per build).
+- `events` `seq` restarts with each game process. Across restarts, filter with `since` as a UTC timestamp, not a seq number.
+
 ## Harness bugs fixed in this copy (see `git log`)
 1. **Culture-dependent heartbeat parse.** PS7 `ConvertFrom-Json` turns `heartbeatUtc` into a `DateTime`. `[DateTimeOffset]::Parse()` then re-parsed its string form in the user's culture (en-IN read 10/09 as 10 Sep), so every command failed with "heartbeat stale". Fixed by using the DateTime directly and parsing strings with InvariantCulture.
 2. **Indented request JSON.** Indentation roughly doubled request size and pushed valid batches past 16 KB. Requests are now compact, with a client-side size check that refuses before sending.

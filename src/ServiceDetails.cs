@@ -45,11 +45,29 @@ namespace CitiesIIAgentBridge
             }
             return result;
         }
+        // Construction cost and monthly running cost, so agents see upkeep before building.
+        // Service buildings: ServiceUpkeepData (money); growables/others: ConsumptionData.m_Upkeep;
+        // networks: PlaceableNetData default cost/upkeep (per segment unit, not per metre).
+        private static JObject PrefabCosts(EntityManager em, Entity e)
+        {
+            var costs = new JObject(); var errors = new JArray();
+            Probe(errors, "object", () => { if (em.HasComponent<PlaceableObjectData>(e)) costs["construction"] = em.GetComponentData<PlaceableObjectData>(e).m_ConstructionCost; });
+            Probe(errors, "net", () => { if (em.HasComponent<PlaceableNetData>(e)) { var n = em.GetComponentData<PlaceableNetData>(e); costs["construction"] = n.m_DefaultConstructionCost; costs["netUpkeep"] = n.m_DefaultUpkeepCost; } });
+            Probe(errors, "upkeep", () =>
+            {
+                if (!em.HasBuffer<ServiceUpkeepData>(e)) return;
+                long money = 0; foreach (var u in em.GetBuffer<ServiceUpkeepData>(e, true)) if (u.m_Upkeep.m_Resource == Game.Economy.Resource.Money) money += u.m_Upkeep.m_Amount;
+                costs["monthlyUpkeep"] = money;
+            });
+            Probe(errors, "consumption", () => { if (em.HasComponent<ConsumptionData>(e)) costs["consumptionUpkeep"] = em.GetComponentData<ConsumptionData>(e).m_Upkeep; });
+            if (errors.Count > 0) costs["errors"] = errors;
+            return costs;
+        }
         private JObject PrefabDetails(JObject args)
         {
             var w = RequireCity(); var e = new Entity { Index = RequiredInt(args,"index"), Version = RequiredInt(args,"version") };
             if (!w.EntityManager.Exists(e) || !w.EntityManager.HasComponent<PrefabData>(e)) throw new ArgumentException("live_prefab_entity_required");
-            return new JObject { ["name"] = w.GetExistingSystemManaged<PrefabSystem>().GetPrefabName(e), ["rawData"] = Details(w,e), ["locked"] = IsPrefabLocked(w.EntityManager,e) };
+            return new JObject { ["name"] = w.GetExistingSystemManaged<PrefabSystem>().GetPrefabName(e), ["rawData"] = Details(w,e), ["locked"] = IsPrefabLocked(w.EntityManager,e), ["costs"] = PrefabCosts(w.EntityManager,e) };
         }
     }
 }

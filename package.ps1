@@ -24,7 +24,7 @@ $files = @(
     'src/Diagnostics.cs','src/Mailbox.cs','src/Mod.cs','src/Neighborhood.cs',
     'src/NetworkCommands.cs','src/ObjectPlacementSafety.cs','src/PlanGeometry.cs',
     'src/QueryPage.cs','src/PauseBlockers.cs','src/UiState.cs','src/GameRestart.cs','src/ServiceDetails.cs','src/ServiceTools.cs','src/Settings.cs',
-    'src/SimulationControl.cs','src/SimulationWindow.cs','src/Spatial.cs','src/Workflow.cs',
+    'src/SimulationControl.cs','src/Snapshot.cs','src/SimulationWindow.cs','src/Spatial.cs','src/Workflow.cs',
     'tests/MailboxTests.csproj','tests/Program.cs','tests/PolicyTests.cs',
     'tests/ObjectPlacementTests.cs','tests/QueryPageTests.cs','tests/RecoveryTests.cs',
     'tests/MailboxClientTests.cs','tests/ClientTests.ps1','tests/JournalTests.ps1',

@@ -2,3 +2,4 @@
 artifacts/releases/
 rebuilt/
 journals/
+mcp/node_modules/

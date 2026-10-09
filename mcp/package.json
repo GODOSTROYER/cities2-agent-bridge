@@ -1,0 +1,19 @@
+{
+  "name": "cs2-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server for the Cities II Agent Bridge mailbox (cs2)",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node test/smoke.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.76"
+  }
+}

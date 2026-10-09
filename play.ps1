@@ -21,7 +21,7 @@ function Opt($name, $default) { if ($opt.ContainsKey($name)) { $opt[$name] } els
 function Money($v) { ([double]$v).ToString('N0', [Globalization.CultureInfo]::InvariantCulture) }
 function Try-Bridge($command, $arguments = @{}) { $r = Invoke-Bridge $command $arguments -AllowError; if ($r.ok) { $r.result } }
 
-$Zones = @{ res = 'NA Residential Low'; com = 'NA Commercial Low'; ind = 'Industrial Manufacturing'; off = 'Office'; resmed = 'NA Residential Medium Row' }
+$Zones = @{ res = 'NA Residential Low'; com = 'NA Commercial Low'; ind = 'Industrial Manufacturing'; off = 'Office Low'; resmed = 'NA Residential Medium Row' }
 
 function Show-Ui([switch]$Chirps) {
     $ui = Try-Bridge get_ui_state
@@ -125,7 +125,7 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
         $score = - $cnd.link / 10 - $(if ($null -eq $cnd.clearLink) { 50 } else { 0 })
         switch ($zoneKey) {
             { $_ -in 'res', 'resmed' } { $score += - $pol / 2 + [Math]::Min($dInd, 600) / 20 - $(if ($dHwy -lt 150) { 25 } else { 0 }) - $(if ($dJob -gt 1200) { ($dJob - 1200) / 40 } else { 0 }) }
-            'com' { $score += - $(if ($dHome -gt 500) { ($dHome - 500) / 20 } else { 0 }) - $pol / 10 }
+            { $_ -in 'com', 'off' } { $score += - $(if ($dHome -gt 500) { ($dHome - 500) / 20 } else { 0 }) - $pol / 10 }
             'ind' { $score += [Math]::Min($dHome, 600) / 15 - $(if ($dHwy -gt 400) { ($dHwy - 400) / 20 } else { 0 }) }
         }
         $out += [pscustomobject]@{ x = $cnd.x; z = $cnd.z; link = $cnd.link; clearLink = $cnd.clearLink; relief = [Math]::Round($relief, 1); pollution = [Math]::Round($pol); toIndustry = [Math]::Round($dInd); toJobs = [Math]::Round($dJob); toHomes = [Math]::Round($dHome); toHighway = [Math]::Round($dHwy); score = [Math]::Round($score, 1) }
@@ -182,7 +182,7 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
   sites [-Cols 3 -Rows 2 -N 3]      empty dry flat owned land near roads for a grid
   grid -X x -Z z [-Cols 3 -Rows 2 -Zone res|com|ind|resmed -Plan]   build+zone+connect
   buy [-N 1 -Max 300000 -Plan]      buy best adjacent map tile(s) (dry, flat, near city)
-  grow [-Cols 3 -Rows 2 -Plan -Demolish -BuyTiles]   pick zone by demand, find site, build grid (-Demolish: may remove 1 house for a link)
+  grow [-Cols 3 -Rows 2 -Zone res|resmed|com|ind|off -Plan -Demolish -BuyTiles]   pick zone by demand, find site, build grid (-Demolish: may remove 1 house for a link)
   zone -X x -Z z [-R 300 -Zone res] zone all zonable cells in area
   run [-Seconds 600 -Speed 4 -Floor 150000]   bounded simulation, auto-fixes tutorials
   link -X x -Z z [-Road 'Medium Road' -Max 60000 -Plan]   arterial: clear corridor from existing roads, game-checked
@@ -224,11 +224,14 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
     'grow' {
         $d = (Invoke-Bridge get_city_management).demand
         # residential demand is [low, medium, high]; medium/high only count once unlocked.
-        $choices = @(@{ k = 'res'; v = [double]@($d.residential)[0] }, @{ k = 'resmed'; v = [double]@($d.residential)[1] }, @{ k = 'com'; v = [double]$d.commercial }, @{ k = 'ind'; v = [double]$d.industrial }) | Sort-Object { $_.v } -Descending
+        $choices = @(@{ k = 'res'; v = [double]@($d.residential)[0] }, @{ k = 'resmed'; v = [double]@($d.residential)[1] }, @{ k = 'com'; v = [double]$d.commercial }, @{ k = 'ind'; v = [double]$d.industrial }, @{ k = 'off'; v = [double]$d.office }) | Sort-Object { $_.v } -Descending
         # Jobs before homes: with high unemployment (watch.ps1 status), build workplaces.
         $statusFile = Join-Path $H 'journals\status.json'
-        $unemp = try { [double](Get-Content $statusFile -Raw | ConvertFrom-Json).unemployment } catch { 0 }
-        if ($unemp -gt 10) { $choices = @($choices | Where-Object { $_.k -in 'com', 'ind' }) + @($choices | Where-Object { $_.k -notin 'com', 'ind' }); "grow: unemployment $unemp% -> jobs first" }
+        # Live value from the non-pausing snapshot; watch.ps1's status.json is only a fallback.
+        $unemp = try { [double](Invoke-Bridge get_snapshot).jobs.unemp } catch { try { [double](Get-Content $statusFile -Raw | ConvertFrom-Json).unemployment } catch { 0 } }
+        if ($unemp -gt 10) { $choices = @($choices | Where-Object { $_.k -in 'com', 'ind', 'off' }) + @($choices | Where-Object { $_.k -notin 'com', 'ind', 'off' }); "grow: unemployment $unemp% -> jobs first" }
+        # -Zone res|resmed|com|ind forces the zone type (demand >= 20 still required).
+        if (Opt 'zone' $null) { $choices = @($choices | Where-Object { $_.k -eq [string](Opt 'zone' '') }); if (!$choices) { "grow: unknown -Zone (res, resmed, com, ind, off)"; break } }
         $pick = $null
         # First unlocked choice with real demand (>= 20); jobs-first only reorders, it never
         # forces zoning that nobody wants.

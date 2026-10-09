@@ -121,6 +121,7 @@ namespace CitiesIIAgentBridge
                 if (!faulted) log.Error(e);
                 faulted = true;
             }
+            SnapshotTick(); // isolated: never throws, never touches control permission
             return false;
         }
 
@@ -149,7 +150,7 @@ namespace CitiesIIAgentBridge
         private JObject Dispatch(string command, JObject args)
         {
             // These status polls must not terminate an active bounded simulation step.
-            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state" || command == "load_save" || command == "quit_game";
+            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state" || command == "get_snapshot" || command == "load_save" || command == "quit_game";
             if(!statusOnly && command != "simulate_step" && command != "cancel_simulation_step" && command != "set_simulation_speed" && command != "set_camera")
             {
                 if(settings.AllowControl) PauseAnalysis();
@@ -163,7 +164,7 @@ namespace CitiesIIAgentBridge
                 case "ping": return new JObject { ["pong"] = true, ["modVersion"] = ModVersion };
                 case "get_capabilities": return new JObject
                 {
-                    ["read"] = new JArray("ping", "get_capabilities", "get_city_state", "get_camera", "get_selected", "inspect_entity", "get_water_facilities"),
+                    ["read"] = new JArray("ping", "get_capabilities", "get_snapshot", "get_city_state", "get_camera", "get_selected", "inspect_entity", "get_water_facilities"),
                     ["control"] = new JArray("create_district","edit_district","set_service_districts","set_camera", "set_simulation_speed", "build_road", "build_network", "upgrade_network", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "purchase_tiles", "set_tax", "set_service_budget", "save_checkpoint", "batch_execute"),
                     ["constructionQueries"] = new JArray("get_build_prefabs", "get_prefab_details", "get_network", "get_network_edges", "trace_network", "get_zone_cells", "get_operation", "get_batch", "get_city_management", "get_services", "sample_terrain", "get_tiles", "get_buildings", "diagnose_connections"),
                     ["buildVersion"] = ModVersion, ["liveValidation"] = "community_binary_requires_live_validation",
@@ -183,9 +184,10 @@ namespace CitiesIIAgentBridge
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
                     ["planning"] = new JArray("get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
                     ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker","quit_game","load_save"),
-                    ["analysisPausesGame"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
+                    ["analysisPausesGame"] = true, ["snapshot"] = "non_pausing_cached_256_frames", ["events"] = "events.jsonl", ["prefabCosts"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
+                case "get_snapshot": return GetSnapshot();
                 case "get_city_state": return CityState();
                 case "get_pause_state": return PauseState();
                 case "get_ui_state": return UiState(args);
