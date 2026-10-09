@@ -223,7 +223,8 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
     'grid' { Invoke-Grid ([double](Opt 'x' $null)) ([double](Opt 'z' $null)) ([int](Opt 'cols' 3)) ([int](Opt 'rows' 2)) (Opt 'zone' 'res') ([bool](Opt 'plan' $false)) ([bool](Opt 'demolish' $false)) }
     'grow' {
         $d = (Invoke-Bridge get_city_management).demand
-        $choices = @(@{ k = 'res'; v = [double]@($d.residential)[0] }, @{ k = 'com'; v = [double]$d.commercial }, @{ k = 'ind'; v = [double]$d.industrial }) | Sort-Object { $_.v } -Descending
+        # residential demand is [low, medium, high]; medium/high only count once unlocked.
+        $choices = @(@{ k = 'res'; v = [double]@($d.residential)[0] }, @{ k = 'resmed'; v = [double]@($d.residential)[1] }, @{ k = 'com'; v = [double]$d.commercial }, @{ k = 'ind'; v = [double]$d.industrial }) | Sort-Object { $_.v } -Descending
         $pick = $null
         foreach ($c in $choices) { try { $null = Resolve-BridgePrefab $Zones[$c.k] 'zone'; $pick = $c; break } catch {} }
         if (!$pick -or $pick.v -lt 20) { "grow: demand too low (R $(@($d.residential)[0]) C $($d.commercial) I $($d.industrial)); simulate instead"; break }

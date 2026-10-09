@@ -19,7 +19,7 @@ $start = Get-Milestone
 "autoplay: milestone $($start.achieved), next in $($start.xpToNext) xp"
 for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
     $m = Invoke-Bridge get_city_management
-    $resDemand = [double]@($m.demand.residential)[0]
+    $resDemand = [Math]::Max([double]@($m.demand.residential)[0], [Math]::Max([double]@($m.demand.residential)[1], [double]$m.demand.commercial))
     $built = ''
     # An interrupted earlier command can leave the bridge road/zone tool active, and every
     # build then fails with finish_or_cancel_current_tool_first. Wait for it to clear.
