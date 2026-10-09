@@ -36,7 +36,7 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
         $g = @(& $play @args2 2>&1 | ForEach-Object { "$_" })
         $built = if ($g -match 'status=complete|Grid streets built') { 'grid built' } elseif ($g -match 'buy: complete') { 'tile bought' } else { 'no build (' + (($g | Select-Object -Last 1) -replace '^grow: ', '') + ')' }
     }
-    if ($cycle % 3 -eq 1 -and (Test-Path (Join-Path $PSScriptRoot 'services.ps1'))) {
+    if (Test-Path (Join-Path $PSScriptRoot 'services.ps1')) {   # every cycle: coverage, utilities, complaints
         $svc = @(& (Join-Path $PSScriptRoot 'services.ps1') -MaxPlacements 1 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match '^(place|services)' })
         if ($svc) { $built = ($built, ($svc -join '; ')) -join ' | ' }
     }
