@@ -37,11 +37,12 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
         $built = if ($g -match 'status=complete|Grid streets built') { 'grid built' } elseif ($g -match 'buy: complete') { 'tile bought' } else { 'no build (' + (($g | Select-Object -Last 1) -replace '^grow: ', '') + ')' }
     }
     if (Test-Path (Join-Path $PSScriptRoot 'services.ps1')) {   # every cycle: coverage, utilities, complaints
-        $svc = @(& (Join-Path $PSScriptRoot 'services.ps1') -MaxPlacements 1 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match '^(place|services)' })
+        $svc = @(& (Join-Path $PSScriptRoot 'services.ps1') -MaxPlacements 3 -MinCash 200000 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match '^(place|services)' })
         if ($svc) { $built = ($built, ($svc -join '; ')) -join ' | ' }
     }
     $r = @(& $play run -Seconds $SecondsPerCycle -Floor $CashFloor 2>&1 | ForEach-Object { "$_" })
     $summary = ($r | Where-Object { $_ -like 'run:*' } | Select-Object -First 1) -replace '^run: ', ''
+    if (Test-Path (Join-Path $PSScriptRoot 'watch.ps1')) { try { & (Join-Path $PSScriptRoot 'watch.ps1') 2>&1 | ForEach-Object { "  $_" } } catch { "  watch failed: $($_.Exception.Message)" } }
     $ms = Get-Milestone
     "cycle ${cycle}: $built | $summary | R demand $resDemand | next milestone in $($ms.xpToNext) xp" + $(if ($r -match 'resolved') { ' | popups passed: ' + (@($r -match 'resolved').Count) } else { '' })
     if ($ms.blockedBy -eq 'tutorial_intro') { "  milestones held by unfinished tutorial intro; " + ((& $play fix 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -like 'fix:*' }) -join '; ') }

@@ -225,6 +225,10 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         $d = (Invoke-Bridge get_city_management).demand
         # residential demand is [low, medium, high]; medium/high only count once unlocked.
         $choices = @(@{ k = 'res'; v = [double]@($d.residential)[0] }, @{ k = 'resmed'; v = [double]@($d.residential)[1] }, @{ k = 'com'; v = [double]$d.commercial }, @{ k = 'ind'; v = [double]$d.industrial }) | Sort-Object { $_.v } -Descending
+        # Jobs before homes: with high unemployment (watch.ps1 status), build workplaces.
+        $statusFile = Join-Path $H 'journals\status.json'
+        $unemp = try { [double](Get-Content $statusFile -Raw | ConvertFrom-Json).unemployment } catch { 0 }
+        if ($unemp -gt 10) { $choices = @($choices | Where-Object { $_.k -in 'com', 'ind' }) + @($choices | Where-Object { $_.k -notin 'com', 'ind' }); "grow: unemployment $unemp% -> jobs first" }
         $pick = $null
         foreach ($c in $choices) { try { $null = Resolve-BridgePrefab $Zones[$c.k] 'zone'; $pick = $c; break } catch {} }
         if (!$pick -or $pick.v -lt 20) { "grow: demand too low (R $(@($d.residential)[0]) C $($d.commercial) I $($d.industrial)); simulate instead"; break }

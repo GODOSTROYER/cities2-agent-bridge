@@ -62,6 +62,8 @@ $sUse = if ($outlets) { ($outlets.sewageOutlet.lastProcessedRaw | Measure-Object
 $problems = @(Get-BridgePaged diagnose_connections @{ limit = 4096 })
 $powerShort = @($problems | Where-Object { $_.issues -contains 'electricity_shortfall' }).Count
 $importing = [double]$m.budget.expenseBySourceRaw.ImportElectricity -gt 0
+$powerLoad = try { [double](Get-Content (Join-Path $PSScriptRoot 'journals\status.json') -Raw | ConvertFrom-Json).utilities.power } catch { 0 }
+if ($powerLoad -gt 85) { $importing = $true }   # build before blackouts, not after
 $powerSites = @($all | Where-Object { $_.p -match 'Power|WindTurbine|Transformer' })
 $anchor = { param($set) if ($set) { [pscustomobject]@{ x = [Math]::Round(($set.x | Measure-Object -Average).Average); z = [Math]::Round(($set.z | Measure-Object -Average).Average) } } else { [pscustomobject]@{ x = [Math]::Round(($homes.x | Measure-Object -Average).Average); z = [Math]::Round(($homes.z | Measure-Object -Average).Average) } } }
 if ($importing -or ($homes.Count -and $powerShort / [double]$all.Count -gt 0.05)) { $a = & $anchor $powerSites; $needs = @($needs) + [pscustomobject]@{ t = 'power'; prefab = 'WindTurbine01,SmallCoalPowerPlant01,SolarPowerStation01'; x = $a.x; z = $a.z; have = $powerSites.Count; uncovered = 0; complained = $true; note = "importing=$importing shortfall=$powerShort" } }
