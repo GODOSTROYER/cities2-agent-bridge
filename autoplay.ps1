@@ -28,7 +28,8 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
     # build then fails with finish_or_cancel_current_tool_first. Wait for it to clear.
     for ($w = 0; $w -lt 15; $w++) { $tool = (Invoke-Bridge get_ui_state @{ chirps = 0 }).activeTool; if (!$tool -or $tool -eq 'DefaultToolSystem') { break }; Start-Sleep 1 }
     if ($tool -and $tool -ne 'DefaultToolSystem') { "autoplay stopped: tool $tool still active after 15 s (an interrupted command); run play.ps1 ui, then retry"; break }
-    if ($resDemand -ge $GrowDemand -and $m.city.money -gt $CashFloor + 150000) {
+    # Grids are cheap (~6-8k); only keep a modest reserve above the floor for them.
+    if ($resDemand -ge $GrowDemand -and $m.city.money -gt $CashFloor + 30000) {
         # -Demolish: when every free site is walled off by lots, clear at most one ordinary
         # home for the link (grow tries clean sites first). Saves a wasted 4-minute search.
         $args2 = @('grow', '-Cols', '3', '-Rows', '2', '-Demolish')
@@ -64,6 +65,7 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
             if ([int]$mm.taxes.Residential -ge $MaxTax) {
                 foreach ($sv in @((Invoke-Bridge get_services).services)) {
                     $bud = [int]$sv.budget; if ($bud -le 70) { continue }
+                    if ($sv.name -match 'Electricity|Water|Garbage') { continue }   # utilities: trimming cuts output
                     $res = Invoke-Bridge set_service_budget @{ prefabIndex = [int]$sv.index; prefabVersion = [int]$sv.version; budget = $bud - 10 } -AllowError
                     if ($res.ok) { "  budget: $($sv.name) $bud% -> $($bud - 10)%" }
                 }
