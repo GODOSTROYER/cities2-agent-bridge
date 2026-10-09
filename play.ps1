@@ -71,7 +71,7 @@ function Show-Look {
 # Empty, dry, flat, owned land for a cols x rows grid, ranked by whether a straight link
 # from an existing road can reach it without crossing a building lot (occupancy raster
 # from real lot rectangles; see lib Get-BridgeOccupancy).
-function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$count) {
+function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$count, [string]$zoneKey = 'res') {
     $w = $cols * $bw; $dpt = $rows * $bd
     $tiles = @((Invoke-Bridge get_tiles).tiles | Where-Object purchased | ForEach-Object {
         $xs = $_.polygon.x; $zs = $_.polygon.z
@@ -81,6 +81,13 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
     $Z0 = ($tiles.z0 | Measure-Object -Minimum).Minimum; $Z1 = ($tiles.z1 | Measure-Object -Maximum).Maximum
     $occ = Get-BridgeOccupancy -MinX $X0 -MinZ $Z0 -MaxX $X1 -MaxZ $Z1
     $edges = @((Invoke-Bridge get_network_edges @{ x = ($X0 + $X1) / 2; z = ($Z0 + $Z1) / 2; radius = 2000 }).edges | Where-Object { $_.prefab -match '^(?!Highway).*Road' })
+    # Land-use context: where pollution sources, jobs and homes are, and highway noise.
+    $allB = @(Get-BridgePaged get_buildings @{ limit = 4096 } | ForEach-Object { [pscustomobject]@{ x = $_.position.x; z = $_.position.z; p = "$($_.prefab)" } })
+    $polluters = @($allB | Where-Object { $_.p -match 'Industrial|PowerPlant|Coal|Gas|Landfill|Incinerat|Sewage|Oil|Ore' })
+    $jobs = @($allB | Where-Object { $_.p -match 'Commercial|Industrial|Office' })
+    $homes = @($allB | Where-Object { $_.p -match 'Residential' })
+    $hwy = @((Invoke-Bridge get_network_edges @{ x = ($X0 + $X1) / 2; z = ($Z0 + $Z1) / 2; radius = 2000 }).edges | Where-Object { $_.prefab -match 'Highway' } | ForEach-Object { $_.curve[0]; $_.curve[-1] })
+    function MinDist($set, $x, $z) { $m = [double]::MaxValue; foreach ($q in $set) { $d = [Math]::Sqrt([Math]::Pow($q.x - $x, 2) + [Math]::Pow($q.z - $z, 2)); if ($d -lt $m) { $m = $d } }; $m }
     $roadPts = @(foreach ($ed in $edges) { foreach ($t in 0, 0.25, 0.5, 0.75, 1) { [pscustomobject]@{ x = $ed.curve[0].x + ($ed.curve[-1].x - $ed.curve[0].x) * $t; z = $ed.curve[0].z + ($ed.curve[-1].z - $ed.curve[0].z) * $t } } })
     $cands = foreach ($x in ([int]$X0)..([int]($X1 - $w)) | Where-Object { ($_ - [int]$X0) % 40 -eq 0 }) {
         foreach ($z in ([int]$Z0)..([int]($Z1 - $dpt)) | Where-Object { ($_ - [int]$Z0) % 40 -eq 0 }) {
@@ -108,10 +115,20 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
         $grp = $smp[$k..($k + 8)]; $k += 9
         $hs = $grp.position.y; $wet = @($grp | Where-Object { $_.waterDepth -gt 0.1 }).Count
         $relief = ($hs | Measure-Object -Maximum).Maximum - ($hs | Measure-Object -Minimum).Minimum
-        if ($wet -eq 0 -and $relief -le 25) { $out += [pscustomobject]@{ x = $cnd.x; z = $cnd.z; link = $cnd.link; clearLink = $cnd.clearLink; relief = [Math]::Round($relief, 1) } }
-        if ($out.Count -ge $count) { break }
+        if ($wet -ne 0 -or $relief -gt 25) { continue }
+        $cx = $cnd.x + $w / 2; $cz = $cnd.z + $dpt / 2
+        $pol = (($grp | ForEach-Object { [Math]::Max([double]$_.airPollutionRaw, [Math]::Max([double]$_.groundPollutionRaw, [double]$_.noisePollutionRaw)) }) | Measure-Object -Maximum).Maximum
+        $dInd = MinDist $polluters $cx $cz; $dJob = MinDist $jobs $cx $cz; $dHome = MinDist $homes $cx $cz; $dHwy = MinDist $hwy $cx $cz
+        # Higher is better. Link length always counts (cheap, connected, less traffic detour).
+        $score = - $cnd.link / 10 - $(if ($null -eq $cnd.clearLink) { 50 } else { 0 })
+        switch ($zoneKey) {
+            { $_ -in 'res', 'resmed' } { $score += - $pol / 2 + [Math]::Min($dInd, 600) / 20 - $(if ($dHwy -lt 150) { 25 } else { 0 }) - $(if ($dJob -gt 1200) { ($dJob - 1200) / 40 } else { 0 }) }
+            'com' { $score += - $(if ($dHome -gt 500) { ($dHome - 500) / 20 } else { 0 }) - $pol / 10 }
+            'ind' { $score += [Math]::Min($dHome, 600) / 15 - $(if ($dHwy -gt 400) { ($dHwy - 400) / 20 } else { 0 }) }
+        }
+        $out += [pscustomobject]@{ x = $cnd.x; z = $cnd.z; link = $cnd.link; clearLink = $cnd.clearLink; relief = [Math]::Round($relief, 1); pollution = [Math]::Round($pol); toIndustry = [Math]::Round($dInd); toJobs = [Math]::Round($dJob); toHomes = [Math]::Round($dHome); toHighway = [Math]::Round($dHwy); score = [Math]::Round($score, 1) }
     }
-    $out
+    @($out | Sort-Object score -Descending | Select-Object -First $count)
 }
 # Adjacent unowned tiles ranked by dry/flat land and closeness to the city; buys the best N.
 function Invoke-BuyTiles([int]$n, [long]$maxCost, [bool]$plan) {
@@ -190,9 +207,9 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
     }
     'sites' {
         $cols = [int](Opt 'cols' 3); $rows = [int](Opt 'rows' 2)
-        $found = Find-Sites $cols $rows 110 110 ([int](Opt 'n' 3))
+        $found = Find-Sites $cols $rows 110 110 ([int](Opt 'n' 3)) ([string](Opt 'zone' 'res'))
         if (!$found) { "sites: none for ${cols}x${rows} (try smaller, or buy tiles)" }
-        foreach ($s in $found) { "site: -X $($s.x) -Z $($s.z) -Cols $cols -Rows $rows   link $($s.link)m " + $(if ($null -ne $s.clearLink) { "clear-link $($s.clearLink)m" } else { "NO clear link (needs -Demolish)" }) + " relief $($s.relief)m" }
+        foreach ($s in $found) { "site: -X $($s.x) -Z $($s.z) -Cols $cols -Rows $rows   link $($s.link)m " + $(if ($null -ne $s.clearLink) { "clear-link $($s.clearLink)m" } else { "NO clear link (needs -Demolish)" }) + " relief $($s.relief)m | score $($s.score): pollution $($s.pollution), industry $($s.toIndustry)m, jobs $($s.toJobs)m, homes $($s.toHomes)m, highway $($s.toHighway)m" }
     }
     'grid' { Invoke-Grid ([double](Opt 'x' $null)) ([double](Opt 'z' $null)) ([int](Opt 'cols' 3)) ([int](Opt 'rows' 2)) (Opt 'zone' 'res') ([bool](Opt 'plan' $false)) ([bool](Opt 'demolish' $false)) }
     'grow' {
@@ -208,7 +225,7 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         # Step down in size when the requested grid does not fit (land is often fragmented).
         $sites = @()
         foreach ($size in @(@($cols, $rows), @(2, 2), @(2, 1), @(1, 1)) | Where-Object { $_[0] * $_[1] -le $cols * $rows } | Select-Object -Unique) {
-            $sites = @(Find-Sites $size[0] $size[1] 110 110 5)
+            $sites = @(Find-Sites $size[0] $size[1] 110 110 5 $pick.k)
             if ($sites) { if ($size[0] -ne $cols -or $size[1] -ne $rows) { "grow: ${cols}x${rows} does not fit; using $($size[0])x$($size[1])" }; $cols = $size[0]; $rows = $size[1]; break }
         }
         if (!$sites -and (Opt 'buytiles' $false) -and !(Opt 'plan' $false)) { Invoke-BuyTiles 1 ([long](Opt 'max' 300000)) $false; $sites = @(Find-Sites $cols $rows 110 110 5) }
