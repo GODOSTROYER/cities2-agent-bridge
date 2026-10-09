@@ -5,10 +5,10 @@ param(
     [string]$OutputRoot = (Join-Path $PSScriptRoot 'artifacts/releases')
 )
 $ErrorActionPreference = 'Stop'
-$version = '0.5.0'
+$version = '0.5.1-local'
 $output = [IO.Path]::GetFullPath($OutputRoot)
 $run = Join-Path $output ([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
-$name = "CitiesIIAgentBridge-$version-community"
+$name = "CitiesIIAgentBridge-$version"
 $package = Join-Path $run $name
 New-Item -ItemType Directory -Path $package -Force | Out-Null
 
@@ -19,11 +19,11 @@ $files = @(
     'README.md','INSTALL.md','AGENTS.md','DEVELOPMENT.md','SHARING.md',
     'RELEASE-NOTES.md','VALIDATION.txt','CONTRIBUTING.md','COMMANDS.md','commands.json',
     'build.ps1','package.ps1','install.ps1','verify-package.ps1','verify-api.ps1',
-    'bridge.ps1','advance.ps1','journal.ps1','export-map.ps1','view-map.html',
+    'bridge.ps1','advance.ps1','run-session.ps1','grid.ps1','zone-fill.ps1','lib/BridgeClient.psm1','LEARNINGS.md','journal.ps1','export-map.ps1','view-map.html',
     'src/BridgeTick.cs','src/BuildCommands.cs','src/CityCommands.cs','src/Construction.cs',
     'src/Diagnostics.cs','src/Mailbox.cs','src/Mod.cs','src/Neighborhood.cs',
     'src/NetworkCommands.cs','src/ObjectPlacementSafety.cs','src/PlanGeometry.cs',
-    'src/QueryPage.cs','src/ServiceDetails.cs','src/ServiceTools.cs','src/Settings.cs',
+    'src/QueryPage.cs','src/PauseBlockers.cs','src/ServiceDetails.cs','src/ServiceTools.cs','src/Settings.cs',
     'src/SimulationControl.cs','src/SimulationWindow.cs','src/Spatial.cs','src/Workflow.cs',
     'tests/MailboxTests.csproj','tests/Program.cs','tests/PolicyTests.cs',
     'tests/ObjectPlacementTests.cs','tests/QueryPageTests.cs','tests/RecoveryTests.cs',
@@ -47,7 +47,7 @@ if ($manifest.modVersion -ne $version) { throw 'Package and build versions diffe
 $hashes = @(Get-ChildItem -LiteralPath $package -Recurse -File | Sort-Object FullName | ForEach-Object {
     [ordered]@{path=[IO.Path]::GetRelativePath($package,$_.FullName).Replace('\','/'); sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
 })
-[ordered]@{release="$version-community"; files=$hashes} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $package 'SHA256SUMS.json') -Encoding utf8
+[ordered]@{release=$version; files=$hashes} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $package 'SHA256SUMS.json') -Encoding utf8
 & (Join-Path $package 'verify-package.ps1')
 $zip = Join-Path $run ($name + '.zip')
 Compress-Archive -LiteralPath $package -DestinationPath $zip

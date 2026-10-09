@@ -1,0 +1,4 @@
+# Build outputs and local session records (city data stays local)
+artifacts/releases/
+rebuilt/
+journals/

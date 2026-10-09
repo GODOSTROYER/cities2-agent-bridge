@@ -31,7 +31,7 @@ namespace CitiesIIAgentBridge
         private bool disposed;
         private bool faulted;
         private bool mailboxContended;
-        private const string ModVersion = "0.5.0";
+        private const string ModVersion = "0.5.1-local";
 
         public void OnLoad(UpdateSystem updateSystem)
         {
@@ -146,7 +146,7 @@ namespace CitiesIIAgentBridge
         private JObject Dispatch(string command, JObject args)
         {
             // These status polls must not terminate an active bounded simulation step.
-            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step";
+            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker";
             if(!statusOnly && command != "simulate_step" && command != "cancel_simulation_step" && command != "set_simulation_speed" && command != "set_camera")
             {
                 if(settings.AllowControl) PauseAnalysis();
@@ -179,11 +179,13 @@ namespace CitiesIIAgentBridge
                         .Where(a => new[] { "Traffic", "BuildingUse", "RoadBuilder", "FindIt", "PlopTheGrowables", "CityPlanningDraft", "CitiesIIAgentBridge" }.Contains(a.GetName().Name))
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
                     ["planning"] = new JArray("get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
-                    ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch"),
+                    ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","resolve_pause_blocker"),
                     ["analysisPausesGame"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
                 case "get_city_state": return CityState();
+                case "get_pause_state": return PauseState();
+                case "resolve_pause_blocker": return ResolvePauseBlocker(args);
                 case "get_city_diagnostics": return Diagnostics(args);
                 case "get_city_map": return CityMap(args);
                 case "get_district_atlas": return DistrictAtlasPage(args);
