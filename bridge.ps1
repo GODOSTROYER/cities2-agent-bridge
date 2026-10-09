@@ -61,7 +61,11 @@ $packet = [ordered]@{
 $requestPath = Join-Path (Join-Path $MailboxPath 'requests') "$id.json"
 $responsePath = Join-Path (Join-Path $MailboxPath 'responses') "$id.json"
 $temp = "$requestPath.tmp"
-[IO.File]::WriteAllText($temp, ($packet | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+# Compact JSON: the mod rejects request files over 16384 bytes, and indentation alone
+# can push a valid 50-step batch past that limit.
+$packetText = $packet | ConvertTo-Json -Depth 20 -Compress
+if ([Text.Encoding]::UTF8.GetByteCount($packetText) -gt 16384) { throw "Request is $([Text.Encoding]::UTF8.GetByteCount($packetText)) bytes; the bridge limit is 16384. Split the batch. Nothing was sent." }
+[IO.File]::WriteAllText($temp, $packetText, [Text.UTF8Encoding]::new($false))
 [IO.File]::Move($temp, $requestPath)
 Record-JournalEvent "Sent $Command (request $id). Completion is not yet confirmed." $id $null
 $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds + 2)
