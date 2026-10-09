@@ -65,6 +65,20 @@ namespace CitiesIIAgentBridge
                 }
                 result["milestone"] = info;
             });
+            JArray signatures = new JArray();
+            Probe(errors, "signatures", () =>
+            {
+                // "New signature building available" popups: a queue of unlocked prefabs.
+                var value = ReadMember(ReadMember(world.GetExistingSystemManaged<SignatureBuildingUISystem>(), "m_UnlockSignaturesBinding"), "value");
+                if (value is System.Collections.IEnumerable list)
+                    foreach (var item in list)
+                        if (item is Entity e && e != Entity.Null)
+                        {
+                            var name = PrefabName(world, e);
+                            signatures.Add(new JObject { ["name"] = name, ["text"] = LocalizedFor((string)name, 2) });
+                        }
+                if (signatures.Count > 0) result["signatures"] = new JObject { ["pending"] = signatures };
+            });
             Probe(errors, "tutorialText", () =>
             {
                 var tutorials = world.GetExistingSystemManaged<Game.Tutorials.TutorialSystem>();
@@ -113,12 +127,13 @@ namespace CitiesIIAgentBridge
                 errorDialog ? "error_dialog" :
                 menu || (screen != null && screen != "Main" && screen != "FreeCamera") ? "menu_screen" :
                 observers > 0 && hasMilestone ? "milestone_popup" :
+                observers > 0 && signatures.Count > 0 ? "signature_popup" :
                 (observers > 0 && phase != null) || blockingCard ? "tutorial_phase" :
                 observers > 0 ? "unknown_ui_panel" :
                 (bool?)result["hasFocus"] == false ? "window_not_focused" :
                 (double)result["selectedSpeed"] == 0 ? "paused_by_player_or_bridge" : "none";
             result["likelyBlocker"] = blocker;
-            result["resolvableByBridge"] = blocker == "tutorial_phase" || blocker == "milestone_popup";
+            result["resolvableByBridge"] = blocker == "tutorial_phase" || blocker == "milestone_popup" || blocker == "signature_popup";
             if (errors.Count > 0) result["errors"] = errors;
             return result;
         }

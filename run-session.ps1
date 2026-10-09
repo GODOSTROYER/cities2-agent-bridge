@@ -69,7 +69,10 @@ while($used -lt $TotalSeconds -and ($TotalSeconds-$used) -ge 1){
         ([ordered]@{step=$step;pauseState=$pause}|ConvertTo-Json -Compress -Depth 6) | Add-Content -LiteralPath $LogPath
         "  pause: blocker=$($pause.likelyBlocker) screen=$($pause.screen) panel=$($pause.activePanel) phase=$($pause.tutorial.activeTutorialPhase) milestone=$($pause.milestone.pending) text=$((@($pause.tutorial.phaseText.PSObject.Properties.Value)+@($pause.milestone.pendingText.PSObject.Properties.Value) | Select-Object -First 1))"
         if($pause.resolvableByBridge -and $ResolveTutorials -and $tutorialResolutions -lt $MaxTutorialResolutions){
-            $req = if($pause.likelyBlocker -eq 'milestone_popup'){ @{action='dismiss_milestone';expectedMilestone=[string]$pause.milestone.pending} } else { @{action='complete_tutorial_phase';expectedPhase=[string]$pause.tutorial.activeTutorialPhase} }
+            $req = switch($pause.likelyBlocker){
+                'milestone_popup' { @{action='dismiss_milestone';expectedMilestone=[string]$pause.milestone.pending} }
+                'signature_popup' { @{action='dismiss_signature';expectedSignature=[string]$pause.signatures.pending[0].name} }
+                default { @{action='complete_tutorial_phase';expectedPhase=[string]$pause.tutorial.activeTutorialPhase} } }
             $done=Invoke-Bridge resolve_pause_blocker $req
             $tutorialResolutions++
             "  resolved $($req.action): '$($done.completedPhase)$($done.dismissed)' ($tutorialResolutions/$MaxTutorialResolutions)"
