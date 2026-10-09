@@ -53,3 +53,4 @@ Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
 - STOP latch: run `bridge.ps1 stop` to halt bridge actions. Do not clear the latch without owner permission.
 - Before any mutation, `save` and wait for `complete`.
 - End with the city paused and saved.
+- Before asking the owner to exit, reload or install anything: `play.ps1 save` and wait for `complete`.
