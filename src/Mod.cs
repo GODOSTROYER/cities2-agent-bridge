@@ -183,7 +183,7 @@ namespace CitiesIIAgentBridge
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
                     ["planning"] = new JArray("get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
                     ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker"),
-                    ["analysisPausesGame"] = true,
+                    ["analysisPausesGame"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
                 case "get_city_state": return CityState();

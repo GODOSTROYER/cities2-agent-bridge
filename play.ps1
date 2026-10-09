@@ -68,7 +68,9 @@ function Show-Look {
     Show-Ui
 }
 
-# Empty, dry, flat, owned land near existing roads where a cols x rows grid fits.
+# Empty, dry, flat, owned land for a cols x rows grid, ranked by whether a straight link
+# from an existing road can reach it without crossing a building lot (occupancy raster
+# from real lot rectangles; see lib Get-BridgeOccupancy).
 function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$count) {
     $w = $cols * $bw; $dpt = $rows * $bd
     $tiles = @((Invoke-Bridge get_tiles).tiles | Where-Object purchased | ForEach-Object {
@@ -77,47 +79,74 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
     function Owned($x, $z) { foreach ($t in $tiles) { if ($x -ge $t.x0 -and $x -le $t.x1 -and $z -ge $t.z0 -and $z -le $t.z1) { return $true } }; $false }
     $X0 = ($tiles.x0 | Measure-Object -Minimum).Minimum; $X1 = ($tiles.x1 | Measure-Object -Maximum).Maximum
     $Z0 = ($tiles.z0 | Measure-Object -Minimum).Minimum; $Z1 = ($tiles.z1 | Measure-Object -Maximum).Maximum
-    $cx = ($X0 + $X1) / 2; $cz = ($Z0 + $Z1) / 2
-    $obstacles = [Collections.Generic.List[object]]::new()
-    foreach ($b in @(Get-BridgePaged get_buildings @{ limit = 4096 })) { $obstacles.Add(@($b.position.x, $b.position.z)) }
-    $edges = (Invoke-Bridge get_network_edges @{ x = $cx; z = $cz; radius = 2000 }).edges
-    foreach ($e in $edges) { foreach ($pt in $e.curve) { $obstacles.Add(@($pt.x, $pt.z)) }
-        for ($t = 0.25; $t -lt 1; $t += 0.25) { $obstacles.Add(@(($e.curve[0].x * (1 - $t) + $e.curve[-1].x * $t), ($e.curve[0].z * (1 - $t) + $e.curve[-1].z * $t))) } }
-    $nodes = @($edges | Where-Object { $_.prefab -match '^(?!Highway).*Road' } | ForEach-Object { $_.curve[0]; $_.curve[-1] })
-    $margin = 40   # building lots reach ~24 m from their centre, plus half a road width
+    $occ = Get-BridgeOccupancy -MinX $X0 -MinZ $Z0 -MaxX $X1 -MaxZ $Z1
+    $edges = @((Invoke-Bridge get_network_edges @{ x = ($X0 + $X1) / 2; z = ($Z0 + $Z1) / 2; radius = 2000 }).edges | Where-Object { $_.prefab -match '^(?!Highway).*Road' })
+    $roadPts = @(foreach ($ed in $edges) { foreach ($t in 0, 0.25, 0.5, 0.75, 1) { [pscustomobject]@{ x = $ed.curve[0].x + ($ed.curve[-1].x - $ed.curve[0].x) * $t; z = $ed.curve[0].z + ($ed.curve[-1].z - $ed.curve[0].z) * $t } } })
     $cands = foreach ($x in ([int]$X0)..([int]($X1 - $w)) | Where-Object { ($_ - [int]$X0) % 40 -eq 0 }) {
         foreach ($z in ([int]$Z0)..([int]($Z1 - $dpt)) | Where-Object { ($_ - [int]$Z0) % 40 -eq 0 }) {
             if (!(Owned $x $z) -or !(Owned ($x + $w) $z) -or !(Owned $x ($z + $dpt)) -or !(Owned ($x + $w) ($z + $dpt))) { continue }
-            $hit = $false
-            foreach ($o in $obstacles) { if ($o[0] -gt $x - $margin -and $o[0] -lt $x + $w + $margin -and $o[1] -gt $z - $margin -and $o[1] -lt $z + $dpt + $margin) { $hit = $true; break } }
-            if ($hit) { continue }
-            $best = [double]::MaxValue
-            foreach ($n in $nodes) { $dx = [Math]::Max([Math]::Max($x - $n.x, 0), $n.x - ($x + $w)); $dz = [Math]::Max([Math]::Max($z - $n.z, 0), $n.z - ($z + $dpt)); $best = [Math]::Min($best, [Math]::Sqrt($dx * $dx + $dz * $dz)) }
-            if ($best -le 400) { [pscustomobject]@{ x = $x; z = $z; link = [Math]::Round($best) } }
-        } }
-    $cands = @($cands | Sort-Object link | Select-Object -First 40)
-    if (!$cands) { return @() }
-    # Terrain check on the closest candidates: 9 points each, one bridge call.
-    $pts = foreach ($c in $cands) { foreach ($fx in 0, 0.5, 1) { foreach ($fz in 0, 0.5, 1) { @{ x = $c.x + $fx * $w; z = $c.z + $fz * $dpt } } } }
-    $sr = Invoke-Bridge sample_terrain @{ points = @($pts) }; $s = @($sr.(Get-ResultArrayName $sr))
+            if (!(Test-OccupancyRectFree $occ $x $z ($x + $w) ($z + $dpt) 8)) { continue }
+            $near = $roadPts | ForEach-Object { $px = [Math]::Min([Math]::Max($_.x, $x), $x + $w); $pz = [Math]::Min([Math]::Max($_.z, $z), $z + $dpt)
+                [pscustomobject]@{ p = $_; t = [pscustomobject]@{ x = $px; z = $pz }; d = [Math]::Sqrt([Math]::Pow($_.x - $px, 2) + [Math]::Pow($_.z - $pz, 2)) } } |
+                Where-Object { $_.d -ge 8 -and $_.d -le 400 } | Sort-Object d | Select-Object -First 1
+            if ($near) { [pscustomobject]@{ x = $x; z = $z; link = [Math]::Round($near.d); nearest = $near } } } }
+    # Rank: closest first, but only the top few get the (slower) clear-link test.
+    $ranked = @($cands | Sort-Object link | Select-Object -First 30 | ForEach-Object {
+        $site = $_; $sx1 = $site.x + $w; $sz1 = $site.z + $dpt
+        $clearLink = $roadPts | ForEach-Object { $px = [Math]::Min([Math]::Max($_.x, $site.x), $sx1); $pz = [Math]::Min([Math]::Max($_.z, $site.z), $sz1)
+            [pscustomobject]@{ p = $_; t = [pscustomobject]@{ x = $px; z = $pz }; d = [Math]::Sqrt([Math]::Pow($_.x - $px, 2) + [Math]::Pow($_.z - $pz, 2)) } } |
+            Where-Object { $_.d -ge 8 -and $_.d -le 400 } | Sort-Object d | Select-Object -First 12 | Where-Object { Test-OccupancySegmentFree $occ $_.p $_.t 6 } | Select-Object -First 1
+        $site | Add-Member clearLink ($(if ($clearLink) { [Math]::Round($clearLink.d) } else { $null })) -PassThru })
+    $ordered = @($ranked | Sort-Object @{ e = { if ($null -ne $_.clearLink) { 0 } else { 1 } } }, link)
+    # Terrain: 9 samples per finalist in one call; reject wet or steep (>15 m relief).
+    $final = @($ordered | Select-Object -First ([Math]::Max($count * 3, 9)))
+    if (!$final) { return @() }
+    $pts = foreach ($cnd in $final) { foreach ($fx in 0, 0.5, 1) { foreach ($fz in 0, 0.5, 1) { @{ x = $cnd.x + $fx * $w; z = $cnd.z + $fz * $dpt } } } }
+    $sr = Invoke-Bridge sample_terrain @{ points = @($pts) }; $smp = @($sr.(Get-ResultArrayName $sr))
     $out = @(); $k = 0
-    foreach ($c in $cands) {
-        $grp = $s[$k..($k + 8)]; $k += 9
-        $h = $grp.position.y; $wet = @($grp | Where-Object { $_.waterDepth -gt 0.1 }).Count
-        $relief = ($h | Measure-Object -Maximum).Maximum - ($h | Measure-Object -Minimum).Minimum
-        if ($wet -eq 0 -and $relief -le 15) { $out += [pscustomobject]@{ x = $c.x; z = $c.z; link = $c.link; relief = [Math]::Round($relief, 1) } }
+    foreach ($cnd in $final) {
+        $grp = $smp[$k..($k + 8)]; $k += 9
+        $hs = $grp.position.y; $wet = @($grp | Where-Object { $_.waterDepth -gt 0.1 }).Count
+        $relief = ($hs | Measure-Object -Maximum).Maximum - ($hs | Measure-Object -Minimum).Minimum
+        if ($wet -eq 0 -and $relief -le 15) { $out += [pscustomobject]@{ x = $cnd.x; z = $cnd.z; link = $cnd.link; clearLink = $cnd.clearLink; relief = [Math]::Round($relief, 1) } }
         if ($out.Count -ge $count) { break }
     }
     $out
 }
-
-function Invoke-Grid([double]$x, [double]$z, [int]$cols, [int]$rows, [string]$zoneKey, [bool]$plan) {
+# Adjacent unowned tiles ranked by dry/flat land and closeness to the city; buys the best N.
+function Invoke-BuyTiles([int]$n, [long]$maxCost, [bool]$plan) {
+    $all = @((Invoke-Bridge get_tiles).tiles | ForEach-Object {
+        $xs = $_.polygon.x; $zs = $_.polygon.z
+        [pscustomobject]@{ index = $_.index; version = $_.version; owned = $_.purchased; x0 = ($xs | Measure-Object -Minimum).Minimum; x1 = ($xs | Measure-Object -Maximum).Maximum; z0 = ($zs | Measure-Object -Minimum).Minimum; z1 = ($zs | Measure-Object -Maximum).Maximum } })
+    $owned = @($all | Where-Object owned)
+    $cx = (($owned | ForEach-Object { ($_.x0 + $_.x1) / 2 }) | Measure-Object -Average).Average; $cz = (($owned | ForEach-Object { ($_.z0 + $_.z1) / 2 }) | Measure-Object -Average).Average
+    $adjacent = @($all | Where-Object { !$_.owned } | Where-Object { $t = $_; @($owned | Where-Object {
+        ([Math]::Abs($_.x1 - $t.x0) -lt 1 -or [Math]::Abs($_.x0 - $t.x1) -lt 1) -and $_.z0 -lt $t.z1 - 1 -and $_.z1 -gt $t.z0 + 1 -or
+        ([Math]::Abs($_.z1 - $t.z0) -lt 1 -or [Math]::Abs($_.z0 - $t.z1) -lt 1) -and $_.x0 -lt $t.x1 - 1 -and $_.x1 -gt $t.x0 + 1 }).Count })
+    if (!$adjacent) { 'buy: no adjacent unowned tiles'; return }
+    $pts = foreach ($t in $adjacent) { foreach ($fx in 0.2, 0.5, 0.8) { foreach ($fz in 0.2, 0.5, 0.8) { @{ x = $t.x0 + ($t.x1 - $t.x0) * $fx; z = $t.z0 + ($t.z1 - $t.z0) * $fz } } } }
+    $sr = Invoke-Bridge sample_terrain @{ points = @($pts) }; $smp = @($sr.(Get-ResultArrayName $sr)); $k = 0
+    $scored = foreach ($t in $adjacent) {
+        $grp = $smp[$k..($k + 8)]; $k += 9
+        $dry = 9 - @($grp | Where-Object { $_.waterDepth -gt 0.1 -or $_.waterStatus -eq 'out_of_bounds' }).Count
+        $hs = $grp.position.y; $relief = ($hs | Measure-Object -Maximum).Maximum - ($hs | Measure-Object -Minimum).Minimum
+        $dist = [Math]::Sqrt([Math]::Pow(($t.x0 + $t.x1) / 2 - $cx, 2) + [Math]::Pow(($t.z0 + $t.z1) / 2 - $cz, 2))
+        [pscustomobject]@{ tile = $t; dry = $dry; relief = [Math]::Round($relief); score = $dry * 100 - $relief * 2 - $dist / 50 } }
+    $pick = @($scored | Sort-Object score -Descending | Select-Object -First $n)
+    foreach ($s in $pick) { "buy: tile {0} at x {1:N0}..{2:N0} z {3:N0}..{4:N0}  dry {5}/9 relief {6}m" -f $s.tile.index, $s.tile.x0, $s.tile.x1, $s.tile.z0, $s.tile.z1, $s.dry, $s.relief }
+    if ($plan) { 'buy: plan only, nothing purchased'; return }
+    $r = Invoke-Bridge purchase_tiles @{ tiles = @($pick | ForEach-Object { @{ index = [int]$_.tile.index; version = [int]$_.tile.version } }); maxCost = $maxCost }
+    if ($r.id) { $r = Wait-BridgeOperation $r.id }
+    "buy: $($r.status) cost $(Money ($r.cost ?? $r.previewCost ?? $r.totalCost))" + $(if ($r.error) { " error $($r.error)" } else { '' })
+}
+function Invoke-Grid([double]$x, [double]$z, [int]$cols, [int]$rows, [string]$zoneKey, [bool]$plan, [bool]$demolish = $false) {
     $zone = Resolve-BridgePrefab $Zones[$zoneKey] 'zone'
     $road = Resolve-BridgePrefab 'Small Road' 'network'
     $a = @{ X = $x; Z = $z; Columns = $cols; Rows = $rows; RoadPrefabIndex = $road.index; RoadPrefabVersion = $road.version; ZonePrefabIndex = $zone.index; ZonePrefabVersion = $zone.version }
     if ($plan) { $a.PlanOnly = $true }
+    if ($demolish) { $a.AllowDemolition = $true }
     & (Join-Path $H 'grid.ps1') @a *>&1 | ForEach-Object { "$_" } |
-        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
+        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:|Demolished|Stubs|Shared|Native preview)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
         Tee-Object -Variable lines
     # execute_neighborhood writes before/after saves; after a clean build keep only the newest.
     if (!$plan -and ($lines -match 'status=complete') -and !($lines -match 'Failed|rror')) { $x = Clear-BridgeRollingSaves -KeepNewest 1; if ($x.recycled) { "recycled $($x.recycled.Count) automatic save(s)" } }
@@ -132,7 +161,8 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
   fix                        resolve safe pause blockers (tutorial phase, milestone popup)
   sites [-Cols 3 -Rows 2 -N 3]      empty dry flat owned land near roads for a grid
   grid -X x -Z z [-Cols 3 -Rows 2 -Zone res|com|ind|resmed -Plan]   build+zone+connect
-  grow [-Cols 3 -Rows 2 -Plan]      pick zone by demand, find site, build grid
+  buy [-N 1 -Max 300000 -Plan]      buy best adjacent map tile(s) (dry, flat, near city)
+  grow [-Cols 3 -Rows 2 -Plan -Demolish -BuyTiles]   pick zone by demand, find site, build grid (-Demolish: may remove 1 house for a link)
   zone -X x -Z z [-R 300 -Zone res] zone all zonable cells in area
   run [-Seconds 600 -Speed 4 -Floor 150000]   bounded simulation, auto-fixes tutorials
   place <prefab> -X x -Z z [-R 300 -Max 150000]   place a building by name at a roadside site
@@ -160,9 +190,9 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         $cols = [int](Opt 'cols' 3); $rows = [int](Opt 'rows' 2)
         $found = Find-Sites $cols $rows 110 110 ([int](Opt 'n' 3))
         if (!$found) { "sites: none for ${cols}x${rows} (try smaller, or buy tiles)" }
-        foreach ($s in $found) { "site: -X $($s.x) -Z $($s.z) -Cols $cols -Rows $rows   link $($s.link)m relief $($s.relief)m" }
+        foreach ($s in $found) { "site: -X $($s.x) -Z $($s.z) -Cols $cols -Rows $rows   link $($s.link)m " + $(if ($null -ne $s.clearLink) { "clear-link $($s.clearLink)m" } else { "NO clear link (needs -Demolish)" }) + " relief $($s.relief)m" }
     }
-    'grid' { Invoke-Grid ([double](Opt 'x' $null)) ([double](Opt 'z' $null)) ([int](Opt 'cols' 3)) ([int](Opt 'rows' 2)) (Opt 'zone' 'res') ([bool](Opt 'plan' $false)) }
+    'grid' { Invoke-Grid ([double](Opt 'x' $null)) ([double](Opt 'z' $null)) ([int](Opt 'cols' 3)) ([int](Opt 'rows' 2)) (Opt 'zone' 'res') ([bool](Opt 'plan' $false)) ([bool](Opt 'demolish' $false)) }
     'grow' {
         $d = (Invoke-Bridge get_city_management).demand
         $choices = @(@{ k = 'res'; v = [double]@($d.residential)[0] }, @{ k = 'com'; v = [double]$d.commercial }, @{ k = 'ind'; v = [double]$d.industrial }) | Sort-Object { $_.v } -Descending
@@ -171,15 +201,25 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         if (!$pick -or $pick.v -lt 20) { "grow: demand too low (R $(@($d.residential)[0]) C $($d.commercial) I $($d.industrial)); simulate instead"; break }
         $cols = [int](Opt 'cols' 3); $rows = [int](Opt 'rows' 2)
         # Validate candidates read-only (plan) in distance order; build the first that passes.
-        $sites = @(Find-Sites $cols $rows 110 110 5)
-        if (!$sites) { "grow: no free site for ${cols}x${rows}"; break }
+        # Step down in size when the requested grid does not fit (land is often fragmented).
+        $sites = @()
+        foreach ($size in @(@($cols, $rows), @(2, 2), @(2, 1), @(1, 1)) | Where-Object { $_[0] * $_[1] -le $cols * $rows } | Select-Object -Unique) {
+            $sites = @(Find-Sites $size[0] $size[1] 110 110 5)
+            if ($sites) { if ($size[0] -ne $cols -or $size[1] -ne $rows) { "grow: ${cols}x${rows} does not fit; using $($size[0])x$($size[1])" }; $cols = $size[0]; $rows = $size[1]; break }
+        }
+        if (!$sites -and (Opt 'buytiles' $false) -and !(Opt 'plan' $false)) { Invoke-BuyTiles 1 ([long](Opt 'max' 300000)) $false; $sites = @(Find-Sites $cols $rows 110 110 5) }
+        if (!$sites) { "grow: no free site for ${cols}x${rows}" + $(if (!(Opt 'buytiles' $false)) { ' (land is full: add -BuyTiles, or play.ps1 buy)' } else { '' }); break }
         $chosen = $null
         foreach ($site in $sites) {
             $check = @(Invoke-Grid $site.x $site.z $cols $rows $pick.k $true 2>&1 | ForEach-Object { "$_" })
             if ($check -match 'PlanOnly: nothing changed') { $chosen = $site; break }
             "grow: site -X $($site.x) -Z $($site.z) rejected by plan"
         }
-        if (!$chosen) { "grow: no candidate validated; nothing changed"; break }
+        if (!$chosen -and (Opt 'demolish' $false) -and !(Opt 'plan' $false)) {
+            "grow: no clean link; trying -Demolish on nearest site -X $($sites[0].x) -Z $($sites[0].z)"
+            Invoke-Grid $sites[0].x $sites[0].z $cols $rows $pick.k $false $true; break
+        }
+        if (!$chosen) { "grow: no candidate validated; nothing changed" + $(if (!(Opt 'demolish' $false)) { ' (add -Demolish to open a street through one house)' } else { '' }); break }
         "grow: zone $($pick.k) (demand $($pick.v)) at -X $($chosen.x) -Z $($chosen.z)"
         Invoke-Grid $chosen.x $chosen.z $cols $rows $pick.k ([bool](Opt 'plan' $false))
     }
@@ -199,7 +239,7 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         }
         $out | Where-Object { $_ -match 'triage|pause:|completed tutorial|STOPPED|DONE|WARN|rror' }
     }
-    'place' {
+    'buy' { Invoke-BuyTiles ([int](Opt 'n' 1)) ([long](Opt 'max' 300000)) ([bool](Opt 'plan' $false)) }    'place' {
         # place <prefab name> -X x -Z z [-R 300 -Max 150000]: roadside site search + native placement.
         $name = $pos -join ' '
         $pf = Resolve-BridgePrefab $name 'building'

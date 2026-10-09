@@ -85,6 +85,7 @@ namespace CitiesIIAgentBridge
             a.m_Elevation = b.m_Elevation = elevation; a.m_HitPosition.y += elevation; b.m_HitPosition.y += elevation;
             a.m_Position.y += elevation; b.m_Position.y += elevation;
             if (args["control"] is JObject c) { roadTool.ExtraPoints = new[] { BuildPoint(w, c) }; roadTool.RequestedMode = NetToolSystem.Mode.SimpleCurve; }
+            roadTool.PreviewOnly = (bool?)args["previewOnly"] == true;
             roadTool.Begin(p, a, b, budget);
             return ConstructionAccess.Status(ConstructionAccess.Active);
         }

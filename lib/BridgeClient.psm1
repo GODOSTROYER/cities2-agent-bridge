@@ -189,6 +189,69 @@ function Resolve-BridgePrefab {
     [pscustomobject]$p
 }
 
+# Occupancy raster from get_city_map: real lot rectangles and road chords drawn onto a
+# grid (default 4 m). Site and connector tests use it instead of building centre points,
+# which let the harness propose spots that lots actually cover.
+function Get-BridgeOccupancy {
+    param([double]$MinX, [double]$MinZ, [double]$MaxX, [double]$MaxZ, [double]$Cell = 4, [double]$RoadHalfWidth = 8)
+    $w = [int][Math]::Ceiling(($MaxX - $MinX) / $Cell); $hgt = [int][Math]::Ceiling(($MaxZ - $MinZ) / $Cell)
+    $grid = New-Object 'byte[,]' $w, $hgt
+    $occ = [pscustomobject]@{ MinX = $MinX; MinZ = $MinZ; Cell = $Cell; W = $w; H = $hgt; Grid = $grid; Buildings = 0; Edges = 0 }
+    $seen = @{}
+    # Tile the area with map queries (radius <= 500 each).
+    for ($cx = $MinX + 450; $cx -lt $MaxX + 450; $cx += 900) { for ($cz = $MinZ + 450; $cz -lt $MaxZ + 450; $cz += 900) {
+        $m = Invoke-Bridge get_city_map @{ x = [Math]::Min($cx, $MaxX); z = [Math]::Min($cz, $MaxZ); radius = 500 }
+        foreach ($b in $m.buildings) {
+            if ($seen["b$($b.index)"]) { continue }; $seen["b$($b.index)"] = 1; $occ.Buildings++
+            Set-OccupancyPolygon $occ $b.polygon
+        }
+        foreach ($e in $m.network.edges) {
+            if ($seen["e$($e.index)"]) { continue }; $seen["e$($e.index)"] = 1; $occ.Edges++
+            for ($k = 0; $k -lt $e.curve.Count - 1; $k++) { Set-OccupancySegment $occ $e.curve[$k] $e.curve[$k + 1] $RoadHalfWidth }
+        } } }
+    $occ
+}
+function Set-OccupancyPolygon($occ, $poly) {
+    $xs = $poly.x; $zs = $poly.z
+    $i0 = [Math]::Max(0, [int][Math]::Floor((($xs | Measure-Object -Minimum).Minimum - $occ.MinX) / $occ.Cell)); $i1 = [Math]::Min($occ.W - 1, [int][Math]::Floor((($xs | Measure-Object -Maximum).Maximum - $occ.MinX) / $occ.Cell))
+    $j0 = [Math]::Max(0, [int][Math]::Floor((($zs | Measure-Object -Minimum).Minimum - $occ.MinZ) / $occ.Cell)); $j1 = [Math]::Min($occ.H - 1, [int][Math]::Floor((($zs | Measure-Object -Maximum).Maximum - $occ.MinZ) / $occ.Cell))
+    for ($i = $i0; $i -le $i1; $i++) { for ($j = $j0; $j -le $j1; $j++) {
+        $px = $occ.MinX + ($i + 0.5) * $occ.Cell; $pz = $occ.MinZ + ($j + 0.5) * $occ.Cell; $in = $false
+        $b = $poly.Count - 1
+        for ($a = 0; $a -lt $poly.Count; $a++) {
+            if ((($poly[$a].z -gt $pz) -ne ($poly[$b].z -gt $pz)) -and ($px -lt ($poly[$b].x - $poly[$a].x) * ($pz - $poly[$a].z) / ($poly[$b].z - $poly[$a].z) + $poly[$a].x)) { $in = !$in }
+            $b = $a }
+        if ($in) { $occ.Grid[$i, $j] = 1 } } }
+}
+function Set-OccupancySegment($occ, $a, $b, [double]$halfWidth) {
+    $len = [Math]::Sqrt([Math]::Pow($b.x - $a.x, 2) + [Math]::Pow($b.z - $a.z, 2)); $steps = [Math]::Max(1, [int]($len / ($occ.Cell / 2)))
+    $r = [int][Math]::Ceiling($halfWidth / $occ.Cell)
+    for ($s = 0; $s -le $steps; $s++) {
+        $px = $a.x + ($b.x - $a.x) * $s / $steps; $pz = $a.z + ($b.z - $a.z) * $s / $steps
+        $ci = [int][Math]::Floor(($px - $occ.MinX) / $occ.Cell); $cj = [int][Math]::Floor(($pz - $occ.MinZ) / $occ.Cell)
+        for ($i = $ci - $r; $i -le $ci + $r; $i++) { for ($j = $cj - $r; $j -le $cj + $r; $j++) {
+            if ($i -ge 0 -and $j -ge 0 -and $i -lt $occ.W -and $j -lt $occ.H) { $occ.Grid[$i, $j] = [Math]::Max($occ.Grid[$i, $j], 2) } } } }
+}
+# 0 = free; 1 = building lot; 2 = road. Rect test fails on any occupied cell (margin added).
+function Test-OccupancyRectFree($occ, [double]$x0, [double]$z0, [double]$x1, [double]$z1, [double]$margin = 8) {
+    $i0 = [int][Math]::Floor(($x0 - $margin - $occ.MinX) / $occ.Cell); $i1 = [int][Math]::Floor(($x1 + $margin - $occ.MinX) / $occ.Cell)
+    $j0 = [int][Math]::Floor(($z0 - $margin - $occ.MinZ) / $occ.Cell); $j1 = [int][Math]::Floor(($z1 + $margin - $occ.MinZ) / $occ.Cell)
+    if ($i0 -lt 0 -or $j0 -lt 0 -or $i1 -ge $occ.W -or $j1 -ge $occ.H) { return $false }
+    for ($i = $i0; $i -le $i1; $i++) { for ($j = $j0; $j -le $j1; $j++) { if ($occ.Grid[$i, $j]) { return $false } } }
+    $true
+}
+# Connector test: a road strip of +-halfWidth must not touch any building lot. Roads are
+# allowed (the link starts on one), so only value 1 blocks.
+function Test-OccupancySegmentFree($occ, $a, $b, [double]$halfWidth = 6) {
+    $len = [Math]::Sqrt([Math]::Pow($b.x - $a.x, 2) + [Math]::Pow($b.z - $a.z, 2)); $steps = [Math]::Max(1, [int]($len / ($occ.Cell / 2)))
+    $r = [int][Math]::Ceiling($halfWidth / $occ.Cell)
+    for ($s = 0; $s -le $steps; $s++) {
+        $ci = [int][Math]::Floor(($a.x + ($b.x - $a.x) * $s / $steps - $occ.MinX) / $occ.Cell); $cj = [int][Math]::Floor(($a.z + ($b.z - $a.z) * $s / $steps - $occ.MinZ) / $occ.Cell)
+        for ($i = $ci - $r; $i -le $ci + $r; $i++) { for ($j = $cj - $r; $j -le $cj + $r; $j++) {
+            if ($i -ge 0 -and $j -ge 0 -and $i -lt $occ.W -and $j -lt $occ.H -and $occ.Grid[$i, $j] -eq 1) { return $false } } } }
+    $true
+}
+
 # Rolling-save policy: bridge saves accumulate (each save_checkpoint is a new unique file,
 # and execute_neighborhood adds two). Keep the newest N bridge saves; saves labelled
 # keep-* and every save not created by the bridge (owner's own cities) are never touched.
@@ -210,4 +273,4 @@ function Clear-BridgeRollingSaves {
     [pscustomobject]@{ kept = @($saves | Select-Object -First $KeepNewest | ForEach-Object BaseName); recycled = $removed }
 }
 
-Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab, Clear-BridgeRollingSaves
+Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab, Clear-BridgeRollingSaves, Get-BridgeOccupancy, Test-OccupancyRectFree, Test-OccupancySegmentFree, Set-OccupancyPolygon, Set-OccupancySegment

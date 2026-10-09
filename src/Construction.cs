@@ -56,6 +56,23 @@ namespace CitiesIIAgentBridge
                     if(em.HasComponent<PrefabRef>(entity))row["prefab"]=NativeBuild.Id(em.GetComponentData<PrefabRef>(entity).m_Prefab);
                     if(em.HasComponent<Temp>(entity)){var t=em.GetComponentData<Temp>(entity);row["original"]=NativeBuild.Id(t.m_Original);row["flags"]=t.m_Flags.ToString();}
                     if(em.HasComponent<Game.Objects.Transform>(entity)){var p=em.GetComponentData<Game.Objects.Transform>(entity).m_Position;row["position"]=new JObject{["x"]=p.x,["y"]=p.y,["z"]=p.z};}
+                    // The reason the player sees in the tooltip: validation attaches error icons
+                    // whose prefabs carry ToolErrorData (SteepSlope, InWater, OverlapExisting...).
+                    try
+                    {
+                        if(em.HasBuffer<Game.Notifications.IconElement>(entity))
+                        {
+                            var reasons=new JArray();
+                            foreach(var icon in em.GetBuffer<Game.Notifications.IconElement>(entity,true))
+                                if(em.Exists(icon.m_Icon)&&em.HasComponent<PrefabRef>(icon.m_Icon))
+                                {
+                                    var iconPrefab=em.GetComponentData<PrefabRef>(icon.m_Icon).m_Prefab;
+                                    if(em.HasComponent<Game.Prefabs.ToolErrorData>(iconPrefab)) reasons.Add(em.GetComponentData<Game.Prefabs.ToolErrorData>(iconPrefab).m_Error.ToString());
+                                }
+                            if(reasons.Count>0) row["reasons"]=reasons;
+                        }
+                    }
+                    catch(Exception e){ row["reasonsError"]=e.GetBaseException().Message; }
                     result.Add(row);
                 }
             return result;
@@ -79,6 +96,8 @@ namespace CitiesIIAgentBridge
         private ControlPoint start, end;
         internal ControlPoint[] ExtraPoints; internal Mode RequestedMode = Mode.Straight;
         internal float RequestedElevation;
+        // Native validation without applying: same snapping, errors (with reasons) and cost.
+        internal bool PreviewOnly;
         private HashSet<Entity> before;
         private int maxCost;
         internal Entity Replacement;
@@ -128,6 +147,7 @@ namespace CitiesIIAgentBridge
                     using (var ts = q.ToComponentDataArray<Temp>(Allocator.Temp)) foreach (var t in ts) cost = checked(cost + Math.Max(0, t.m_Cost));
                     ConstructionAccess.Results[operation]["previewCost"] = cost;
                     if (cost > maxCost || cost > World.GetExistingSystemManaged<CitySystem>().moneyAmount) throw new InvalidOperationException("cost_exceeds_budget");
+                    if (PreviewOnly) { ConstructionAccess.Results[operation]["previewOnly"] = true; Finish("complete"); return deps; }
                     applyMode = ApplyMode.Apply; stage = 2; frames = 0;
                     ConstructionAccess.Results[operation]["status"] = "applying"; return deps;
                 }
