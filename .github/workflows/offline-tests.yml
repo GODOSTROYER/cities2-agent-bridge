@@ -35,12 +35,23 @@ jobs:
           $PSVersionTable
       - name: C# helpers and Windows recovery
         run: dotnet run --project tests/MailboxTests.csproj --configuration Release
+      - name: Audit reliability regressions
+        run: dotnet run --project tests/ReliabilityTests.csproj --configuration Release
       - name: PowerShell client guards
         run: ./tests/ClientTests.ps1
       - name: Journal regression tests
         run: ./tests/JournalTests.ps1
       - name: Original and audit atlas regressions
         run: node --test tests/atlas.test.mjs tests/audit-atlas.test.mjs
+      - name: Archive the exact tested public source
+        if: always()
+        run: git archive --format=zip --output=source-checkpoint.zip HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: source-checkpoint-${{ github.run_id }}
+          path: source-checkpoint.zip
+          retention-days: 7
       - name: Scope of evidence
         run: |
           'These are game-independent checks, not native mod compilation or live Cities II acceptance.' >> $env:GITHUB_STEP_SUMMARY
