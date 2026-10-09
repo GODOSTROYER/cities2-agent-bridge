@@ -5,31 +5,28 @@ Read this before AGENTS.md and COMMANDS.md. Those files say what the bridge allo
 
 > This folder is a **git-tracked working copy** of the release package. `bridge.ps1` is patched (see "Harness bugs fixed"), so `verify-package.ps1` reports a mismatch here by design. Install only from the pristine, SHA-256-verified release ZIP. Use this copy to drive the game. `git log` shows every change made to it.
 
+Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains why things work the way they do.
+
 ## Quick start (city loaded, paused, "Allow local bridge controls" ticked)
 
 ```powershell
-$h = "$env:USERPROFILE\Documents\CitiesIIAgentBridge-harness"
-Import-Module "$h\lib\BridgeClient.psm1" -Force
-Invoke-Bridge ping
-Invoke-Bridge get_capabilities                 # controlEnabled must be true
-$op = Invoke-Bridge save_checkpoint @{ label = 'before-agent-session' }
-Wait-BridgeOperation $op.id                    # 'queued' is NOT saved; wait for 'complete'
-
-# Build a connected, zoned neighbourhood in one validated call (dry run first):
-& "$h\grid.ps1" -X -880 -Z -460 -Columns 3 -Rows 1 -PlanOnly
-& "$h\grid.ps1" -X -880 -Z -460 -Columns 3 -Rows 1
-
-# Simulate 10 minutes in bounded steps; stops (paused) on anything abnormal:
-& "$h\run-session.ps1" -TotalSeconds 600 -Speed 4 -CashFloor 150000
-
-$op = Invoke-Bridge save_checkpoint @{ label = 'after-agent-session' }; Wait-BridgeOperation $op.id
+.\play.ps1 look
+.\play.ps1 save before-agent-session
+.\play.ps1 grow -Plan                # dry run first
+.\play.ps1 grow
+.\play.ps1 run -Seconds 600          # bounded simulation, stops paused on abnormal events
+.\play.ps1 save after-agent-session
 ```
+
+`lib\BridgeClient.psm1` is still available for custom scripting (`Invoke-Bridge`, `Wait-BridgeOperation`).
 
 ## Harness tools
 
 | Tool | Purpose |
 |---|---|
-| `lib/BridgeClient.psm1` | `Invoke-Bridge` throws on `ok:false` and returns `.result`. `Get-BridgePaged` follows `nextOffset` and returns the array whatever it is named. `Wait-BridgeOperation` and `Wait-BridgeBatch` poll until done. `Invoke-BridgeSteps` splits steps into batches under 16 KB and 64 steps, and continues past proven no-op zoning steps. `Invoke-BridgeRoad` inspects the blocker on rejection and optionally retries at perpendicular offsets. `Get-BridgeRoadGraph`, `Find-BridgeNearestNode` and `Test-BridgeNodesConnected` check connectivity locally. |
+| `play.ps1` | Agent front end. Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `grow`, `zone`, `run`, `save`, `prefab`, `raw`. Each prints a few lines. `raw` strips components, curves and similar noise (about 78% smaller). |
+| `PLAY.md` | Agent quickstart for `play.ps1`: preconditions, core loop, verbs, token rules. |
+| `lib/BridgeClient.psm1` | `Invoke-Bridge` throws on `ok:false` and returns `.result`. `Get-BridgePaged` follows `nextOffset` and returns the array whatever it is named. `Wait-BridgeOperation` and `Wait-BridgeBatch` poll until done. `Invoke-BridgeSteps` splits steps into batches under 16 KB and 64 steps, and continues past proven no-op zoning steps. `Invoke-BridgeRoad` inspects the blocker on rejection and optionally retries at perpendicular offsets. `Get-BridgeRoadGraph`, `Find-BridgeNearestNode` and `Test-BridgeNodesConnected` check connectivity locally. `ConvertTo-BridgeLean` strips noisy fields. `Resolve-BridgePrefab` resolves a name to an index, cached per city session in `journals/prefab-cache.json`; it throws if the prefab is locked or not placeable. |
 | `grid.ps1` | Builds a world-aligned road grid, adds a validated connector to existing roads and plans it with `plan_neighborhood`. It executes with automatic before/after saves, zones the blocks with `zone-fill.ps1` and verifies connectivity. `-PlanOnly` is read-only. |
 | `zone-fill.ps1` | Zones every **Visible** unzoned cell in an area with one block-attached rectangle per block. It reports verified before/after counts from live cell state. `-WhatIf` is read-only. |
 | `run-session.ps1` | Chains bounded `simulate_step` intervals (max 50 s each) up to `-TotalSeconds`. It logs to `journals/run-session.jsonl`, triages utility shortages and exits paused on abnormal stops. |
@@ -79,11 +76,26 @@ $op = Invoke-Bridge save_checkpoint @{ label = 'after-agent-session' }; Wait-Bri
 - Growth follows **zoned capacity**. With residential demand at 100, population went 127 → 201 → 281 → 316 and then flattened (+1, +3 per 50 s) once the zoned lots filled. When `delta.population` stalls while demand is high, zone more land; don't just simulate longer.
 - `analysisPausesGame: true`: **any** read command (even `get_build_prefabs`) pauses the game, ending the active step with `game_paused`. Never query while `run-session.ps1` is running; wait for it to finish.
 
+## Pauses, popups and UI (mod 0.5.1-local)
+- CS2's `TimeUISystem` forces speed 0 every frame while the window lacks focus (`m_HasFocus`) or any UI panel subscribes to the simulation-paused barrier (tutorial cards, milestone popup, menus). Symptom: `simulate_step` ends after under 1 s with reason `game_paused`.
+- `get_ui_state` does not auto-pause. It returns:
+  - `selectedSpeed`, `hasFocus`, `pausedBarrierObservers`, `screen`/`menuActive`, `activePanel`
+  - `tutorial` {`enabled`, `activeTutorial`, `activeTutorialPhase`}, `milestone.pending`, `dialogs` (error dialogs)
+  - `activeTool`, `infoview`, `chirps` (newest N; arg `chirps`, 0-10, default 3)
+  - `likelyBlocker`: `error_dialog` | `menu_screen` | `milestone_popup` | `tutorial_phase` | `unknown_ui_panel` | `window_not_focused` | `paused_by_player_or_bridge` | `none`
+  - `resolvableByBridge`, `errors[]` (each probe is isolated; a renamed game member shows up here instead of failing the command)
+- `resolve_pause_blocker` actions: `complete_tutorial_phase` (requires `expectedPhase`) and `dismiss_milestone` (requires `expectedMilestone`). Error dialogs and menus are reported, never dismissed.
+- `play.ps1 fix` loops these up to 10 times. `run-session.ps1 -ResolveTutorials` (used by `play.ps1 run`) does it automatically.
+- Field case: completing the commercial-zone tutorial step via bridge zoning queued the next tutorial card (Industrial Zones 1/4), which paused the game. Turning tutorials off in game options avoids it entirely.
+- Settings: `Keep bridge controls enabled across city loads` (owner opt-in, default off, persisted in `ModsSettings/CitiesIIAgentBridge`). When off, "Allow local bridge controls" resets on every city load as before. The STOP latch still wins.
+
 ## Harness bugs fixed in this copy (see `git log`)
 1. **Culture-dependent heartbeat parse.** PS7 `ConvertFrom-Json` turns `heartbeatUtc` into a `DateTime`. `[DateTimeOffset]::Parse()` then re-parsed its string form in the user's culture (en-IN read 10/09 as 10 Sep), so every command failed with "heartbeat stale". Fixed by using the DateTime directly and parsing strings with InvariantCulture.
 2. **Indented request JSON.** Indentation roughly doubled request size and pushed valid batches past 16 KB. Requests are now compact, with a client-side size check that refuses before sending.
 3. **PowerShell argument gotcha (caller side).** `myfunc -880 -120` passes the strings "-880" and "-120", and the bridge answers `number_required: x`. Type parameters as `[double]` or pass hashtables.
 4. **`$args` is reserved in PowerShell.** Don't use it as a variable name in scripts.
+5. **`Get-BridgePaged` comma-wrapped its array.** `@(...)` then counted 1. It now emits items.
+6. **`play.ps1 grow -Plan` lost the `-Plan` flag** when re-invoking itself and built a real grid. `grow` now calls the grid function directly. Lesson: test dry-run flags by reading the result before trusting them.
 
 ## Safety rules that still apply
 - Get the owner's permission before installing, closing or launching the game. The bridge has no quit command; never force-kill the game.
