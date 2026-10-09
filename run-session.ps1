@@ -67,7 +67,7 @@ while($used -lt $TotalSeconds -and ($TotalSeconds-$used) -ge 1){
         # a bounded number of times; anything else stops with the exact reason.
         $pause=Invoke-Bridge get_ui_state @{chirps=0}
         ([ordered]@{step=$step;pauseState=$pause}|ConvertTo-Json -Compress -Depth 6) | Add-Content -LiteralPath $LogPath
-        "  pause: blocker=$($pause.likelyBlocker) screen=$($pause.screen) panel=$($pause.activePanel) phase=$($pause.tutorial.activeTutorialPhase) milestone=$($pause.milestone.pending)"
+        "  pause: blocker=$($pause.likelyBlocker) screen=$($pause.screen) panel=$($pause.activePanel) phase=$($pause.tutorial.activeTutorialPhase) milestone=$($pause.milestone.pending) text=$((@($pause.tutorial.phaseText.PSObject.Properties.Value)+@($pause.milestone.pendingText.PSObject.Properties.Value) | Select-Object -First 1))"
         if($pause.resolvableByBridge -and $ResolveTutorials -and $tutorialResolutions -lt $MaxTutorialResolutions){
             $req = if($pause.likelyBlocker -eq 'milestone_popup'){ @{action='dismiss_milestone';expectedMilestone=[string]$pause.milestone.pending} } else { @{action='complete_tutorial_phase';expectedPhase=[string]$pause.tutorial.activeTutorialPhase} }
             $done=Invoke-Bridge resolve_pause_blocker $req

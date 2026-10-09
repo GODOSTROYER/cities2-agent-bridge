@@ -2,10 +2,10 @@
 # Token-efficient front end for agents. Every verb prints a few dense lines; raw bridge
 # JSON (often kilobytes per call) never reaches the agent unless asked for with `raw`.
 #   play.ps1 help
-param(
-    [Parameter(Position = 0)][string]$Verb = 'help',
-    [Parameter(Position = 1, ValueFromRemainingArguments)][string[]]$Rest = @()
-)
+# No declared parameters: PowerShell binding mangles mixes like "name -X -760", so the raw
+# argument list is parsed below.
+$Verb = if ($args.Count) { [string]$args[0] } else { 'help' }
+$Rest = @(if ($args.Count -gt 1) { $args[1..($args.Count - 1)] | ForEach-Object { "$_" } })
 $ErrorActionPreference = 'Stop'
 $H = $PSScriptRoot
 Import-Module (Join-Path $H 'lib\BridgeClient.psm1') -Force
@@ -31,8 +31,13 @@ function Show-Ui([switch]$Chirps) {
     if ($ui.likelyBlocker -and $ui.likelyBlocker -ne 'none') { $bits += "PAUSED BY $($ui.likelyBlocker)" + $(if ($ui.resolvableByBridge) { ' (play fix)' } else { '' }) }
     if ($ui.screen) { $bits += "screen $($ui.screen)" }
     if ($ui.activePanel) { $bits += "panel $($ui.activePanel)" }
-    if ($ui.tutorial.activeTutorialPhase) { $bits += "tutorial '$($ui.tutorial.activeTutorialPhase)'" }
-    if ($ui.milestone.pending) { $bits += "milestone popup '$($ui.milestone.pending)'" }
+    function Short($t, $n) { if ($null -eq $t) { return '' }; $t = "$t"; if ($t.Length -gt $n) { $t.Substring(0, $n) + '…' } else { $t } }
+    if ($ui.tutorial.activeTutorialPhase) {
+        $txt = @($ui.tutorial.phaseText.PSObject.Properties.Value)
+        $bits += "tutorial $($ui.tutorial.phaseKind) '$($ui.tutorial.activeTutorialPhase)'" + $(if ($txt) { ': ' + (Short $txt[0] 60) + $(if ($txt.Count -gt 1) { ' — ' + (Short $txt[1] 140) } else { '' }) } else { '' })
+    }
+    if ($ui.milestone.pending) { $bits += "MILESTONE '$($ui.milestone.pending)' reward $($ui.milestone.pendingReward)" + $(if ($ui.milestone.pendingText) { ': ' + (Short (@($ui.milestone.pendingText.PSObject.Properties.Value)[0]) 60) } else { '' }) }
+    if ($null -ne $ui.milestone.xpToNext) { $bits += "next milestone in $($ui.milestone.xpToNext) xp" }
     if ($ui.dialogs) { $bits += "dialogs " + (($ui.dialogs | ForEach-Object { $_.title ?? $_.type }) -join '; ') }
     if ($ui.activeTool -and $ui.activeTool -ne 'DefaultToolSystem') { $bits += "tool $($ui.activeTool)" }
     if ($ui.infoview) { $bits += "infoview $($ui.infoview)" }
@@ -79,7 +84,7 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
     foreach ($e in $edges) { foreach ($pt in $e.curve) { $obstacles.Add(@($pt.x, $pt.z)) }
         for ($t = 0.25; $t -lt 1; $t += 0.25) { $obstacles.Add(@(($e.curve[0].x * (1 - $t) + $e.curve[-1].x * $t), ($e.curve[0].z * (1 - $t) + $e.curve[-1].z * $t))) } }
     $nodes = @($edges | Where-Object { $_.prefab -match '^(?!Highway).*Road' } | ForEach-Object { $_.curve[0]; $_.curve[-1] })
-    $margin = 24
+    $margin = 40   # building lots reach ~24 m from their centre, plus half a road width
     $cands = foreach ($x in ([int]$X0)..([int]($X1 - $w)) | Where-Object { ($_ - [int]$X0) % 40 -eq 0 }) {
         foreach ($z in ([int]$Z0)..([int]($Z1 - $dpt)) | Where-Object { ($_ - [int]$Z0) % 40 -eq 0 }) {
             if (!(Owned $x $z) -or !(Owned ($x + $w) $z) -or !(Owned $x ($z + $dpt)) -or !(Owned ($x + $w) ($z + $dpt))) { continue }
@@ -130,6 +135,7 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
   grow [-Cols 3 -Rows 2 -Plan]      pick zone by demand, find site, build grid
   zone -X x -Z z [-R 300 -Zone res] zone all zonable cells in area
   run [-Seconds 600 -Speed 4 -Floor 150000]   bounded simulation, auto-fixes tutorials
+  place <prefab> -X x -Z z [-R 300 -Max 150000]   place a building by name at a roadside site
   save [label] [-Keep]       rolling save (older bridge saves recycled); -Keep = permanent
   prefab <name> [kind]       resolve name -> index (cached)
   raw <command> [json]       bridge call, noisy fields stripped (add -Full for all)
@@ -164,10 +170,18 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         foreach ($c in $choices) { try { $null = Resolve-BridgePrefab $Zones[$c.k] 'zone'; $pick = $c; break } catch {} }
         if (!$pick -or $pick.v -lt 20) { "grow: demand too low (R $(@($d.residential)[0]) C $($d.commercial) I $($d.industrial)); simulate instead"; break }
         $cols = [int](Opt 'cols' 3); $rows = [int](Opt 'rows' 2)
-        $site = Find-Sites $cols $rows 110 110 1 | Select-Object -First 1
-        if (!$site) { "grow: no free site for ${cols}x${rows}"; break }
-        "grow: zone $($pick.k) (demand $($pick.v)) at -X $($site.x) -Z $($site.z)"
-        Invoke-Grid $site.x $site.z $cols $rows $pick.k ([bool](Opt 'plan' $false))
+        # Validate candidates read-only (plan) in distance order; build the first that passes.
+        $sites = @(Find-Sites $cols $rows 110 110 5)
+        if (!$sites) { "grow: no free site for ${cols}x${rows}"; break }
+        $chosen = $null
+        foreach ($site in $sites) {
+            $check = @(Invoke-Grid $site.x $site.z $cols $rows $pick.k $true 2>&1 | ForEach-Object { "$_" })
+            if ($check -match 'PlanOnly: nothing changed') { $chosen = $site; break }
+            "grow: site -X $($site.x) -Z $($site.z) rejected by plan"
+        }
+        if (!$chosen) { "grow: no candidate validated; nothing changed"; break }
+        "grow: zone $($pick.k) (demand $($pick.v)) at -X $($chosen.x) -Z $($chosen.z)"
+        Invoke-Grid $chosen.x $chosen.z $cols $rows $pick.k ([bool](Opt 'plan' $false))
     }
     'zone' {
         $zone = Resolve-BridgePrefab $Zones[(Opt 'zone' 'res')] 'zone'
@@ -185,7 +199,18 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         }
         $out | Where-Object { $_ -match 'triage|pause:|completed tutorial|STOPPED|DONE|WARN|rror' }
     }
-    'save' {
+    'place' {
+        # place <prefab name> -X x -Z z [-R 300 -Max 150000]: roadside site search + native placement.
+        $name = $pos -join ' '
+        $pf = Resolve-BridgePrefab $name 'building'
+        $found = Invoke-Bridge find_building_sites @{ prefabIndex = $pf.index; prefabVersion = $pf.version; x = [double](Opt 'x' 0); z = [double](Opt 'z' 0); radius = [double](Opt 'r' 300) }
+        $cands = @($found.(Get-ResultArrayName $found) | Select-Object -First 16 | ForEach-Object { @{ position = @{ x = [double]$_.position.x; z = [double]$_.position.z }; rotation = [double]$_.rotation } })
+        if (!$cands) { "place: no roadside site for $name near $(Opt 'x' 0),$(Opt 'z' 0)"; break }
+        $op = Invoke-Bridge place_building @{ prefabIndex = $pf.index; prefabVersion = $pf.version; position = $cands[0].position; rotation = $cands[0].rotation; candidates = $cands; maxCost = [long](Opt 'max' 150000) }
+        $r = Wait-BridgeOperation $op.id
+        if ($r.status -eq 'complete') { "place: $name at {0:N0},{1:N0} cost {2}" -f $r.snappedPosition.x, $r.snappedPosition.z, (Money $r.previewCost) }
+        else { "place: FAILED $name - $($r.error) (attempts $(@($r.attempts).Count))" }
+    }    'save' {
         # Default: rolling save (older bridge saves -> Recycle Bin). -Keep: permanent keep-<label>.
         $keep = [bool](Opt 'keep' $false)
         $label = if ($pos) { $pos[0] } else { 'autosave' }

@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using Game.Prefabs;
 using Game.SceneFlow;
 using Game.Tools;
 using Game.Triggers;
@@ -46,9 +47,34 @@ namespace CitiesIIAgentBridge
             });
             Probe(errors, "milestone", () =>
             {
-                var binding = ReadMember(world.GetExistingSystemManaged<MilestoneUISystem>(), "m_UnlockedMilestoneBinding");
-                milestone = PrefabName(world, (Entity)ReadMember(binding, "value"));
-                result["milestone"] = new JObject { ["pending"] = milestone };
+                var milestones = world.GetExistingSystemManaged<MilestoneUISystem>();
+                var pendingEntity = (Entity)ReadMember(ReadMember(milestones, "m_UnlockedMilestoneBinding"), "value");
+                milestone = PrefabName(world, pendingEntity);
+                var info = new JObject { ["pending"] = milestone };
+                Probe(errors, "milestoneXp", () =>
+                {
+                    info["achieved"] = JToken.FromObject(CallPrivate(milestones, "GetAchievedMilestone"));
+                    info["xp"] = JToken.FromObject(CallPrivate(milestones, "GetTotalXP"));
+                    info["nextXp"] = JToken.FromObject(CallPrivate(milestones, "GetNextMilestoneXP"));
+                    info["xpToNext"] = (int)info["nextXp"] - (int)info["xp"];
+                });
+                if (pendingEntity != Entity.Null && world.GetExistingSystemManaged<PrefabSystem>().TryGetPrefab<MilestonePrefab>(pendingEntity, out var reached))
+                {
+                    info["pendingIndex"] = reached.m_Index; info["pendingReward"] = reached.m_Reward;
+                    info["pendingText"] = LocalizedFor(reached.name, 3);
+                }
+                result["milestone"] = info;
+            });
+            Probe(errors, "tutorialText", () =>
+            {
+                var tutorials = world.GetExistingSystemManaged<Game.Tutorials.TutorialSystem>();
+                var phaseEntity = (Entity)ReadMember(tutorials, "activeTutorialPhase");
+                if (phaseEntity == Entity.Null || !(result["tutorial"] is JObject tutorial)) return;
+                if (world.GetExistingSystemManaged<PrefabSystem>().TryGetPrefab<PrefabBase>(phaseEntity, out var phasePrefab) && phasePrefab != null)
+                {
+                    tutorial["phaseKind"] = phasePrefab.GetType().Name.Replace("Tutorial", "").Replace("Prefab", "");
+                    tutorial["phaseText"] = LocalizedFor(phasePrefab.name, 3);
+                }
             });
             Probe(errors, "errorDialog", () =>
             {
@@ -89,6 +115,32 @@ namespace CitiesIIAgentBridge
             return result;
         }
 
+        private static object CallPrivate(object target, string method) =>
+            (target.GetType().GetMethod(method, AnyInstanceMember, null, Type.EmptyTypes, null)
+                ?? throw new MissingMethodException(target.GetType().Name, method)).Invoke(target, null);
+
+        // Player-visible text for a prefab: every active-locale entry whose ID mentions
+        // "[<prefab name>]" (CS2's convention, e.g. Tutorials.TITLE[...]/DESCRIPTION[...]).
+        // Trimmed so a card costs an agent a few hundred characters at most.
+        private static JObject LocalizedFor(string prefabName, int max)
+        {
+            var output = new JObject();
+            var dictionary = ReadMember(GameManager.instance.localizationManager, "activeDictionary");
+            if (dictionary == null || string.IsNullOrEmpty(prefabName)) return output;
+            string needle = "[" + prefabName + "]";
+            var ids = ReadMember(dictionary, "entryIDs") as System.Collections.Generic.IEnumerable<string>;
+            var tryGet = dictionary.GetType().GetMethod("TryGetValue", new[] { typeof(string), typeof(string).MakeByRefType() });
+            if (ids == null || tryGet == null) return output;
+            foreach (var id in ids.Where(i => i.Contains(needle)).OrderBy(i => i.Contains("TITLE") ? 0 : 1).Take(max))
+            {
+                var call = new object[] { id, null };
+                if (!(bool)tryGet.Invoke(dictionary, call)) continue;
+                string text = System.Text.RegularExpressions.Regex.Replace((string)call[1] ?? "", "<[^>]+>|\\s+", " ").Trim();
+                output[id] = text.Length > 300 ? text.Substring(0, 300) + "…" : text;
+            }
+            return output;
+        }
+
         private static JArray LatestChirps(World world, int count)
         {
             var manager = world.EntityManager;
@@ -96,10 +148,10 @@ namespace CitiesIIAgentBridge
             var messageId = typeof(ChirperUISystem).GetMethod("GetMessageID", AnyInstanceMember, null, new[] { typeof(Entity) }, null);
             var dictionary = ReadMember(GameManager.instance.localizationManager, "activeDictionary");
             var tryGet = dictionary?.GetType().GetMethod("TryGetValue", new[] { typeof(string), typeof(string).MakeByRefType() });
-            using (var query = manager.CreateEntityQuery(ComponentType.ReadOnly<Chirp>()))
+            using (var query = manager.CreateEntityQuery(ComponentType.ReadOnly<Game.Triggers.Chirp>()))
             using (var entities = query.ToEntityArray(Allocator.Temp))
             {
-                var newest = entities.ToArray().Select(e => (e, chirp: manager.GetComponentData<Chirp>(e)))
+                var newest = entities.ToArray().Select(e => (e, chirp: manager.GetComponentData<Game.Triggers.Chirp>(e)))
                     .OrderByDescending(x => x.chirp.m_CreationFrame).Take(count);
                 var output = new JArray();
                 foreach (var (entity, chirp) in newest)

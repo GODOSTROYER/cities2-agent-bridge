@@ -62,7 +62,7 @@ else {
     $candidates = @($candidates | Sort-Object d | Select-Object -First 8)
     if (!$candidates) { throw "No existing road node within $MaxConnectorLength m of a grid corner; move the grid or raise -MaxConnectorLength." }
     $gridPlan = New-Plan $roads
-    if ($gridPlan.status -ne 'ready') { Show-Plan $gridPlan $roads.Count; throw 'Grid itself is blocked (before adding a connector); fix the errors above. Nothing was changed.' }
+    if ($gridPlan.status -ne 'ready') { Show-Plan $gridPlan $roads.Count; 'Failed: grid itself is blocked (before adding a connector). Nothing was changed.'; return }
     foreach ($cand in $candidates) {
         $withConnector = $roads
         if ($cand.d -ge 8) { $withConnector = $roads + @{ prefabIndex = $road; prefabVersion = $RoadPrefabVersion; start = @{ x = [double]$cand.p.x; z = [double]$cand.p.z }; end = @{ x = [double]$cand.c[0]; z = [double]$cand.c[1] }; maxCost = $MaxCostPerRoad } }
@@ -70,10 +70,10 @@ else {
         "Connector candidate: node $($cand.node) -> corner ($($cand.c -join ',')) {0:N0} m: $($plan.status)" -f $cand.d
         if ($plan.status -eq 'ready') { $best = $cand; $roads = $withConnector; break }
     }
-    if (!$best) { Show-Plan $plan $withConnector.Count; throw 'No connector candidate validated. Nothing was changed.' }
+    if (!$best) { Show-Plan $plan $withConnector.Count | Select-Object -First 1; 'Failed: no connector candidate validated. Nothing was changed.'; return }
     Show-Plan $plan $roads.Count
 }
-if ($plan.status -ne 'ready') { throw 'Plan is blocked; fix the errors above. Nothing was changed.' }
+if ($plan.status -ne 'ready') { 'Failed: plan is blocked. Nothing was changed.'; return }
 if ($PlanOnly) { 'PlanOnly: nothing changed.'; return }
 
 $exec = Invoke-Bridge execute_neighborhood @{ id = $plan.id }
