@@ -37,7 +37,8 @@ function Show-Ui([switch]$Chirps) {
         $bits += "tutorial $($ui.tutorial.phaseKind) '$($ui.tutorial.activeTutorialPhase)'" + $(if ($txt) { ': ' + (Short $txt[0] 60) + $(if ($txt.Count -gt 1) { ' — ' + (Short $txt[1] 140) } else { '' }) } else { '' })
     }
     if ($ui.milestone.pending) { $bits += "MILESTONE '$($ui.milestone.pending)' reward $($ui.milestone.pendingReward)" + $(if ($ui.milestone.pendingText) { ': ' + (Short (@($ui.milestone.pendingText.PSObject.Properties.Value)[0]) 60) } else { '' }) }
-    if ($null -ne $ui.milestone.xpToNext) { $bits += "next milestone in $($ui.milestone.xpToNext) xp" }
+    if ($ui.milestone.blockedBy -eq 'tutorial_intro') { $bits += "MILESTONES BLOCKED: tutorial intro unfinished ($(-[int]$ui.milestone.xpToNext) xp over; play fix)" }
+    elseif ($null -ne $ui.milestone.xpToNext) { $bits += "next milestone in $($ui.milestone.xpToNext) xp" }
     if ($ui.dialogs) { $bits += "dialogs " + (($ui.dialogs | ForEach-Object { $_.title ?? $_.type }) -join '; ') }
     if ($ui.activeTool -and $ui.activeTool -ne 'DefaultToolSystem') { $bits += "tool $($ui.activeTool)" }
     if ($ui.infoview) { $bits += "infoview $($ui.infoview)" }
@@ -197,6 +198,10 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         while ($n -lt 10) {
             $ui = Try-Bridge get_ui_state; if (!$ui) { $ui = Try-Bridge get_pause_state }
             if (!$ui) { 'fix: needs mod 0.5.1+'; break }
+            if ($ui.milestone.blockedBy -eq 'tutorial_intro' -and !$ui.resolvableByBridge) {
+                $r = Invoke-Bridge resolve_pause_blocker @{ action = 'complete_tutorial_intro' }
+                "fix: completed tutorial intro (milestones released: $(!$r.introUnfinishedAfter))"; $n++; Start-Sleep -Milliseconds 1200; continue
+            }
             if (!$ui.resolvableByBridge) { "fix: nothing safe to resolve (blocker: $($ui.likelyBlocker))"; break }
             $arg = if ($ui.likelyBlocker -eq 'milestone_popup') { @{ action = 'dismiss_milestone'; expectedMilestone = [string]$ui.milestone.pending } } else { @{ action = 'complete_tutorial_phase'; expectedPhase = [string]$ui.tutorial.activeTutorialPhase } }
             $r = Invoke-Bridge resolve_pause_blocker $arg

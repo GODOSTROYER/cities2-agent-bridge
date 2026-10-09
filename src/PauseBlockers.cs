@@ -81,7 +81,18 @@ namespace CitiesIIAgentBridge
             var world = RequireCity();
             string action = (string)args["action"];
             if (action == "dismiss_milestone") return DismissMilestone(world, args);
-            if (action != "complete_tutorial_phase") throw new ArgumentException("unsupported_action: complete_tutorial_phase or dismiss_milestone");
+            if (action == "complete_tutorial_intro")
+            {
+                // Same as finishing the "How to build a city" intro: releases held milestones.
+                var tutorials = world.GetExistingSystemManaged<TutorialSystem>();
+                if (!(bool)ReadMember(tutorials, "tutorialIntroUnfinished")) throw new InvalidOperationException("tutorial_intro_already_complete");
+                var tutorialsUi = world.GetExistingSystemManaged<TutorialsUISystem>();
+                var intro = typeof(TutorialsUISystem).GetMethod("CompleteIntro", AnyInstanceMember, null, new[] { typeof(bool) }, null)
+                    ?? throw new MissingMethodException("TutorialsUISystem", "CompleteIntro");
+                intro.Invoke(tutorialsUi, new object[] { (bool)ReadMember(tutorials, "tutorialEnabled") });
+                return new JObject { ["action"] = action, ["introUnfinishedAfter"] = (bool)ReadMember(tutorials, "tutorialIntroUnfinished") };
+            }
+            if (action != "complete_tutorial_phase") throw new ArgumentException("unsupported_action: complete_tutorial_phase, dismiss_milestone or complete_tutorial_intro");
             var before = PauseState();
             var phase = before["tutorial"]?["activeTutorialPhase"];
             if (phase == null || phase.Type == JTokenType.Null) throw new InvalidOperationException("no_active_tutorial_phase");

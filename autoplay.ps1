@@ -35,6 +35,7 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
     $summary = ($r | Where-Object { $_ -like 'run:*' } | Select-Object -First 1) -replace '^run: ', ''
     $ms = Get-Milestone
     "cycle ${cycle}: $built | $summary | R demand $resDemand | next milestone in $($ms.xpToNext) xp" + $(if ($r -match 'resolved') { ' | popups passed: ' + (@($r -match 'resolved').Count) } else { '' })
+    if ($ms.blockedBy -eq 'tutorial_intro') { "  milestones held by unfinished tutorial intro; " + ((& $play fix 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -like 'fix:*' }) -join '; ') }
     $stop = $r | Where-Object { $_ -match 'STOPPED' }
     if ($stop) { "autoplay stopped: $stop"; break }
     if ($UntilMilestone -and [int]$ms.achieved -gt [int]$start.achieved) { "MILESTONE reached: $($ms.achieved) (was $($start.achieved))"; break }

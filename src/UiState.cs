@@ -69,7 +69,10 @@ namespace CitiesIIAgentBridge
             {
                 var tutorials = world.GetExistingSystemManaged<Game.Tutorials.TutorialSystem>();
                 var phaseEntity = (Entity)ReadMember(tutorials, "activeTutorialPhase");
-                if (phaseEntity == Entity.Null || !(result["tutorial"] is JObject tutorial)) return;
+                if (!(result["tutorial"] is JObject tutorial)) return;
+                // MilestoneSystem awards nothing while the intro list is unfinished.
+                tutorial["introUnfinished"] = (bool)ReadMember(tutorials, "tutorialIntroUnfinished");
+                if (phaseEntity == Entity.Null) return;
                 if (world.GetExistingSystemManaged<PrefabSystem>().TryGetPrefab<PrefabBase>(phaseEntity, out var phasePrefab) && phasePrefab != null)
                 {
                     tutorial["phaseKind"] = phasePrefab.GetType().Name.Replace("Tutorial", "").Replace("Prefab", "");
@@ -100,12 +103,17 @@ namespace CitiesIIAgentBridge
             if (chirpCount > 0) Probe(errors, "chirps", () => result["chirps"] = LatestChirps(world, chirpCount));
 
             string phase = (string)result["tutorial"]?["activeTutorialPhase"];
+            string phaseKind = (string)result["tutorial"]?["phaseKind"];
+            // Cards and info panels hold the game paused (some without the UI barrier);
+            // balloons are non-blocking hints.
+            bool blockingCard = phase != null && phaseKind != null && phaseKind != "Balloon";
+            if (result["milestone"] is JObject ms && (int?)ms["xpToNext"] <= 0 && (bool?)result["tutorial"]?["introUnfinished"] == true) ms["blockedBy"] = "tutorial_intro";
             bool hasMilestone = milestone.Type != JTokenType.Null;
             string blocker =
                 errorDialog ? "error_dialog" :
                 menu || (screen != null && screen != "Main" && screen != "FreeCamera") ? "menu_screen" :
                 observers > 0 && hasMilestone ? "milestone_popup" :
-                observers > 0 && phase != null ? "tutorial_phase" :
+                (observers > 0 && phase != null) || blockingCard ? "tutorial_phase" :
                 observers > 0 ? "unknown_ui_panel" :
                 (bool?)result["hasFocus"] == false ? "window_not_focused" :
                 (double)result["selectedSpeed"] == 0 ? "paused_by_player_or_bridge" : "none";
