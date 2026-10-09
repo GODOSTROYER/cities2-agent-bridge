@@ -17,7 +17,7 @@ $ErrorActionPreference='Stop'
 $client=Join-Path $PSScriptRoot 'bridge.ps1'
 Import-Module (Join-Path $PSScriptRoot 'lib\BridgeClient.psm1') -Force
 $lastProblemCount=[int]::MaxValue; $shortageGrowth=0; $tutorialResolutions=0
-function Invoke-Bridge($command,$arguments,$timeout=5){
+function Invoke-Bridge($command,$arguments=@{},$timeout=5){
     $r=& $client $command -ArgsJson ($arguments|ConvertTo-Json -Compress -Depth 6) -TimeoutSeconds $timeout | ConvertFrom-Json
     if(!$r.ok){throw "$command failed: $($r.error)"}
     $r.result
@@ -65,17 +65,18 @@ while($used -lt $TotalSeconds -and ($TotalSeconds-$used) -ge 1){
         # The game itself forced speed 0 (tutorial card, other UI panel, lost focus) or the
         # player paused. Only an active tutorial phase is resolved automatically, and only
         # a bounded number of times; anything else stops with the exact reason.
-        $pause=Invoke-Bridge get_pause_state
+        $pause=Invoke-Bridge get_ui_state @{chirps=0}
         ([ordered]@{step=$step;pauseState=$pause}|ConvertTo-Json -Compress -Depth 6) | Add-Content -LiteralPath $LogPath
-        "  pause: blocker=$($pause.likelyBlocker) observers=$($pause.pausedBarrierObservers) focus=$($pause.hasFocus) phase=$($pause.tutorial.activeTutorialPhase)"
-        if($pause.likelyBlocker -eq 'tutorial_phase' -and $ResolveTutorials -and $tutorialResolutions -lt $MaxTutorialResolutions){
-            $done=Invoke-Bridge resolve_pause_blocker @{action='complete_tutorial_phase';expectedPhase=[string]$pause.tutorial.activeTutorialPhase}
+        "  pause: blocker=$($pause.likelyBlocker) screen=$($pause.screen) panel=$($pause.activePanel) phase=$($pause.tutorial.activeTutorialPhase) milestone=$($pause.milestone.pending)"
+        if($pause.resolvableByBridge -and $ResolveTutorials -and $tutorialResolutions -lt $MaxTutorialResolutions){
+            $req = if($pause.likelyBlocker -eq 'milestone_popup'){ @{action='dismiss_milestone';expectedMilestone=[string]$pause.milestone.pending} } else { @{action='complete_tutorial_phase';expectedPhase=[string]$pause.tutorial.activeTutorialPhase} }
+            $done=Invoke-Bridge resolve_pause_blocker $req
             $tutorialResolutions++
-            "  completed tutorial phase '$($done.completedPhase)' ($tutorialResolutions/$MaxTutorialResolutions)"
+            "  resolved $($req.action): '$($done.completedPhase)$($done.dismissed)' ($tutorialResolutions/$MaxTutorialResolutions)"
             Start-Sleep -Milliseconds 1500   # the UI releases its barrier on later frames
             continue
         }
-        "STOPPED for inspection: game paused by $($pause.likelyBlocker)$(if($pause.likelyBlocker -eq 'tutorial_phase' -and !$ResolveTutorials){' (rerun with -ResolveTutorials, or close the card in-game)'})"; exit 3
+        "STOPPED for inspection: game paused by $($pause.likelyBlocker)$(if($pause.resolvableByBridge -and !$ResolveTutorials){' (rerun with -ResolveTutorials or play.ps1 fix)'}elseif(!$pause.resolvableByBridge){' (owner must close it in-game)'})"; exit 3
     }
     if($res.reason -notin $normal){ "STOPPED for inspection: $($res.reason)"; exit 3 }
 }

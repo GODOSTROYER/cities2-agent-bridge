@@ -189,4 +189,25 @@ function Resolve-BridgePrefab {
     [pscustomobject]$p
 }
 
-Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab
+# Rolling-save policy: bridge saves accumulate (each save_checkpoint is a new unique file,
+# and execute_neighborhood adds two). Keep the newest N bridge saves; saves labelled
+# keep-* and every save not created by the bridge (owner's own cities) are never touched.
+# Removed files go to the Recycle Bin, so a mistake is recoverable.
+$script:SavesRoot = Join-Path $env:USERPROFILE 'AppData\LocalLow\Colossal Order\Cities Skylines II\Saves'
+function Clear-BridgeRollingSaves {
+    param([ValidateRange(1, 20)][int]$KeepNewest = 1, [switch]$WhatIf)
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $saves = @(Get-ChildItem -LiteralPath $script:SavesRoot -Recurse -File -Filter 'CitiesIIAgentBridge-*.cok' |
+        Where-Object { $_.Name -notlike 'CitiesIIAgentBridge-keep-*' } | Sort-Object LastWriteTimeUtc -Descending)
+    $removed = @()
+    foreach ($save in ($saves | Select-Object -Skip $KeepNewest)) {
+        foreach ($file in @($save.FullName, "$($save.FullName).cid")) {
+            if (!(Test-Path -LiteralPath $file)) { continue }
+            if (!$WhatIf) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($file, 'OnlyErrorDialogs', 'SendToRecycleBin') }
+        }
+        $removed += $save.BaseName
+    }
+    [pscustomobject]@{ kept = @($saves | Select-Object -First $KeepNewest | ForEach-Object BaseName); recycled = $removed }
+}
+
+Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab, Clear-BridgeRollingSaves

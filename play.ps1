@@ -23,7 +23,7 @@ function Try-Bridge($command, $arguments = @{}) { $r = Invoke-Bridge $command $a
 
 $Zones = @{ res = 'NA Residential Low'; com = 'NA Commercial Low'; ind = 'Industrial Manufacturing'; off = 'Office'; resmed = 'NA Residential Medium Row' }
 
-function Show-Ui {
+function Show-Ui([switch]$Chirps) {
     $ui = Try-Bridge get_ui_state
     if (!$ui) { $ui = Try-Bridge get_pause_state }
     if (!$ui) { return 'ui: n/a (mod < 0.5.1)' }
@@ -37,7 +37,7 @@ function Show-Ui {
     if ($ui.activeTool -and $ui.activeTool -ne 'DefaultToolSystem') { $bits += "tool $($ui.activeTool)" }
     if ($ui.infoview) { $bits += "infoview $($ui.infoview)" }
     if ($ui.hasFocus -eq $false) { $bits += 'window unfocused' }
-    if ($ui.chirps) { $bits += "chirps: " + (($ui.chirps | Select-Object -First 2 | ForEach-Object { $_.text }) -join ' | ') }
+    if ($Chirps -and $ui.chirps) { $bits += 'chirps: ' + (($ui.chirps | Select-Object -First 3 | ForEach-Object { $t = $_.text; if ($t.Length -gt 70) { $t.Substring(0, 70) + '…' } else { $t } }) -join ' | ') }
     'ui: ' + ($bits -join ' | ')
 }
 
@@ -112,7 +112,10 @@ function Invoke-Grid([double]$x, [double]$z, [int]$cols, [int]$rows, [string]$zo
     $a = @{ X = $x; Z = $z; Columns = $cols; Rows = $rows; RoadPrefabIndex = $road.index; RoadPrefabVersion = $road.version; ZonePrefabIndex = $zone.index; ZonePrefabVersion = $zone.version }
     if ($plan) { $a.PlanOnly = $true }
     & (Join-Path $H 'grid.ps1') @a *>&1 | ForEach-Object { "$_" } |
-        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' }
+        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
+        Tee-Object -Variable lines
+    # execute_neighborhood writes before/after saves; after a clean build keep only the newest.
+    if (!$plan -and ($lines -match 'status=complete') -and !($lines -match 'Failed|rror')) { $x = Clear-BridgeRollingSaves -KeepNewest 1; if ($x.recycled) { "recycled $($x.recycled.Count) automatic save(s)" } }
 }
 
 switch ($Verb.ToLower()) {
@@ -127,13 +130,13 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
   grow [-Cols 3 -Rows 2 -Plan]      pick zone by demand, find site, build grid
   zone -X x -Z z [-R 300 -Zone res] zone all zonable cells in area
   run [-Seconds 600 -Speed 4 -Floor 150000]   bounded simulation, auto-fixes tutorials
-  save [label]               checkpoint + verify
+  save [label] [-Keep]       rolling save (older bridge saves recycled); -Keep = permanent
   prefab <name> [kind]       resolve name -> index (cached)
   raw <command> [json]       bridge call, noisy fields stripped (add -Full for all)
 '@
     }
     'look' { Show-Look }
-    'ui' { Show-Ui }
+    'ui' { Show-Ui -Chirps }
     'fix' {
         $n = 0
         while ($n -lt 10) {
@@ -183,10 +186,14 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         $out | Where-Object { $_ -match 'triage|pause:|completed tutorial|STOPPED|DONE|WARN|rror' }
     }
     'save' {
-        $label = if ($pos) { $pos[0] } else { 'agent-' + (Get-Date -Format 'HHmm') }
+        # Default: rolling save (older bridge saves -> Recycle Bin). -Keep: permanent keep-<label>.
+        $keep = [bool](Opt 'keep' $false)
+        $label = if ($pos) { $pos[0] } else { 'autosave' }
+        if ($keep) { $label = "keep-$label" }
         $op = Invoke-Bridge save_checkpoint @{ label = $label }
         $r = Wait-BridgeOperation $op.id
         "save: $($r.status) $($r.saveName)"
+        if ($r.status -eq 'complete' -and !$keep) { $x = Clear-BridgeRollingSaves -KeepNewest 1; if ($x.recycled) { "recycled $($x.recycled.Count) older bridge save(s)" } }
     }
     'prefab' {
         $kind = if ($pos.Count -gt 1) { $pos[1] } else { 'all' }
