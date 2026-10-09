@@ -19,7 +19,7 @@ $files = @(
     'README.md','INSTALL.md','AGENTS.md','DEVELOPMENT.md','SHARING.md',
     'RELEASE-NOTES.md','VALIDATION.txt','CONTRIBUTING.md','COMMANDS.md','commands.json',
     'build.ps1','package.ps1','install.ps1','verify-package.ps1','verify-api.ps1',
-    'bridge.ps1','advance.ps1','run-session.ps1','grid.ps1','zone-fill.ps1','lib/BridgeClient.psm1','LEARNINGS.md','PLAY.md','play.ps1','journal.ps1','export-map.ps1','view-map.html',
+    'bridge.ps1','advance.ps1','run-session.ps1','autoplay.ps1','FAILURES.md','tests/HarnessTests.ps1','grid.ps1','zone-fill.ps1','lib/BridgeClient.psm1','LEARNINGS.md','PLAY.md','play.ps1','journal.ps1','export-map.ps1','view-map.html',
     'src/BridgeTick.cs','src/BuildCommands.cs','src/CityCommands.cs','src/Construction.cs',
     'src/Diagnostics.cs','src/Mailbox.cs','src/Mod.cs','src/Neighborhood.cs',
     'src/NetworkCommands.cs','src/ObjectPlacementSafety.cs','src/PlanGeometry.cs',

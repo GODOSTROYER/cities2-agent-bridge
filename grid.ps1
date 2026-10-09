@@ -70,7 +70,7 @@ function Show-Plan($plan, $count) {
     if ($plan.warnings) { "warnings: " + ($plan.warnings | ConvertTo-Json -Depth 4 -Compress) }
 }
 $best = $null
-if ($NoConnector) { $plan = New-Plan $roads; Show-Plan $plan $roads.Count }
+if ($NoConnector) { $coreCount = $roads.Count; $plan = New-Plan $roads; Show-Plan $plan $roads.Count }
 else {
     # Candidate (existing node, grid corner) pairs by distance. Planning is read-only, so
     # each candidate is validated until one passes; a connector that cuts through a lot
@@ -99,6 +99,7 @@ else {
     if (!$candidates -and $AllowDemolition) { $candidates = @($all | Sort-Object d | Select-Object -First 12) }    $candidates = @($candidates | Sort-Object d | Select-Object -First 12)
     "Connector search: $($starts.Count) starts x $($targets.Count) targets, $($occ.Buildings) lots rasterised; $($candidates.Count) clear links to validate"
     if (!$candidates) { "Failed: no clear link from existing roads within $MaxConnectorLength m (lots block every route). Nothing was changed." + $(if (!$AllowDemolition) { ' (-AllowDemolition can open a street through one house)' } else { '' }); return }
+    $coreCount = $roads.Count   # grid streets; stubs and the connector are appended after these
     $gridPlan = if ($stubRoads) { New-Plan ($roads + $stubRoads) }
     if ($stubRoads -and $gridPlan.status -eq 'ready') { $roads = $roads + $stubRoads }
     else { if ($stubRoads) { "Stubs dropped (blocked); planning grid without them." }; $gridPlan = New-Plan $roads }
@@ -159,8 +160,37 @@ if (!$exec.batch) { throw "Execution was not started (plan status $($exec.status
 $batch = Wait-BridgeBatch $exec.batch.id
 "Batch $($batch.id): status=$($batch.status) completed=$($batch.completed)/$($batch.steps) spent=$($batch.moneySpent)"
 if ($batch.status -ne 'complete') {
-    "Failed at step $($batch.failedStep): $($batch.error) / " + (($batch.results | Select-Object -Last 1) | ConvertTo-Json -Depth 6 -Compress)
-    throw 'Grid build stopped. Earlier steps remain applied; inspect before retrying.'
+    # Step 0 is the automatic save, so road index = failedStep - 1.
+    $roadIndex = [int]$batch.failedStep - 1
+    $last = $batch.results | Select-Object -Last 1
+    $why = @($last.placementErrors | ForEach-Object { $_.reasons } | Select-Object -Unique) -join ','
+    "Failed at road ${roadIndex}: $($last.error) [$why]"
+    if ($roadIndex -lt $coreCount) { throw 'Grid streets incomplete. Earlier steps remain applied; inspect before retrying.' }
+    # Only a stub or the connector failed (roads interact once earlier ones exist, so an
+    # individual preview can pass and the built sequence still fail). Keep the grid,
+    # build the remaining optional roads one by one (each game-checked), and if the
+    # connector was lost, try the other validated connector candidates.
+    "Grid streets built; continuing with optional roads."
+    $connectorLost = !$NoConnector -and $best -and $best.d -ge 8
+    for ($k = $roadIndex + 1; $k -lt $roads.Count; $k++) {
+        $isConnector = $connectorLost -and $k -eq $roads.Count - 1
+        $pv = Wait-BridgeOperation (Invoke-Bridge build_road ($roads[$k] + @{ previewOnly = $true })).id
+        if ($pv.status -ne 'complete') { "  skipped road ${k}: $($pv.error)"; continue }
+        $r = Wait-BridgeOperation (Invoke-Bridge build_road $roads[$k]).id
+        "  road ${k}: $($r.status)"; if ($isConnector -and $r.status -eq 'complete') { $connectorLost = $false }
+    }
+    if ($connectorLost -and $roadIndex -eq $roads.Count - 1) {
+        foreach ($cand in @($candidates | Where-Object { $_ -ne $best -and $_.d -ge 8 } | Sort-Object d | Select-Object -First 10)) {
+            $sp = @{ x = [double]$cand.p.x; z = [double]$cand.p.z }
+            if ($cand.edge) { $sp.index = [int]$cand.edge.index; $sp.version = [int]$cand.edge.version; $sp.curvePosition = [double]$cand.t }
+            $link = @{ prefabIndex = $road; prefabVersion = $RoadPrefabVersion; start = $sp; end = @{ x = [double]$cand.c[0]; z = [double]$cand.c[1] }; maxCost = $MaxCostPerRoad }
+            $pv = Wait-BridgeOperation (Invoke-Bridge build_road ($link + @{ previewOnly = $true })).id
+            if ($pv.status -ne 'complete') { continue }
+            $r = Wait-BridgeOperation (Invoke-Bridge build_road $link).id
+            if ($r.status -eq 'complete') { "Connector rebuilt from $($cand.node) ($([int]$cand.d) m)"; $best = $cand; $connectorLost = $false; break }
+        }
+        if ($connectorLost) { 'Failed: grid built but NOT connected; use play.ps1 link -X <corner x> -Z <corner z> -Road ''Small Road''' }
+    }
 }
 
 if ($zone) {

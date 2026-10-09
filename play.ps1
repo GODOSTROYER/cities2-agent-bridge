@@ -98,8 +98,8 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
             Where-Object { $_.d -ge 8 -and $_.d -le 400 } | Sort-Object d | Select-Object -First 12 | Where-Object { Test-OccupancySegmentFree $occ $_.p $_.t 6 } | Select-Object -First 1
         $site | Add-Member clearLink ($(if ($clearLink) { [Math]::Round($clearLink.d) } else { $null })) -PassThru })
     $ordered = @($ranked | Sort-Object @{ e = { if ($null -ne $_.clearLink) { 0 } else { 1 } } }, link)
-    # Terrain: 9 samples per finalist in one call; reject wet or steep (>15 m relief).
-    $final = @($ordered | Select-Object -First ([Math]::Max($count * 3, 9)))
+    # Terrain: 9 samples per finalist in one call; reject wet or >25 m relief (the native road pre-flight catches real SteepSlope).
+    $final = @($ordered | Select-Object -First ([Math]::Max($count * 4, 20)))
     if (!$final) { return @() }
     $pts = foreach ($cnd in $final) { foreach ($fx in 0, 0.5, 1) { foreach ($fz in 0, 0.5, 1) { @{ x = $cnd.x + $fx * $w; z = $cnd.z + $fz * $dpt } } } }
     $sr = Invoke-Bridge sample_terrain @{ points = @($pts) }; $smp = @($sr.(Get-ResultArrayName $sr))
@@ -108,7 +108,7 @@ function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$coun
         $grp = $smp[$k..($k + 8)]; $k += 9
         $hs = $grp.position.y; $wet = @($grp | Where-Object { $_.waterDepth -gt 0.1 }).Count
         $relief = ($hs | Measure-Object -Maximum).Maximum - ($hs | Measure-Object -Minimum).Minimum
-        if ($wet -eq 0 -and $relief -le 15) { $out += [pscustomobject]@{ x = $cnd.x; z = $cnd.z; link = $cnd.link; clearLink = $cnd.clearLink; relief = [Math]::Round($relief, 1) } }
+        if ($wet -eq 0 -and $relief -le 25) { $out += [pscustomobject]@{ x = $cnd.x; z = $cnd.z; link = $cnd.link; clearLink = $cnd.clearLink; relief = [Math]::Round($relief, 1) } }
         if ($out.Count -ge $count) { break }
     }
     $out
@@ -146,7 +146,7 @@ function Invoke-Grid([double]$x, [double]$z, [int]$cols, [int]$rows, [string]$zo
     if ($plan) { $a.PlanOnly = $true }
     if ($demolish) { $a.AllowDemolition = $true }
     & (Join-Path $H 'grid.ps1') @a *>&1 | ForEach-Object { "$_" } |
-        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:|Demolished|Stubs|Shared|Native preview)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
+        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:|Demolished|Stubs|Shared|Native preview|Grid streets|Connector rebuilt|  skipped|  road)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
         Tee-Object -Variable lines
     # execute_neighborhood writes before/after saves; after a clean build keep only the newest.
     if (!$plan -and ($lines -match 'status=complete') -and !($lines -match 'Failed|rror')) { $x = Clear-BridgeRollingSaves -KeepNewest 1; if ($x.recycled) { "recycled $($x.recycled.Count) automatic save(s)" } }
@@ -165,6 +165,7 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
   grow [-Cols 3 -Rows 2 -Plan -Demolish -BuyTiles]   pick zone by demand, find site, build grid (-Demolish: may remove 1 house for a link)
   zone -X x -Z z [-R 300 -Zone res] zone all zonable cells in area
   run [-Seconds 600 -Speed 4 -Floor 150000]   bounded simulation, auto-fixes tutorials
+  link -X x -Z z [-Road 'Medium Road' -Max 60000 -Plan]   arterial: clear corridor from existing roads, game-checked
   place <prefab> -X x -Z z [-R 300 -Max 150000]   place a building by name at a roadside site
   save [label] [-Keep]       rolling save (older bridge saves recycled); -Keep = permanent
   prefab <name> [kind]       resolve name -> index (cached)
@@ -239,7 +240,58 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         }
         $out | Where-Object { $_ -match 'triage|pause:|completed tutorial|STOPPED|DONE|WARN|rror' }
     }
-    'buy' { Invoke-BuyTiles ([int](Opt 'n' 1)) ([long](Opt 'max' 300000)) ([bool](Opt 'plan' $false)) }    'place' {
+    'buy' { Invoke-BuyTiles ([int](Opt 'n' 1)) ([long](Opt 'max' 300000)) ([bool](Opt 'plan' $false)) }    'link' {
+        # link -X x -Z z [-Road 'Medium Road' -Max 60000 -Plan]: shortest straight corridor from
+        # an existing local road to (x,z) that crosses no building lot (occupancy raster),
+        # checked by the game's own validator, then built. Arterials for planned growth.
+        $tx = [double](Opt 'x' 0); $tz = [double](Opt 'z' 0); $roadName = [string](Opt 'road' 'Medium Road')
+        $rd = Resolve-BridgePrefab $roadName 'network'
+        $edges = @((Invoke-Bridge get_network_edges @{ x = $tx; z = $tz; radius = 2000 }).edges | Where-Object { $_.prefab -match '^(?!Highway).*Road' })
+        $pts = @(foreach ($e in $edges) { foreach ($t in 0.1, 0.3, 0.5, 0.7, 0.9) { [pscustomobject]@{ x = $e.curve[0].x + ($e.curve[-1].x - $e.curve[0].x) * $t; z = $e.curve[0].z + ($e.curve[-1].z - $e.curve[0].z) * $t; e = $e; t = $t } } })
+        $near = @($pts | Sort-Object { [Math]::Pow($_.x - $tx, 2) + [Math]::Pow($_.z - $tz, 2) } | Select-Object -First 60)
+        if (!$near) { 'link: no road within 2 km'; break }
+        $xs = @($near.x) + $tx; $zs = @($near.z) + $tz
+        $occ = Get-BridgeOccupancy -MinX (($xs | Measure-Object -Minimum).Minimum - 20) -MinZ (($zs | Measure-Object -Minimum).Minimum - 20) -MaxX (($xs | Measure-Object -Maximum).Maximum + 20) -MaxZ (($zs | Measure-Object -Maximum).Maximum + 20)
+        $target = [pscustomobject]@{ x = $tx; z = $tz }
+        $ok = $null
+        foreach ($s in $near) {
+            $len = [Math]::Sqrt([Math]::Pow($s.x - $tx, 2) + [Math]::Pow($s.z - $tz, 2))
+            if ($len -gt 1000 -or !(Test-OccupancySegmentFree $occ $s $target 9)) { continue }
+            $args3 = @{ prefabIndex = $rd.index; prefabVersion = $rd.version; start = @{ x = [double]$s.x; z = [double]$s.z; index = [int]$s.e.index; version = [int]$s.e.version; curvePosition = [double]$s.t }; end = @{ x = $tx; z = $tz }; maxCost = [long](Opt 'max' 60000) }
+            $pv = Wait-BridgeOperation (Invoke-Bridge build_road ($args3 + @{ previewOnly = $true })).id
+            if ($pv.status -ne 'complete') { "link: candidate from $([int]$s.x),$([int]$s.z) rejected: $($pv.error) [$(@($pv.placementErrors.reasons | Select-Object -Unique) -join ',')]"; continue }
+            $ok = $args3; "link: corridor from $([int]$s.x),$([int]$s.z) ($([int]$len) m, cost $(Money $pv.previewCost)) accepted by the game"; break
+        }
+        if (!$ok -and [int](Opt 'demolish' 0) -gt 0) {
+            # Fewest-crossings corridor: count growable lots each straight link would cut.
+            $limit = [int](Opt 'demolish' 0)
+            $lots = @(); $seenLots = @{}
+            foreach ($cx in ($xs | Measure-Object -Minimum).Minimum, ($xs | Measure-Object -Maximum).Maximum) { foreach ($cz in ($zs | Measure-Object -Minimum).Minimum, ($zs | Measure-Object -Maximum).Maximum) {
+                foreach ($b in (Invoke-Bridge get_city_map @{ x = $cx; z = $cz; radius = 500 }).buildings) { if (!$seenLots[$b.index]) { $seenLots[$b.index] = 1; $lots += $b } } } }
+            $best = $null
+            foreach ($s in $near) {
+                $len = [Math]::Sqrt([Math]::Pow($s.x - $tx, 2) + [Math]::Pow($s.z - $tz, 2)); if ($len -gt 1000) { continue }
+                $hit = @($lots | Where-Object { $hs = [Math]::Sqrt([Math]::Pow($_.halfSize[0], 2) + [Math]::Pow($_.halfSize[1], 2)) + 9
+                    $dx = $tx - $s.x; $dz = $tz - $s.z; $l2 = $dx * $dx + $dz * $dz; $u = [Math]::Max(0, [Math]::Min(1, (($_.position.x - $s.x) * $dx + ($_.position.z - $s.z) * $dz) / $l2))
+                    [Math]::Sqrt([Math]::Pow($_.position.x - ($s.x + $u * $dx), 2) + [Math]::Pow($_.position.z - ($s.z + $u * $dz), 2)) -lt $hs })
+                if ($hit.Count -gt $limit -or @($hit | Where-Object { $_.prefab -notmatch '^(NA_|EU_)?(Residential|Commercial|Industrial|Office)' }).Count) { continue }
+                if (!$best -or $hit.Count -lt $best.hit.Count -or ($hit.Count -eq $best.hit.Count -and $len -lt $best.len)) { $best = [pscustomobject]@{ s = $s; len = $len; hit = $hit } }
+            }
+            if ($best) {
+                "link: corridor from $([int]$best.s.x),$([int]$best.s.z) ($([int]$best.len) m) needs $($best.hit.Count) lot(s) cleared: " + (($best.hit | ForEach-Object { "$($_.prefab)@$([int]$_.position.x),$([int]$_.position.z)" }) -join '; ')
+                if (Opt 'plan' $false) { 'link: plan only, nothing demolished or built'; break }
+                foreach ($b in $best.hit) { $d = Invoke-Bridge demolish @{ index = [int]$b.index; version = [int]$b.version }; $dr = if ($d.id) { Wait-BridgeOperation $d.id } else { $d }; "link: demolished $($b.prefab): $($dr.status)" }
+                $s = $best.s
+                $ok = @{ prefabIndex = $rd.index; prefabVersion = $rd.version; start = @{ x = [double]$s.x; z = [double]$s.z; index = [int]$s.e.index; version = [int]$s.e.version; curvePosition = [double]$s.t }; end = @{ x = $tx; z = $tz }; maxCost = [long](Opt 'max' 60000) }
+                $pv = Wait-BridgeOperation (Invoke-Bridge build_road ($ok + @{ previewOnly = $true })).id
+                if ($pv.status -ne 'complete') { "link: game still rejects after clearing: $($pv.error) [$(@($pv.placementErrors.reasons | Select-Object -Unique) -join ',')]"; break }
+            }
+        }
+        if (!$ok) { 'link: no clear corridor (all straight links cross lots or were rejected)' + $(if (!(Opt 'demolish' 0)) { '; -Demolish N allows clearing up to N homes/shops' } else { '' }); break }
+        if (Opt 'plan' $false) { 'link: plan only, nothing built'; break }
+        $r = Wait-BridgeOperation (Invoke-Bridge build_road $ok).id
+        "link: $($r.status) $(Money $r.previewCost)" + $(if ($r.error) { " error $($r.error)" } else { '' })
+    }    'place' {
         # place <prefab name> -X x -Z z [-R 300 -Max 150000]: roadside site search + native placement.
         $name = $pos -join ' '
         $pf = Resolve-BridgePrefab $name 'building'
