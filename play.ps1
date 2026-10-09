@@ -230,7 +230,9 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         $unemp = try { [double](Get-Content $statusFile -Raw | ConvertFrom-Json).unemployment } catch { 0 }
         if ($unemp -gt 10) { $choices = @($choices | Where-Object { $_.k -in 'com', 'ind' }) + @($choices | Where-Object { $_.k -notin 'com', 'ind' }); "grow: unemployment $unemp% -> jobs first" }
         $pick = $null
-        foreach ($c in $choices) { try { $null = Resolve-BridgePrefab $Zones[$c.k] 'zone'; $pick = $c; break } catch {} }
+        # First unlocked choice with real demand (>= 20); jobs-first only reorders, it never
+        # forces zoning that nobody wants.
+        foreach ($c in $choices) { if ($c.v -lt 20) { continue }; try { $null = Resolve-BridgePrefab $Zones[$c.k] 'zone'; $pick = $c; break } catch {} }
         if (!$pick -or $pick.v -lt 20) { "grow: demand too low (R $(@($d.residential)[0]) C $($d.commercial) I $($d.industrial)); simulate instead"; break }
         $cols = [int](Opt 'cols' 3); $rows = [int](Opt 'rows' 2)
         $growClock = [Diagnostics.Stopwatch]::StartNew()

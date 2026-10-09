@@ -33,7 +33,9 @@ $skip = 'Ruins|Upgrade|Extension|Wing|Sub0'
 
 $m = Invoke-Bridge get_city_management
 $pop = [int]$m.city.population; $money = [double]$m.city.money
-if ($money -lt $MinCash -and !$Plan) { "services: skipped (cash $([int]$money) below $MinCash)"; return }
+# Below MinCash only critical utilities (power/water/sewage) may still be built.
+$utilitiesOnly = $money -lt $MinCash -and !$Plan
+if ($utilitiesOnly -and $money -lt 60000) { "services: skipped (cash $([int]$money) too low even for utilities)"; return }
 # Upkeep discipline: every building adds permanent upkeep. While the city loses money,
 # only services citizens are actively complaining about may be added (and power/water).
 $net = [double]$m.budget.balanceRaw
@@ -74,6 +76,7 @@ $anchor = { param($set) if ($set) { [pscustomobject]@{ x = [Math]::Round(($set.x
 if ($importing -or ($homes.Count -and $powerShort / [double]$all.Count -gt 0.05)) { $a = & $anchor $powerSites; $needs = @($needs) + [pscustomobject]@{ t = 'power'; prefab = 'WindTurbine01,SmallCoalPowerPlant01,SolarPowerStation01'; x = $a.x; z = $a.z; have = $powerSites.Count; uncovered = 0; complained = $true; note = "importing=$importing shortfall=$powerShort" } }
 if ($wUse -gt 0.7) { $a = & $anchor $pumps.position; $needs = @($needs) + [pscustomobject]@{ t = 'water'; prefab = 'GroundwaterPumpingStation01,WaterTower01,WaterPumpingStation01'; x = $a.x; z = $a.z; have = $pumps.Count; uncovered = 0; complained = $true; note = "water at $([Math]::Round($wUse * 100))%" } }
 if ($sUse -gt 0.7) { $a = & $anchor $outlets.position; $needs = @($needs) + [pscustomobject]@{ t = 'sewage'; prefab = 'SewageOutlet01'; x = $a.x; z = $a.z; have = $outlets.Count; uncovered = 0; complained = $true; note = "sewage at $([Math]::Round($sUse * 100))%" } }
+if ($utilitiesOnly) { $needs = @($needs | Where-Object { $_.t -in 'power', 'water', 'sewage' }); if (!$needs) { "services: cash $([int]$money) below $MinCash; no critical utility needed"; return } }
 $needs = @($needs | Sort-Object @{ e = { if ($_.complained) { 0 } else { 1 } } }, @{ e = { if ($_.have) { 1 } else { 0 } } }, @{ e = 'uncovered'; Descending = $true })
 if (!$needs) { "services: all adequate (pop $pop)"; return }
 $placed = 0
