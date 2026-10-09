@@ -1,94 +1,129 @@
 # Audit implementation checkpoint
 
-Date: 2026-10-10 (Asia/Kolkata)
+Updated: 2026-10-10 (Asia/Kolkata)
 
-This is an **incomplete implementation checkpoint**, not a release, merge recommendation, or claim that all audit findings are fixed.
+**Draft, not a release or merge recommendation.** Atlas integrity and the first reliability wave are committed and covered by passing Windows CI. Wider audit remediation and native-game acceptance remain incomplete.
 
 ## Repository and delivery boundary
 
-- Working repository and PR target: `GODOSTROYER/cities2-agent-bridge`.
+- Repository and PR target: `GODOSTROYER/cities2-agent-bridge:main`.
 - Pull request: https://github.com/GODOSTROYER/cities2-agent-bridge/pull/1
 - Head branch: `codex/audit-hardening-2026-10-10`.
-- Base branch: `main`.
 - Audited baseline: `8c78da5e1ff4f160a032b4bdeb1d7f112af4ff64`, community 0.5.0.
-- First implementation commit: `a0c3d317d0a1abf536dda3d68a1256c5d7bb2919`.
-- Keep both the draft and eventual final review in this fork. Do not open an upstream PR, merge, rewrite history, or publish a release as part of this checkpoint.
+- Latest implementation commit covered by the evidence below: `ca9450ff3a2ff419e7f6721b6430d5db881e4e49`. Subsequent documentation checkpoints do not replace the exact source identity of this test run.
+- Keep both draft and eventual final review in this fork. Do not open an upstream PR, merge, rewrite history, or publish a release as part of this checkpoint.
 
 ## Changes actually committed
 
 ### Atlas integrity and observation quality
 
-Implemented in `atlas/export.mjs`, with regression coverage in `tests/audit-atlas.test.mjs`:
+`atlas/export.mjs` and `tests/audit-atlas.test.mjs`:
 
-- [x] Reject malformed building and road identities, including missing, nonnumeric, fractional, negative, and unsafe integer values.
-- [x] Validate district identity keys and their consistency with numeric entity identities. Preserve the nonentity `unassigned` and `unlocated` categories.
-- [x] Validate page and response-envelope object shapes. Reject response city sessions that disagree with the enclosed snapshot.
-- [x] Copy only allowlisted snapshot metadata. Untrusted page fields cannot overwrite validated layer arrays or the result object's prototype/constructor.
-- [x] Count an identified school even when its capacity component is unavailable.
-- [x] Distinguish unknown capacity/enrollment from known zero. Expose known subtotals and counts of sites with unavailable metrics; complete aggregate totals become null when information is incomplete.
-- [x] Carry these distinctions into report and CSV output, including incomplete education-level totals when a school's level is unknown.
-- [x] Add 38 focused regression tests for these behaviors and unchanged valid inventory/export behavior.
+- Reject malformed building/road identities; validate district keys against numeric identities and preserve nonentity categories.
+- Validate page/envelope shapes and reject envelope city sessions that disagree with the enclosed snapshot.
+- Allowlist snapshot metadata so it cannot overwrite validated layers or change the output prototype.
+- Count identified schools even when capacity is unavailable; preserve unknown metrics separately from known zero.
+- Report known capacity/enrollment subtotals and unknown-site counts in JSON, Markdown and CSV, including education-level uncertainty.
+- Add 38 focused regressions. The original 15 atlas tests also pass with these changes.
 
-No native C# implementation changes, PowerShell changes, or compiled game binary are committed in this checkpoint. Earlier uncommitted native edits were not retained after a workspace reset; they must be reconstructed and validated rather than represented as completed fixes.
+### Mailbox fairness, bounded recovery and replay protection
 
-## Validation evidence and limits
+`src/Mailbox.cs`, `tests/MailboxFairnessTests.cs`:
 
-Executed against the atlas changes before the first checkpoint commit:
+- Preserve scan position across bounded passes: at most 64 scanned entries and four new dispatches per pump.
+- Quarantine malformed filenames; defer locked inputs without consuming request IDs or starving readable requests.
+- Retain undelivered responses even if their input files disappear. Round-robin retries prevent earlier locked outputs from starving later deliverable results.
+- Preserve request-ID tombstones for 120 monotonic seconds independently of response-file retention. Replays in that horizon return `request_already_processed`, not a second dispatch.
+- Apply backpressure at 64 pending outputs or 4096 unexpired tombstones instead of discarding protected outcomes.
+- Bound input reads to 16 KiB, validate UTF-8/JSON depth/trailing content and reject nonobject arguments.
+- Expose the originating request ID only during dispatch and dispose the retained directory enumerator on shutdown.
 
-```text
-node --test tests/audit-atlas.test.mjs
-Node.js: 22.16.0
-Environment: Linux
-tests: 38
-pass: 38
-fail: 0
-skipped: 0
-```
+The horizon is not a permanent or cross-crash exactly-once guarantee. Request/response/quarantine disk retention and a durable recovery API remain separate work.
 
-This is **only the new focused regression suite**. It does not establish a pass for the complete original suite or native game behavior. Historical test counts from the baseline audit must not be reused as validation of these changes.
+### Operation identity and outcome semantics
 
-Still required:
+`src/OperationRegistry.cs`, wired through `ConstructionAccess`, `Mod`, road/zone/object/demolition/district tools, tile purchases, saves and simulation:
 
-- [ ] Run the complete original atlas suite, including its real PowerShell client against an isolated synthetic mailbox.
-- [ ] Run existing client and journal tests after any PowerShell modifications.
-- [ ] Compile and run the C# helper tests with the actual new helpers linked into the test project.
-- [ ] Run real Windows file-sharing/atomic-replacement recovery tests.
-- [ ] Compile the native mod against the user's compatible installed game assemblies.
-- [ ] Test the exact newly built DLL in a disposable city, including interruption and save/reload scenarios.
-- [ ] Run browser viewer regression tests when viewer behavior changes.
-- [ ] Rebuild and validate packaging before claiming a release is ready. Do not reuse the old release DLL as evidence for new source.
+- Capture bridge session, city session and request ID at acquisition. Status rejects stale origins; batch children retain the initiating batch request ID.
+- Distinguish application requested, unverified effects and adapter-verified readback. Submitted/unverified work cannot be marked complete.
+- Preserve terminal outcomes as `not_submitted`, `uncertain`, `verified` or `partial`; submitted failures prohibit blind replay.
+- Preserve verified district identity/polygon before naming, so a later naming error becomes partial success rather than apparent non-application.
+- Guard terminal records from late completion/stop overwrites or accidental release of a newer operation.
+- Bound history to 1024 records without silently pruning unresolved submitted work; unresolved saturation refuses new operations.
 
-No live game was controlled or modified by this checkpoint. No game assemblies, credentials, private saves, screenshots, or gameplay journals are included.
+**Limits:** the adapters still use their existing native readback predicates. These result fields do not prove complete geometry/collateral correctness, accurate relocation transforms, downstream service effects, or that the native naming bug is repaired. Explicit reconciliation/archival and initialization exception safety remain pending.
 
-## Remaining implementation work
+### Scoped simulation controls and mandatory maintenance
 
-The following items remain pending. A design or partial local implementation is not a completed fix.
+`src/SimulationArguments.cs`, `SimulationControl.cs`, `BridgeTick.cs`, `Workflow.cs`, `NetworkCommands.cs`, `Mod.cs`, `advance.ps1`:
 
-| Workstream | Required behavior and acceptance evidence |
+- Validate all supplied simulation bounds and guard types before observations/acquisition/unpausing. Preserve integer precision; reject non-finite numeric values and string-like booleans.
+- Require the original operation ID for routine simulation cancellation. Cancelling completed A cannot stop newer B or manual simulation.
+- Validate polling IDs. A lost start response does not trigger unscoped cancellation or automatic replay. Emergency STOP remains global.
+- Run STOP, simulation watchdogs, save reconciliation and tile/batch deadline cleanup independently of transport publication.
+- Keep new tile application and batch dispatch behind healthy transport. Use monotonic scheduling and tile/batch deadlines.
+- Advertise scoped cancellation and request replay horizon through capabilities.
+
+Remaining placement-tool and plan/client UTC deadlines, batch cancellation scoping, request-to-operation recovery and apply-time reserve enforcement are not claimed fixed here.
+
+### Reproducible offline validation
+
+- Add Windows `Offline bridge checks` CI with read-only permissions and pinned actions; no installation or release step.
+- Remove the game-install requirement for helper tests via a pinned Newtonsoft.Json 13.0.3 fallback. Explicit `GamePath` still selects the installed JSON assembly for MailboxTests.
+- Link actual production helpers into the new reliability test executable; isolate each project's build outputs.
+- Repair the real PowerShell fixture's hardcoded output-relative path and copy the client to a temporary directory so developer journals cannot be touched.
+- Add scoped-client regressions and C# 9 syntax checking. Update the package source allowlist for new helpers/tests.
+
+## Validation actually executed
+
+Successful PR CI: https://github.com/GODOSTROYER/cities2-agent-bridge/actions/runs/37989285474
+
+- Head under test: `ca9450ff3a2ff419e7f6721b6430d5db881e4e49`.
+- PR merge checkout: `8d8abcee90ddbff27c41871cf86b5bacb6c2178a`, against the unchanged audited base.
+- Job: `114019029297`, completed successfully; every validation step passed.
+- Runtime: Windows Server 2025, .NET SDK 10.0.401, PowerShell 7.6.6, Node.js 22.23.3.
+- Log timestamps: 2026-10-09 UTC, corresponding to 2026-10-10 in Asia/Kolkata.
+
+| Suite | Executed result |
 | --- | --- |
-| Operation identity and city isolation | Store originating bridge session, city session, and request ID on every operation. Reject stale-city status/cancellation. Test an operation from city A after loading city B. |
-| Operation outcomes and recovery | Separate application request, observed effects, and verification. Preserve original operation identity and known effects after partial failure; explicitly prohibit blind replay of an uncertain mutation. |
-| Bounded history and deduplication | Bound retained results without silently discarding unresolved current-city effects. Define a replay/deduplication horizon independent of response-file retention and test deletion/replay behavior. |
-| Mailbox fairness | Validate/quarantine malformed filenames without letting them consume every dispatch slot. Test at least four malformed entries ahead of a valid request, contention, cleanup, and bounded scanning. |
-| Mandatory maintenance during transport faults | Run STOP, simulation deadlines, completed-task reconciliation, cancellation, and cleanup independently of heartbeat/response publication. Do not accidentally move new batch dispatch ahead of those checks. Update Windows recovery expectations. |
-| Scoped simulation cancellation | Require the original operation/session for routine cancellation. A delayed cleanup by client A must never cancel client B's new operation. Keep emergency STOP explicitly global. |
-| Simulation argument validation | Validate finite numeric limits and guard types before unpausing. Test malformed cash floors, boolean flags, frame counts, and deadlines with no simulation side effects. |
-| Shared preflight and execution validation | Normalize command arguments in one place for plans, batches, and direct execution. Cover road budgets, alternative building candidates, and prohibited simulation-speed transitions before any batch step applies. |
-| Native preview effect guards | Validate all affected roots for roads, upgrades, and demolition, not just native allow-apply status or presence of the requested target. Permit legitimate owned dependencies while rejecting unrelated root changes. Requires native fixtures. |
-| Transform verification | Compare observed position and quaternion with the verified snapped target using documented tolerances. Test unchanged short moves, rotation-only requests, quaternion sign equivalence, and genuine no-ops. |
-| Native initialization and terminal-state safety | Make operation acquisition exception-safe. Cleanup and late callbacks must not overwrite a terminal operation or mutate a newly loaded city. |
-| District naming and partial success | Preserve a verified district identity/boundary if naming fails. Reconcile the original operation and test name readback without duplicating geometry. |
-| Spatial query performance | Capture building footprints once per observation and use a broad-phase spatial index before exact overlap tests. Compare results with exhaustive queries; benchmark allocations and game-thread time. |
-| Site and curve geometry | Normalize horizontal road tangents, handle elevated-road/terrain candidates deliberately, and validate actual curve extent rather than endpoint distance alone. |
-| Collection completeness | Add stable network pagination and honest diagnostics totals. BFS resource exhaustion must report unknown, not disconnected. Preserve session/snapshot consistency across pages. |
-| Viewer data quality | Display unknown/invalid water samples distinctly from dry land and show truncation/completeness for every relevant layer. Add browser tests. |
-| Timing, reserves, and long-session operation | Use monotonic elapsed time for scheduling/deadlines. Recheck reserve constraints at the native spending boundary. Separate journal rendering from command delivery and address concurrent snapshot captures. |
-| CI, documentation, and compatibility | Add game-independent checks, a separate native acceptance lane, consistent version/capability documentation, and exact-DLL validation records. Licensing decisions remain with the maintainer. |
+| Existing C# helpers, Windows locking and real PowerShell mailbox checks | 184 checks passed: 11 mailbox, 22 simulation/geometry, 12 pagination, 21 census/assignment, 36 district geometry/preview, 25 terrain, 24 object placement, 23 Windows recovery, 10 real client checks |
+| New reliability executable | 87 checks passed: 15 mailbox, 13 maintenance, 19 operation registry, 40 simulation arguments |
+| Existing PowerShell client/export script | Four client scenarios and two map-export checks passed |
+| Scoped simulation helper | Six scenarios passed: success, rejected start, lost start response, missing ID, poll failure, wrong poll ID |
+| Journal regressions | Both existing groups passed, including visible-only extraction and mock bridge delivery preservation |
+| Original plus audit atlas tests | 53 passed, 0 failed, 0 skipped; includes real PowerShell export through an isolated synthetic mailbox |
+| Native source syntax | 26 source files parsed with C# 9 grammar; 0 syntax errors |
+
+These are check/assertion counts and script scenarios, not hundreds of live-game scenarios. Earlier CI failures exposed a read-lock regression and a test path assumption; both were repaired before the successful run above. No failing test was removed to obtain this result.
+
+**Not validated:** native mod API/type compilation against game assemblies, the exact rebuilt DLL in Cities II, native persistence/interruption scenarios, browser viewer behavior, packaging/installer acceptance for this branch, or large-city frame-time performance. The syntax check is not a substitute for native compilation.
+
+No live game was controlled. No game assemblies, credentials, private saves, screenshots or gameplay journals were included. CI archived the exact public source under `source-checkpoint-37989285474` with seven-day retention; Git commits remain the durable source record.
+
+## Remaining implementation and acceptance work
+
+| Workstream | Required next behavior and evidence |
+| --- | --- |
+| Shared command preflight | Use the same normalized validators in plans, batches and direct execution; cover road budgets, building alternatives and prohibited simulation-speed steps before any batch action applies. |
+| Road/upgrade/demolition effect guards | Validate every affected root and legitimate owned dependencies. Reject unrelated collateral effects; verify requested network geometry and upgrade target. Requires native fixtures and runtime evidence. |
+| Relocation transform verification | Replace the existing 16-metre position-only predicate with position/quaternion checks, requested/snapped/observed transforms, quaternion-sign equivalence and explicit no-op handling. |
+| Native lifecycle robustness | Make operation acquisition exception-safe; ensure stale tools cannot apply to new worlds; complete save/tile cleanup and disposal verification. |
+| District naming | Repair the actual native naming-notification failure and test persistence/readback. Partial-success reporting is implemented, not the underlying naming repair. |
+| Spatial performance | Snapshot footprints once, index broad-phase overlaps, compare with exhaustive results and measure allocations/game-thread cost. Make expensive captures bounded/cancellable. |
+| Site and curve geometry | Normalize horizontal tangents; handle elevated road and terrain height deliberately; validate actual curve extent rather than endpoint distance alone. |
+| Collection completeness | Stable network pagination, diagnostic totals, BFS budget exhaustion as unknown, and consistent snapshot/session handling. |
+| Viewer data quality | Show invalid/unknown water distinctly from dry land and completeness for every layer; add browser regression evidence. |
+| Timing, reserves and journaling | Convert remaining UTC deadlines, recheck reserves at native spending boundaries and move journal rendering off command delivery. |
+| Long-session recovery | Explicit request-to-operation recovery/reconciliation, unresolved-record archival, safe disk-retention policy and concurrent snapshot cache behavior. |
+| Native and package acceptance | Compile against authorized compatible game assemblies; test the exact DLL on a disposable city, including interruption, save/reload and negative placement cases; run installer/package tests. |
+| Release documentation and licensing | Reconcile all historical version/capability/install text before releasing; no change to licensing without the maintainer's decision. |
+
+MCP, multi-planner orchestration, new transit/routing controls and the proposed dashboard remain future additions; none is claimed implemented by this reliability checkpoint.
 
 ## Resume procedure
 
-1. Fetch the current fork and this branch. Inspect the current head and working tree; preserve newer commits and local work. Do not reset to the audited baseline.
-2. Treat the committed files and the PR diff as the implementation source of truth. Do not assume an earlier temporary workspace or an uncommitted draft is still available.
-3. Make focused commits on the same branch, with regression tests for each repaired behavior. Keep mutations constrained to this fork.
-4. Update this document and the PR description with what is actually committed, tested, skipped, or blocked. Attach native evidence to the exact DLL and source commit tested.
-5. Keep the PR in draft while the wider implementation or required validation is incomplete. The eventual final PR/review remains fork-only.
+1. Fetch this fork and branch. Inspect current head and local changes; preserve newer work. Do not reset to the baseline or to an earlier checkpoint.
+2. Use committed source, this document and the PR diff as truth. Earlier lost workspace edits are not evidence; the reliability files above have now been reconstructed and committed.
+3. Continue with focused commits and regressions on the same fork-only branch. Keep the PR in draft while implementation/native acceptance is incomplete.
+4. Update test evidence with exact source/DLL identities. Do not describe syntax/helper passes as game compatibility.
+5. Final review remains in this fork; nothing in this document authorizes merge, release or gameplay.

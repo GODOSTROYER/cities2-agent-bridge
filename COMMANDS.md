@@ -4,6 +4,34 @@
 
 Known 0.5.0 issue: named district creation/editing can apply successfully and then report an EntityCommandBuffer naming-notification error. Inspect a fresh atlas and the operation result before any retry. Never replay an uncertain mutation. Boundary edits without a name have completed normally. See RELEASE-NOTES.md.
 
+## Unreleased fork hardening contract
+
+The draft hardening branch retains the 0.5.0 build label but changes the safety contract below. Check `get_capabilities.scopedSimulationCancellation` before using older clients with a rebuilt DLL. These changes are not a live-validated release.
+
+Asynchronous construction, district drawing, tile purchases, saves and simulation operations retain their originating `session`, `citySession`, and `requestId`. `get_operation` and simulation status reject a different bridge/city session rather than wrapping historical entity IDs in the current city. Batch records also preserve their origin. A child operation started by a batch carries the initiating batch request ID.
+
+`status` remains queued/validating/applying/running/complete/failed/interrupted. Additional fields distinguish submission from evidence:
+
+| Field | Meaning |
+|---|---|
+| `applicationRequested` | The native action was submitted; this alone is not proof that it took effect. |
+| `applied` | False before submission, null while effects are unverified, true after the adapter's recorded readback. |
+| `verificationState`, `verificationEvidence` | State and exact scope of the check performed. Existing entity/cell/task checks do not establish all downstream simulation effects or complete geometric correctness. |
+| `outcome` | Terminal `not_submitted`, `uncertain`, `verified`, or `partial`. A naming failure after verified district geometry is partial, not a reason to recreate the district. |
+| `retryAllowed` | False for submitted actions. A true value on a failed pre-submission attempt is not authorization to retry without correcting the cause and revalidating current state. |
+
+A submitted operation cannot report complete without an adapter readback. A late completion/stop callback cannot overwrite its terminal status or release a newer operation. Stronger road/demolition collateral checks and relocation transform validation remain separate pending work; these fields must not be interpreted as proof that those checks exist.
+
+`cancel_simulation_step` now **requires the original operation `id`**. It only ends that same active interval. Cancelling a completed A returns A with `cancelledActiveOperation: false` and leaves a newer B or manual simulation untouched; A's historical `paused` value does not describe the current game. Missing, malformed and stale IDs are rejected before changing simulation. `advance.ps1` never sends a global cancellation when the start response/ID was lost. Inspect the original request and the bounded watchdog outcome; do not blindly repeat the start. Emergency `stop` remains intentionally global.
+
+Mailbox requests have a maximum 16 KiB encoded size. The server scans at most 64 entries and dispatches at most four per pump, retaining its scan position across bounded passes. Invalid filenames move to a local `quarantine` directory; locked inputs are deferred. Undelivered responses are retried independently of whether their request still exists, with round-robin retries across blocked outputs.
+
+Completed request IDs have a **120-second in-process deduplication horizon independent of response-file retention**. Deleting a response and reusing its ID inside that horizon returns `request_already_processed` without dispatch. This is not a permanent exactly-once guarantee: do not reuse IDs after the horizon or infer outcomes from file deletion. Restarts change the bridge session and reject old envelopes. At 64 undelivered responses or 4096 unexpired request tombstones, new work is deferred instead of dropping protected records. Response files and quarantined inputs are not automatically deleted by a retention task.
+
+Operation history retains at most 1024 records. Safe terminal records may be pruned; unresolved submitted actions are retained. Saturating the registry with unresolved effects refuses new work with `unresolved_operation_history_full`; it does not silently discard evidence. Durable request-to-operation recovery and an explicit reconciliation/archival interface are not yet implemented.
+
+STOP, simulation watchdogs, completed-save reconciliation and tile/batch cleanup run before fallible transport. New tile application and batch dispatch still wait for healthy transport. The bridge pump schedule and tile/batch deadlines use monotonic elapsed time; native placement-tool and plan/client UTC deadlines remain pending conversion.
+
 ## District atlas and controls
 
 | Command | Arguments and result |
@@ -98,7 +126,7 @@ See RELEASE-NOTES.md and VALIDATION.txt for validation scope.
 | `cancel_batch` | Interrupt remaining work. Applied changes remain; an already-running save can finish. |
 | `simulate_step` | `frames`1–262144(default4096), `wallSeconds`1–60(default30), `stallSeconds`1–wall(defaultmin(5,wall)), `speed`1/2/4(default4). Optional `cashFloor`, positive `populationChange`, `stopOnDemandChange`, `stopOnConstructionComplete`, `stopOnNewShortage`(defaulttrue), `acknowledgeNoProgress`. Returns immediately with operation ID. |
 | `get_simulation_step` | `id`: status poll that does not pause. Finished results contain `reason`, `paused`, `advancedFrames`, `before`, `after`, `delta`, `elapsedSeconds`, `stagnantSteps`, `reassessmentRequired`. Snapshot failure/city change can omit `after`; check `snapshotError` and `paused`. |
-| `cancel_simulation_step` | Pause/end the active step without disabling controls. |
+| `cancel_simulation_step` | Required original operation `id`; end only that active interval without disabling controls. Completed IDs return historical status with `cancelledActiveOperation:false` and do not pause newer work. |
 
 `grid` fields: `x,z`, `columns,rows`1–4, `blockWidth,blockDepth`64–200metres, `roadPrefabIndex,roadPrefabVersion`, `zonePrefabIndex,zonePrefabVersion`, `maxCostPerRoad`. Grid coordinates are world-aligned. Explicit roads can connect to the existing city; service buildings/utilities belong in the same plan. Total generated plus explicit steps must be 1–62, leaving room for two saves. Zones retain native marquee semantics; block-attached starts give exact orientation.
 
