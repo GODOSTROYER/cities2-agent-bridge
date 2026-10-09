@@ -22,11 +22,15 @@ New-Item -ItemType Directory -Force -Path $resolvedDestination|Out-Null
 $target=Join-Path $resolvedDestination 'CitiesIIAgentBridge.dll'
 $previous=@('CitiesIIAgentBridge.dll','CitiesIIAgentBridge.pdb')|Where-Object {Test-Path -LiteralPath (Join-Path $resolvedDestination $_)}
 if($previous){
- $backup=Join-Path $resolvedDestination ('backups\'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
+ # Backups must live OUTSIDE the Mods folder: CS2 loads every DLL under Mods recursively,
+ # so a backup there loads as a duplicate mod ("Mod failed to load", Continue disabled).
+ $backup=Join-Path $env:LOCALAPPDATA ('CitiesIIAgentBridge\dll-backups\'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
  New-Item -ItemType Directory -Force -Path $backup|Out-Null
  foreach($name in $previous){Copy-Item -LiteralPath (Join-Path $resolvedDestination $name) -Destination $backup}
  Write-Output "Previous files backed up: $backup"
 }
 Copy-Item -LiteralPath $dll -Destination $target -Force
 if((Get-FileHash -LiteralPath $target).Hash -ne $manifest.dllSha256){throw 'Installed copy hash mismatch. Keep the backup and inspect before launching.'}
+$copies=@(Get-ChildItem -LiteralPath $resolvedDestination -Recurse -Filter 'CitiesIIAgentBridge*.dll')
+if($copies.Count -ne 1){throw "$($copies.Count) bridge DLLs under $resolvedDestination; the game would load duplicates. Move extras out of the Mods folder."}
 Write-Output 'DLL installed and hash-verified. Launch/load and confirm the mod in-game to verify runtime installation.'

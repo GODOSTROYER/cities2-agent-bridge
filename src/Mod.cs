@@ -182,13 +182,14 @@ namespace CitiesIIAgentBridge
                         .Where(a => new[] { "Traffic", "BuildingUse", "RoadBuilder", "FindIt", "PlopTheGrowables", "CityPlanningDraft", "CitiesIIAgentBridge" }.Contains(a.GetName().Name))
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
                     ["planning"] = new JArray("get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
-                    ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker"),
+                    ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker","quit_game"),
                     ["analysisPausesGame"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
                 case "get_city_state": return CityState();
                 case "get_pause_state": return PauseState();
                 case "get_ui_state": return UiState(args);
+                case "quit_game": return QuitGameAfterSave(args);
                 case "resolve_pause_blocker": return ResolvePauseBlocker(args);
                 case "get_city_diagnostics": return Diagnostics(args);
                 case "get_city_map": return CityMap(args);
