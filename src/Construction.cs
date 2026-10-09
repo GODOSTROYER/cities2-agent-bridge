@@ -20,23 +20,14 @@ namespace CitiesIIAgentBridge
     internal static class ConstructionAccess
     {
         internal static Func<bool> Allowed;
-        internal static Dictionary<string, JObject> Results = new Dictionary<string, JObject>();
-        internal static string Active;
-        internal static string Begin(string kind)
-        {
-            if (Active != null) throw new InvalidOperationException("construction_busy");
-            string id = Guid.NewGuid().ToString("N");
-            Results[id] = new JObject { ["id"] = id, ["kind"] = kind, ["status"] = "queued" };
-            Active = id;
-            return id;
-        }
-        internal static JObject Status(string id) => id != null && Results.TryGetValue(id, out var r) ? (JObject)r.DeepClone() : throw new ArgumentException("operation_not_found");
-        internal static void Finish(string id, string status, string error = null)
-        {
-            Results[id]["status"] = status;
-            if (error != null) Results[id]["error"] = error;
-            if(Active == id) Active = null;
-        }
+        internal static readonly OperationRegistry Registry = new OperationRegistry();
+        internal static Dictionary<string, JObject> Results => Registry.Results;
+        internal static string Active => Registry.Active;
+        internal static string Begin(string kind) => Registry.Begin(kind);
+        internal static JObject Status(string id) => Registry.Status(id);
+        internal static void Finish(string id, string status, string error = null) => Registry.Finish(id, status, error);
+        internal static void Submitted(string id) => Registry.Submitted(id);
+        internal static void Verified(string id, string evidence) => Registry.Verified(id, evidence);
         internal static object Call(Type type, object target, string name, params object[] args)
         {
             var m = type.GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic, null, Array.ConvertAll(args, a => a.GetType()), null);
@@ -102,7 +93,7 @@ namespace CitiesIIAgentBridge
         }
         protected override JobHandle OnUpdate(JobHandle deps)
         {
-            if (operation == null) return deps;
+            if (operation == null || ConstructionAccess.Active != operation) return deps;
             try
             {
                 deps.Complete();
@@ -128,6 +119,7 @@ namespace CitiesIIAgentBridge
                     using (var ts = q.ToComponentDataArray<Temp>(Allocator.Temp)) foreach (var t in ts) cost = checked(cost + Math.Max(0, t.m_Cost));
                     ConstructionAccess.Results[operation]["previewCost"] = cost;
                     if (cost > maxCost || cost > World.GetExistingSystemManaged<CitySystem>().moneyAmount) throw new InvalidOperationException("cost_exceeds_budget");
+                    ConstructionAccess.Submitted(operation);
                     applyMode = ApplyMode.Apply; stage = 2; frames = 0;
                     ConstructionAccess.Results[operation]["status"] = "applying"; return deps;
                 }
@@ -142,6 +134,7 @@ namespace CitiesIIAgentBridge
                     bool replaced = Replacement != Entity.Null && EntityManager.Exists(Replacement) && EntityManager.HasComponent<PrefabRef>(Replacement) && EntityManager.GetComponentData<PrefabRef>(Replacement).m_Prefab == expectedPrefab;
                     if (replaced) ConstructionAccess.Results[operation]["upgradedEntity"] = NativeBuild.Id(Replacement);
                     if (created.Count == 0 && !replaced) throw new InvalidOperationException("network_change_not_observed");
+                    ConstructionAccess.Verified(operation, "native_network_entity_readback");
                     Finish("complete");
                 }
             }
@@ -189,7 +182,7 @@ namespace CitiesIIAgentBridge
         }
         protected override JobHandle OnUpdate(JobHandle deps)
         {
-            if (operation == null) return deps;
+            if (operation == null || ConstructionAccess.Active != operation) return deps;
             try
             {
                 deps.Complete();
@@ -211,12 +204,14 @@ namespace CitiesIIAgentBridge
                     if (!GetAllowApply()) throw new InvalidOperationException("game_rejected_zoning");
                     using (var q = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<Block>(), ComponentType.ReadOnly<Temp>()))
                         if (q.IsEmptyIgnoreFilter) throw new InvalidOperationException("no_zone_cells_in_rectangle");
+                    ConstructionAccess.Submitted(operation);
                     applyMode = ApplyMode.Apply; stage = 2; frames = 0; return deps;
                 }
                 applyMode = ApplyMode.Clear; if (++frames < 4) return deps;
                 int changed = 0; foreach (var pair in Cells()) if (before.TryGetValue(pair.Key, out var old) && old != pair.Value) ++changed;
                 ConstructionAccess.Results[operation]["changedCells"] = changed;
                 if (changed == 0) throw new InvalidOperationException("no_zoning_change_observed");
+                ConstructionAccess.Verified(operation, "native_zone_cell_readback");
                 Finish("complete");
             }
             catch (Exception e) { Finish("failed", e.Message); }

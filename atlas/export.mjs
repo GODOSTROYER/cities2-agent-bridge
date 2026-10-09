@@ -3,6 +3,45 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const layers = ['districts', 'buildings', 'roads'];
+// Only schema metadata may cross the page boundary. Never copy arbitrary keys over
+// the validated district/building/road arrays (or over Object.prototype).
+const metadataKeys = ['schemaVersion', 'snapshotId', 'citySession', 'simulationFrame',
+  'capturedUtc', 'cityName', 'cityPopulationReported', 'paused', 'coordinateSystem',
+  'complete', 'errors', 'touristsAndCommutersExcluded', 'notes'];
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const knownCount = value => Number.isSafeInteger(value) && value >= 0;
+const entityId = row => record(row) && Number.isSafeInteger(row.index) && row.index > 0 &&
+  knownCount(row.version) ? `${row.index}:${row.version}` : null;
+const districtId = row => {
+  if (!record(row) || typeof row.key !== 'string') return null;
+  if (row.key === 'unassigned' || row.key === 'unlocated')
+    return row.index === undefined && row.version === undefined ? row.key : null;
+  if (!/^[1-9]\d*:(0|[1-9]\d*)$/.test(row.key)) return null;
+  const [index, version] = row.key.split(':').map(Number);
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(version)) return null;
+  if (row.index !== undefined || row.version !== undefined)
+    return entityId(row) === row.key ? row.key : null;
+  return row.key;
+};
+const isSchool = building => building.serviceKinds?.includes('school') ||
+  record(building.serviceCapacity?.school);
+const schoolMetric = (building, key) => {
+  const value = building.serviceCapacity?.school?.[key];
+  return knownCount(value) ? value : null;
+};
+function schoolInventory(buildings) {
+  const schools = buildings.filter(isSchool);
+  const capacity = schools.map(b => schoolMetric(b, 'nominalCapacity'));
+  const enrollment = schools.map(b => schoolMetric(b, 'enrolled'));
+  const schoolsWithUnknownCapacity = capacity.filter(n => n === null).length;
+  const schoolsWithUnknownEnrollment = enrollment.filter(n => n === null).length;
+  const knownNominalSchoolSeatsLocatedHere = capacity.reduce((sum, n) => sum + (n ?? 0), 0);
+  const knownEnrollmentAtSchoolsLocatedHere = enrollment.reduce((sum, n) => sum + (n ?? 0), 0);
+  return { schoolSites: schools.length, schoolsWithUnknownCapacity, schoolsWithUnknownEnrollment,
+    knownNominalSchoolSeatsLocatedHere, knownEnrollmentAtSchoolsLocatedHere,
+    nominalSchoolSeatsLocatedHere: schoolsWithUnknownCapacity ? null : knownNominalSchoolSeatsLocatedHere,
+    enrollmentAtSchoolsLocatedHere: schoolsWithUnknownEnrollment ? null : knownEnrollmentAtSchoolsLocatedHere };
+}
 const xml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const cell = value => String(value ?? '').replace(/[|\r\n]/g, ' ');
 const csv = value => {
@@ -14,15 +53,21 @@ const csv = value => {
 export function assemble(pages) {
   if (!Array.isArray(pages) || !pages.length) throw new Error('Atlas pages required');
   const result = {};
+  const unwrapped = pages.map(raw => {
+    if (!record(raw)) throw new Error('Invalid atlas page');
+    if ('ok' in raw) {
+      if (raw.ok !== true) throw new Error('Failed bridge response');
+      if (!record(raw.result)) throw new Error('Invalid atlas response result');
+      if (raw.citySession !== undefined && raw.citySession !== raw.result.citySession)
+        throw new Error('Mixed snapshot: response citySession');
+      raw = raw.result;
+    }
+    if (!layers.includes(raw.layer)) throw new Error('Unknown atlas layer');
+    return raw;
+  });
   let first;
   for (const layer of layers) {
-    const selected = pages.map(p => {
-      if ('ok' in p) {
-        if (p.ok !== true) throw new Error('Failed bridge response');
-        return p.result;
-      }
-      return p;
-    }).filter(p => p?.layer === layer);
+    const selected = unwrapped.filter(p => p.layer === layer);
     if (!selected.length) throw new Error(`Missing layer: ${layer}`);
     selected.sort((a,b) => a.offset-b.offset);
     let offset = 0; const rows = []; const ids = new Set();
@@ -30,16 +75,16 @@ export function assemble(pages) {
     for (let i=0; i<selected.length; i++) {
       const p = selected[i];
       first ??= p;
-      if (p.schemaVersion !== 1 || !p.snapshotId || !p.citySession || !Number.isInteger(p.simulationFrame) || p.paused !== true)
+      if (p.schemaVersion !== 1 || typeof p.snapshotId !== 'string' || !p.snapshotId || typeof p.citySession !== 'string' || !p.citySession || !knownCount(p.simulationFrame) || p.paused !== true)
         throw new Error('Unsupported or unpaused snapshot');
       for (const key of ['snapshotId','citySession','simulationFrame','capturedUtc','cityName'])
         if (p[key] !== first[key]) throw new Error(`Mixed snapshot: ${key}`);
       if (p.complete !== true || !Array.isArray(p.errors) || p.errors.length) throw new Error('Incomplete atlas snapshot');
-      if (!Number.isInteger(total) || total < 0 || p.total !== total || p.offset !== offset || !Array.isArray(p.items))
+      if (!Number.isSafeInteger(total) || total < 0 || p.total !== total || p.offset !== offset || !Array.isArray(p.items))
         throw new Error(`Missing or overlapping ${layer} page`);
-      if (!Number.isInteger(p.limit) || p.limit < 1 || p.items.length > p.limit) throw new Error('Invalid page limit');
+      if (!Number.isSafeInteger(p.limit) || p.limit < 1 || p.items.length > p.limit) throw new Error('Invalid page limit');
       for (const row of p.items) {
-        const id = layer === 'districts' ? row.key : `${row.index}:${row.version}`;
+        const id = layer === 'districts' ? districtId(row) : entityId(row);
         if (!id || ids.has(id)) throw new Error(`Duplicate or missing ${layer} ID`);
         ids.add(id); rows.push(row);
       }
@@ -51,21 +96,16 @@ export function assemble(pages) {
     if (offset !== total) throw new Error(`Truncated ${layer} export`);
     result[layer] = rows;
   }
-  if (pages.some(raw => !layers.includes((raw.result ?? raw).layer))) throw new Error('Unknown atlas layer');
-  for (const [key, value] of Object.entries(first))
-    if (!['items','layer','offset','limit','total','truncated','nextOffset','simulationFrameChangedSinceCapture'].includes(key)) result[key] = value;
+  for (const key of metadataKeys)
+    if (Object.hasOwn(first, key)) result[key] = first[key];
   return result;
 }
 
 export function districtRows(atlas) {
   return atlas.districts.map(d => {
     const buildings = atlas.buildings.filter(b => b.districtKey === d.key);
-    const schools = buildings.filter(b => b.serviceCapacity?.school);
-    return { key:d.key, name:d.name, ...d.census, buildings:buildings.length,
-      schoolSites:schools.length,
-      nominalSchoolSeatsLocatedHere: schools.reduce((s,b)=>s+b.serviceCapacity.school.nominalCapacity,0),
-      enrollmentAtSchoolsLocatedHere: schools.reduce((s,b)=>s+(b.serviceCapacity.school.enrolled ?? 0),0),
-      schoolsWithUnknownEnrollment: schools.filter(b=>b.serviceCapacity.school.enrolled == null).length,
+    return { ...d.census, key:d.key, name:d.name, buildings:buildings.length,
+      ...schoolInventory(buildings),
       services: buildings.filter(b=>b.serviceKinds?.length).length };
   });
 }
@@ -76,23 +116,28 @@ export function report(atlas) {
     'Counts below describe residents at home and buildings physically located in each district. They do not establish service reach or additional buildings required.', '',
     '| District | Residents | Children | Teens | Adults | Seniors | School sites | Nominal seats here | Enrollment here |',
     '|---|---:|---:|---:|---:|---:|---:|---:|---:|'];
-  for (const r of districtRows(atlas)) lines.push(`| ${cell(r.name)} | ${r.residents} | ${r.children} | ${r.teens} | ${r.adults} | ${r.seniors} | ${r.schoolSites} | ${r.nominalSchoolSeatsLocatedHere} | ${r.schoolsWithUnknownEnrollment ? 'Incomplete' : r.enrollmentAtSchoolsLocatedHere} |`);
+  for (const r of districtRows(atlas)) lines.push(`| ${cell(r.name)} | ${r.residents} | ${r.children} | ${r.teens} | ${r.adults} | ${r.seniors} | ${r.schoolSites} | ${r.schoolsWithUnknownCapacity ? 'Incomplete' : r.nominalSchoolSeatsLocatedHere} | ${r.schoolsWithUnknownEnrollment ? 'Incomplete' : r.enrollmentAtSchoolsLocatedHere} |`);
   lines.push('', '## Education by level', '', '| District | School level | Enrolled residents | Nominal seats located here | Enrollment at those sites |', '|---|---|---:|---:|---:|');
   for (const d of atlas.districts) {
     for (const [index, label] of ['Elementary','High school','College','University'].entries()) {
       const level=index+1;
-      const schools=atlas.buildings.filter(b=>b.districtKey===d.key && b.serviceCapacity?.school?.educationLevel===level).map(b=>b.serviceCapacity.school);
-      lines.push(`| ${cell(d.name)} | ${label} | ${d.census.enrolledByLevel0To4?.[level] ?? 'Unknown'} | ${schools.reduce((sum,s)=>sum+s.nominalCapacity,0)} | ${schools.some(s=>s.enrolled==null) ? 'Incomplete' : schools.reduce((sum,s)=>sum+s.enrolled,0)} |`);
+      const localSchools = atlas.buildings.filter(b => b.districtKey === d.key && isSchool(b));
+      const unknownLevel = localSchools.some(b => ![1,2,3,4].includes(b.serviceCapacity?.school?.educationLevel));
+      const inventory = schoolInventory(localSchools.filter(b => b.serviceCapacity?.school?.educationLevel === level));
+      const seats = unknownLevel || inventory.schoolsWithUnknownCapacity ? 'Incomplete' : inventory.nominalSchoolSeatsLocatedHere;
+      const enrolled = unknownLevel || inventory.schoolsWithUnknownEnrollment ? 'Incomplete' : inventory.enrollmentAtSchoolsLocatedHere;
+      lines.push(`| ${cell(d.name)} | ${label} | ${d.census.enrolledByLevel0To4?.[level] ?? 'Unknown'} | ${seats} | ${enrolled} |`);
     }
   }
   lines.push('', '## Service buildings', '', '| Building | Type | Located in | Serves | School level / seats / enrolled |', '|---|---|---|---|---|');
   const names = new Map(atlas.districts.map(d=>[d.key,d.name]));
   for (const b of atlas.buildings.filter(b=>b.serviceKinds?.length)) {
-    const targets = b.serviceDistricts === null ? 'Assignment unsupported' : b.serviceDistricts.length === 0 ? 'Citywide' : b.serviceDistricts.map(d=>names.get(`${d.index}:${d.version}`) ?? `Unknown district ${d.index}:${d.version}`).join(', ');
+    const targets = b.serviceDistricts == null ? 'Assignment unsupported' : b.serviceDistricts.length === 0 ? 'Citywide' : b.serviceDistricts.map(d=>names.get(`${d.index}:${d.version}`) ?? `Unknown district ${d.index}:${d.version}`).join(', ');
     const s = b.serviceCapacity?.school;
-    lines.push(`| ${cell(b.name)} | ${cell(b.serviceKinds.join(', '))} | ${cell(names.get(b.districtKey) ?? b.districtKey)} | ${cell(targets)} | ${s ? `${s.educationLevel} / ${s.nominalCapacity} / ${s.enrolled ?? 'Unknown'}` : '—'} |`);
+    lines.push(`| ${cell(b.name)} | ${cell(b.serviceKinds.join(', '))} | ${cell(names.get(b.districtKey) ?? b.districtKey)} | ${cell(targets)} | ${isSchool(b) ? `${[1,2,3,4].includes(s?.educationLevel) ? s.educationLevel : 'Unknown'} / ${schoolMetric(b, 'nominalCapacity') ?? 'Unknown'} / ${schoolMetric(b, 'enrolled') ?? 'Unknown'}` : '—'} |`);
   }
   lines.push('', '## Interpretation', '', ...(atlas.notes ?? []).map(n=>`- ${cell(n)}`),
+    '- Incomplete totals are null in JSON/CSV. Known subtotals and unknown-site counts are separate fields; unknown capacity is not zero.',
     '- School levels are reported separately in atlas.json (1 elementary, 2 high school, 3 college, 4 university). Summed seats across levels are inventory only.',
     '- Service assignments share capacity across their districts; citywide buildings are listed once. A district with no school inside it may still have access to a nearby school.',
     '- No exact school-shortfall calculation is made without eligible applicants, reachable alternatives and effective capacity.', '');
@@ -135,7 +180,7 @@ export function mapSvg(atlas) {
 export function writeExport(atlas, directory) {
   // Render and validate before creating any destination. Never overwrite another export.
   const rows = districtRows(atlas);
-  const keys=['key','name','residents','children','teens','adults','seniors','homelessResidents','sickResidents','injuredResidents','schoolSites','nominalSchoolSeatsLocatedHere','enrollmentAtSchoolsLocatedHere','schoolsWithUnknownEnrollment'];
+  const keys=['key','name','residents','children','teens','adults','seniors','homelessResidents','sickResidents','injuredResidents','schoolSites','nominalSchoolSeatsLocatedHere','enrollmentAtSchoolsLocatedHere','schoolsWithUnknownEnrollment','schoolsWithUnknownCapacity','knownNominalSchoolSeatsLocatedHere','knownEnrollmentAtSchoolsLocatedHere'];
   const files={ 'atlas.json':JSON.stringify(atlas,null,2)+'\n', 'report.md':report(atlas), 'map.svg':mapSvg(atlas),
     'districts.csv':keys.map(csv).join(',')+'\r\n'+rows.map(r=>keys.map(k=>csv(r[k])).join(',')).join('\r\n')+'\r\n' };
   fs.mkdirSync(directory); // An existing directory is an error, including an empty one.

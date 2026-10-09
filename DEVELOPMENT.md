@@ -6,10 +6,18 @@ Using the prebuilt DLL needs no SDK. Rebuilding needs a .NET SDK and the owner's
 pwsh -File .\build.ps1 -GamePath 'D:\SteamLibrary\steamapps\common\Cities Skylines II' -OutputDirectory .\rebuilt -CommunityRelease
 pwsh -File .\tests\ClientTests.ps1
 pwsh -File .\tests\JournalTests.ps1
-dotnet run --project .\tests\MailboxTests.csproj -p:GamePath='D:\SteamLibrary\steamapps\common\Cities Skylines II'
+dotnet run --project .\tests\MailboxTests.csproj --configuration Release
+dotnet run --project .\tests\ReliabilityTests.csproj --configuration Release
+pwsh -NoProfile -File .\tests\ScopedClientTests.ps1
+dotnet run --project .\tests\SyntaxTests.csproj --configuration Release -- src
+node --test tests/atlas.test.mjs tests/audit-atlas.test.mjs
 ```
 
-The mailbox/geometry suite targets .NET 10. It uses Newtonsoft.Json from your own game. Its recovery tests require Windows file-sharing semantics and PowerShell 7 (`pwsh` on PATH, or set `CIAB_TEST_PWSH` to its executable). They exercise real file locks and the client against isolated synthetic mailboxes, including STOP, simulation deadlines, timeout and no-replay behavior. Client and journal tests send no commands to your running game. verify-api.ps1 accepts GamePath and checks local assembly members.
+The mailbox/geometry and reliability suites target .NET 10. With no `GamePath`, they restore pinned Newtonsoft.Json 13.0.3 and require no game installation. Passing `-p:GamePath=...` to MailboxTests deliberately switches to the installation's Newtonsoft.Json assembly. Its recovery tests require Windows file-sharing semantics and PowerShell 7 (`pwsh` on PATH, or set `CIAB_TEST_PWSH` to its executable). They exercise real file locks and the client against isolated synthetic mailboxes, including STOP, simulation deadlines, timeout and no-replay behavior. Client and journal tests send no commands to your running game. verify-api.ps1 accepts GamePath and checks local assembly members.
+
+The fork's `Offline bridge checks` workflow runs these checks on Windows, including real file-sharing and isolated PowerShell clients. Its separate reliability suite exercises malformed/locked input fairness, blocked output delivery after request removal, replay tombstones, maintenance under transport faults, operation origin/history/outcomes, and simulation argument types. The scoped client suite covers lost start responses, rejected starts, incorrect poll IDs and cancellation of only the original interval. The test projects use separate intermediate/output directories.
+
+`SyntaxTests` parses all native source with C# 9 grammar using the installed SDK's Roslyn assemblies. This is only a syntax check: **it does not compile against game APIs, prove native type compatibility, or execute the game**. The public workflow does not install a mod or publish a release. Each run archives its exact tested public source; proprietary assemblies and private gameplay evidence remain excluded.
 
 The map-viewer browser test needs Node.js, the `playwright` package and its Chromium browser. Run `node tests/map-viewer.cjs` in an environment where Node can resolve Playwright. To use an existing Chromium browser instead, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable. The test uses synthetic data and writes its screenshot to the ignored `artifacts` directory.
 

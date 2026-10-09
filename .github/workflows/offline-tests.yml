@@ -1,0 +1,69 @@
+name: Offline bridge checks
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows helpers, real file locks and clients
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Record toolchain
+        run: |
+          dotnet --info
+          node --version
+          $PSVersionTable
+      - name: C# helpers and Windows recovery
+        if: ${{ !cancelled() }}
+        run: dotnet run --project tests/MailboxTests.csproj --configuration Release
+      - name: Audit reliability regressions
+        if: ${{ !cancelled() }}
+        run: dotnet run --project tests/ReliabilityTests.csproj --configuration Release
+      - name: PowerShell client guards
+        if: ${{ !cancelled() }}
+        run: ./tests/ClientTests.ps1
+      - name: Scoped simulation client regressions
+        if: ${{ !cancelled() }}
+        run: ./tests/ScopedClientTests.ps1
+      - name: Native C# syntax (not native assembly compilation)
+        if: ${{ !cancelled() }}
+        run: dotnet run --project tests/SyntaxTests.csproj --configuration Release -- src
+      - name: Journal regression tests
+        if: ${{ !cancelled() }}
+        run: ./tests/JournalTests.ps1
+      - name: Original and audit atlas regressions
+        if: ${{ !cancelled() }}
+        run: node --test tests/atlas.test.mjs tests/audit-atlas.test.mjs
+      - name: Archive the exact tested public source
+        if: always()
+        run: git archive --format=zip --output=source-checkpoint.zip HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: source-checkpoint-${{ github.run_id }}
+          path: source-checkpoint.zip
+          retention-days: 7
+      - name: Scope of evidence
+        run: |
+          'These are game-independent checks, not native mod compilation or live Cities II acceptance.' >> $env:GITHUB_STEP_SUMMARY
+          'No game assemblies, credentials or gameplay records are used.' >> $env:GITHUB_STEP_SUMMARY

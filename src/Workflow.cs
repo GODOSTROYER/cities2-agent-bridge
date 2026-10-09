@@ -22,7 +22,7 @@ namespace CitiesIIAgentBridge
         private string waitingOperation;
         private bool dispatchingBatch;
         private long batchStartMoney, batchReserve;
-        private DateTime batchDeadline;
+        private System.Diagnostics.Stopwatch batchClock;
         private static readonly string[] batchCommands = { "build_road", "build_network", "upgrade_network", "purchase_tiles", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "set_tax", "set_service_budget", "save_checkpoint", "set_simulation_speed" };
 
         private JObject SaveCheckpoint(JObject args)
@@ -38,6 +38,7 @@ namespace CitiesIIAgentBridge
                 savePreview = ScreenCaptureHelper.CreateRenderTarget("CitiesIIAgentBridge-save", 680, 383);
                 ScreenCaptureHelper.CaptureScreenshot(UnityEngine.Camera.main, savePreview, new MenuHelpers.SaveGamePreviewSettings());
                 var info = world.GetExistingSystemManaged<MenuUISystem>().GetSaveInfo(autoSave: false);
+                ConstructionAccess.Submitted(saveOperation);
                 saveTask = GameManager.instance.Save(name, info, AssetDatabase.user, savePreview);
                 ConstructionAccess.Results[saveOperation]["saveName"] = name;
                 return ConstructionAccess.Status(saveOperation);
@@ -56,8 +57,8 @@ namespace CitiesIIAgentBridge
             batchSteps = (JArray)steps.DeepClone(); batchIndex = 0; waitingOperation = null;
             batchStartMoney = (long)CityState()["money"]; batchReserve=(long?)args["reserve"]??0;
             if(batchReserve<0 || batchReserve>batchStartMoney) throw new ArgumentException("invalid_cash_reserve");
-            batchDeadline=DateTime.UtcNow.AddSeconds(600);
-            batch = new JObject { ["id"] = Guid.NewGuid().ToString("N"), ["citySession"] = citySession, ["status"] = "running", ["steps"] = steps.Count, ["completed"] = 0, ["results"] = new JArray() };
+            batchClock=System.Diagnostics.Stopwatch.StartNew();
+            batch = new JObject { ["id"] = Guid.NewGuid().ToString("N"), ["session"] = mailbox.Session, ["citySession"] = citySession, ["requestId"] = mailbox.CurrentRequestId, ["status"] = "running", ["steps"] = steps.Count, ["completed"] = 0, ["results"] = new JArray() };
             return (JObject)batch.DeepClone();
         }
         private JObject CancelBatch()
@@ -85,24 +86,37 @@ namespace CitiesIIAgentBridge
         private JObject BatchStatus(JObject args)
         {
             if (batch == null || (string)args["id"] != (string)batch["id"]) throw new ArgumentException("batch_not_found");
+            if ((string)batch["citySession"] != citySession || (string)batch["session"] != mailbox.Session)
+                throw new InvalidOperationException("stale_batch_session");
             return (JObject)batch.DeepClone();
         }
-        private void WorkflowTick()
+        private void WorkflowMaintenanceTick()
         {
             if (saveTask != null && saveTask.IsCompleted)
             {
                 bool success = saveTask.Status == TaskStatus.RanToCompletion && saveTask.Result;
+                if (success && ConstructionAccess.Active == saveOperation)
+                    ConstructionAccess.Verified(saveOperation, "native_save_task_success");
                 ConstructionAccess.Finish(saveOperation, success ? "complete" : "failed", success ? null : saveTask.Exception?.GetBaseException().Message ?? "save_failed");
                 saveTask = null; saveOperation = null;
                 if (savePreview != null) UnityEngine.Object.Destroy(savePreview); savePreview = null;
             }
-            TileTick();
+            TileTick(false);
+            AdvanceBatch(false);
+        }
+        private void WorkflowTick()
+        {
+            TileTick(true);
+            AdvanceBatch(true);
+        }
+        private void AdvanceBatch(bool allowDispatch)
+        {
             if (batch == null || (string)batch["status"] != "running") return;
             try
             {
                 RequireCity(); RequireControl();
                 if ((string)batch["citySession"] != citySession) throw new InvalidOperationException("city_changed");
-                if(DateTime.UtcNow>batchDeadline) throw new InvalidOperationException("batch_wall_deadline");
+                if(batchClock.Elapsed.TotalSeconds>600) throw new InvalidOperationException("batch_wall_deadline");
                 if (waitingOperation != null)
                 {
                     var operation = ConstructionAccess.Status(waitingOperation);
@@ -113,6 +127,7 @@ namespace CitiesIIAgentBridge
                     ++batchIndex; batch["completed"] = batchIndex;
                 }
                 if (batchIndex == batchSteps.Count) { batch["status"] = "complete"; batch["moneySpent"]=batchStartMoney-(long)CityState()["money"]; return; }
+                if (!allowDispatch) return;
                 var step = (JObject)batchSteps[batchIndex];
                 var stepArgs=(JObject)step["args"].DeepClone();
                 if(stepArgs["maxCost"]!=null)

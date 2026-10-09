@@ -13,12 +13,18 @@ internal static class MailboxClientTests
     {
         int passed = 0;
         void Check(bool ok, string label) { if (!ok) throw new Exception("FAIL: " + label); ++passed; Console.WriteLine("PASS: " + label); }
-        string client = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../bridge.ps1"));
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "bridge.ps1"))) directory = directory.Parent;
+        if (directory == null) throw new Exception("Could not locate repository bridge.ps1 from the test output directory");
+        string sourceClient = Path.Combine(directory.FullName, "bridge.ps1");
         foreach (bool permanent in new[] { false, true })
         {
             string root = Path.Combine(Path.GetTempPath(), "CitiesIIAgentBridge-client-lock-" + Guid.NewGuid().ToString("N"));
-            var box = new Mailbox(root, (c, a) => throw new Exception("Fake server must not dispatch to a game"), () => "city-test");
+            using var box = new Mailbox(root, (c, a) => throw new Exception("Fake server must not dispatch to a game"), () => "city-test");
             box.Publish(new JObject { ["status"] = "ready", ["controlEnabled"] = true });
+            // Keep synthetic checks independent of any active journal in a developer checkout.
+            string client = Path.Combine(root, "bridge.ps1");
+            File.Copy(sourceClient, client);
             var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("CIAB_TEST_PWSH") ?? "pwsh") {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
             };
