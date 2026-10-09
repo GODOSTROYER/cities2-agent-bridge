@@ -1,0 +1,47 @@
+name: Offline bridge checks
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows helpers, real file locks and clients
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Record toolchain
+        run: |
+          dotnet --info
+          node --version
+          $PSVersionTable
+      - name: C# helpers and Windows recovery
+        run: dotnet run --project tests/MailboxTests.csproj --configuration Release
+      - name: PowerShell client guards
+        run: ./tests/ClientTests.ps1
+      - name: Journal regression tests
+        run: ./tests/JournalTests.ps1
+      - name: Original and audit atlas regressions
+        run: node --test tests/atlas.test.mjs tests/audit-atlas.test.mjs
+      - name: Scope of evidence
+        run: |
+          'These are game-independent checks, not native mod compilation or live Cities II acceptance.' >> $env:GITHUB_STEP_SUMMARY
+          'No game assemblies, credentials or gameplay records are used.' >> $env:GITHUB_STEP_SUMMARY
