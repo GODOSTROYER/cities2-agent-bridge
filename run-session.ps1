@@ -8,10 +8,13 @@ param(
     [ValidateSet(1,2,4)][int]$Speed=4,
     [int]$CashFloor=0,
     [switch]$IgnoreNewShortage,
+    [ValidateRange(0,20)][int]$MaxShortageGrowth=3,
     [string]$LogPath=(Join-Path $PSScriptRoot 'journals\run-session.jsonl')
 )
 $ErrorActionPreference='Stop'
 $client=Join-Path $PSScriptRoot 'bridge.ps1'
+Import-Module (Join-Path $PSScriptRoot 'lib\BridgeClient.psm1') -Force
+$lastProblemCount=[int]::MaxValue; $shortageGrowth=0
 function Invoke-Bridge($command,$arguments,$timeout=5){
     $r=& $client $command -ArgsJson ($arguments|ConvertTo-Json -Compress -Depth 6) -TimeoutSeconds $timeout | ConvertFrom-Json
     if(!$r.ok){throw "$command failed: $($r.error)"}
@@ -43,6 +46,19 @@ while($used -lt $TotalSeconds -and ($TotalSeconds-$used) -ge 1){
     ($entry|ConvertTo-Json -Compress -Depth 5) | Add-Content -LiteralPath $LogPath
     "step {0}: {1} {2:N1}s (total {3:N0}/{4}s) pop={5} money={6:N0} dPop={7} dMoney={8:N0}" -f $step,$res.reason,$res.elapsedSeconds,$used,$TotalSeconds,$c.population,$c.money,$res.delta.population,$res.delta.money
     if(!$res.paused){ Write-Warning 'Pause not confirmed; stopping.'; exit 2 }
+    if($res.reason -eq 'new_utility_shortage'){
+        # New buildings often report a brief shortfall before supply catches up. Continue
+        # only while every problem is a supply shortfall and the count is not climbing.
+        $problems=@(Get-BridgePaged diagnose_connections @{limit=4096})
+        $issues=@($problems|ForEach-Object{$_.issues})|Group-Object|ForEach-Object{"$($_.Name)=$($_.Count)"}
+        $hard=@($problems|ForEach-Object{$_.issues}|Where-Object{$_ -notmatch '_shortfall$'})
+        $shortageGrowth = if($problems.Count -gt $lastProblemCount){$shortageGrowth+1}else{0}; $lastProblemCount=$problems.Count
+        ([ordered]@{step=$step;triage=$true;buildings=$problems.Count;issues=$issues;growthStreak=$shortageGrowth}|ConvertTo-Json -Compress) | Add-Content -LiteralPath $LogPath
+        "  triage: $($problems.Count) buildings [$($issues -join ', ')] growthStreak=$shortageGrowth"
+        if($hard){ "STOPPED for inspection: non-shortfall connection issues ($(($hard|Sort-Object -Unique) -join ', '))"; exit 3 }
+        if($shortageGrowth -ge $MaxShortageGrowth){ "STOPPED for inspection: shortfalls rising for $shortageGrowth steps; check capacity"; exit 3 }
+        continue
+    }
     if($res.reason -notin $normal){ "STOPPED for inspection: $($res.reason)"; exit 3 }
 }
 "DONE: simulated {0:N0}s in {1} steps; game paused." -f $used,$step
