@@ -11,10 +11,12 @@ function Get-Process { param($Name,$ErrorAction) return $null }
 if (Test-Path -LiteralPath $destination) { throw 'CheckOnly wrote destination' }
 & "$package/install.ps1" -GamePath $GamePath -Destination $destination -WhatIf
 if (Test-Path -LiteralPath $destination) { throw 'WhatIf wrote destination' }
-& "$package/install.ps1" -GamePath $GamePath -Destination $destination
+& "$package/install.ps1" -GamePath $GamePath -Destination $destination -BackupRoot "$testRoot/dll-backups"
 $hash = (Get-FileHash -LiteralPath "$destination/CitiesIIAgentBridge.dll").Hash
-& "$package/install.ps1" -GamePath $GamePath -Destination $destination
-$backups = @(Get-ChildItem -LiteralPath "$destination/backups" -Recurse -Filter '*.dll')
+& "$package/install.ps1" -GamePath $GamePath -Destination $destination -BackupRoot "$testRoot/dll-backups"
+$backups = @(Get-ChildItem -LiteralPath "$testRoot/dll-backups" -Recurse -Filter '*.dll')
+# Regression (FAILURES #26): no extra DLL may remain under the install (Mods) folder.
+if (@(Get-ChildItem -LiteralPath $destination -Recurse -Filter '*.dll').Count -ne 1) { throw 'Extra DLL left under the install folder' }
 if ($backups.Count -ne 1 -or (Get-FileHash -LiteralPath $backups[0].FullName).Hash -ne $hash) { throw 'Backup not preserved' }
 Write-Output 'PASS: CheckOnly/WhatIf are read-only; isolated install and backup match.'
 function Get-Process { param($Name,$ErrorAction) return [pscustomobject]@{Name='Cities2'} }

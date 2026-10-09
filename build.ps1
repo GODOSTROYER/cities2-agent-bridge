@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 # Compile against the game's own framework, matching the official template's net48 target.
 # Construction tools inherit the game's generated tool systems; no new components, SystemAPI, or Burst jobs.
 $references = @('mscorlib','System','System.Core','System.Runtime','netstandard','Game',
-    'Colossal.Core','Colossal.Collections','Colossal.Logging','Colossal.Localization','Colossal.IO','Colossal.IO.AssetDatabase',
+    'Colossal.Core','Colossal.Collections','Colossal.Logging','Colossal.Localization','Colossal.IO','Colossal.IO.AssetDatabase','Colossal.AssetPipeline',
     'Colossal.UI','Colossal.UI.Binding','Colossal.Mathematics','UnityEngine.CoreModule',
     'Unity.Entities','Unity.Collections','Unity.Mathematics','Unity.Burst','Unity.InputSystem','Newtonsoft.Json')
 $debugOption = if ($CommunityRelease) { '/debug-' } else { '/debug:portable' }

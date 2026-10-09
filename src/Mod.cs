@@ -149,7 +149,7 @@ namespace CitiesIIAgentBridge
         private JObject Dispatch(string command, JObject args)
         {
             // These status polls must not terminate an active bounded simulation step.
-            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state";
+            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state" || command == "load_save" || command == "quit_game";
             if(!statusOnly && command != "simulate_step" && command != "cancel_simulation_step" && command != "set_simulation_speed" && command != "set_camera")
             {
                 if(settings.AllowControl) PauseAnalysis();
@@ -182,7 +182,7 @@ namespace CitiesIIAgentBridge
                         .Where(a => new[] { "Traffic", "BuildingUse", "RoadBuilder", "FindIt", "PlopTheGrowables", "CityPlanningDraft", "CitiesIIAgentBridge" }.Contains(a.GetName().Name))
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
                     ["planning"] = new JArray("get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
-                    ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker","quit_game"),
+                    ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker","quit_game","load_save"),
                     ["analysisPausesGame"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
@@ -190,6 +190,7 @@ namespace CitiesIIAgentBridge
                 case "get_pause_state": return PauseState();
                 case "get_ui_state": return UiState(args);
                 case "quit_game": return QuitGameAfterSave(args);
+                case "load_save": return LoadSave(args);
                 case "resolve_pause_blocker": return ResolvePauseBlocker(args);
                 case "get_city_diagnostics": return Diagnostics(args);
                 case "get_city_map": return CityMap(args);

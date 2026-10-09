@@ -3,7 +3,9 @@
 param(
  [Parameter(Mandatory)][string]$GamePath,
  [string]$Destination=(Join-Path $env:USERPROFILE 'AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\CitiesIIAgentBridge'),
- [switch]$CheckOnly
+ [switch]$CheckOnly,
+ # Outside the Mods folder on purpose (see FAILURES.md #26).
+ [string]$BackupRoot=(Join-Path $env:LOCALAPPDATA 'CitiesIIAgentBridge\dll-backups')
 )
 $ErrorActionPreference='Stop'
 & (Join-Path $PSScriptRoot 'verify-package.ps1')
@@ -24,7 +26,7 @@ $previous=@('CitiesIIAgentBridge.dll','CitiesIIAgentBridge.pdb')|Where-Object {T
 if($previous){
  # Backups must live OUTSIDE the Mods folder: CS2 loads every DLL under Mods recursively,
  # so a backup there loads as a duplicate mod ("Mod failed to load", Continue disabled).
- $backup=Join-Path $env:LOCALAPPDATA ('CitiesIIAgentBridge\dll-backups\'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
+ $backup=Join-Path $BackupRoot ([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
  New-Item -ItemType Directory -Force -Path $backup|Out-Null
  foreach($name in $previous){Copy-Item -LiteralPath (Join-Path $resolvedDestination $name) -Destination $backup}
  Write-Output "Previous files backed up: $backup"

@@ -33,5 +33,25 @@ namespace CitiesIIAgentBridge
             GameManager.QuitGame();
             return new JObject { ["quitting"] = true, ["afterSave"] = saveName, ["saveAgeSeconds"] = Math.Round(age.TotalSeconds) };
         }
+
+        // Loads a save by exact name, or the newest save whose name starts with a prefix
+        // (default: the bridge's rolling autosave). Main menu only, so a loaded city can
+        // never be discarded. Used by upgrade.ps1 after a restart (CS2's Continue button
+        // and -continuelastsave do not pick up bridge-made saves).
+        private JObject LoadSave(JObject args)
+        {
+            RequireControl();
+            if (GameManager.instance.gameMode == Game.GameMode.Game) throw new InvalidOperationException("load_save_only_from_main_menu");
+            string exact = (string)args["name"];
+            string prefix = (string)args["prefix"] ?? "CitiesIIAgentBridge-autosave-";
+            var saves = Colossal.IO.AssetDatabase.AssetDatabase.global.GetAssets(default(Colossal.IO.AssetDatabase.SearchFilter<Game.Assets.SaveGameMetadata>)).ToList();
+            var pick = exact != null
+                ? saves.FirstOrDefault(s => s.name == exact)
+                : saves.Where(s => s.name != null && s.name.StartsWith(prefix, StringComparison.Ordinal)).OrderByDescending(s => s.name, StringComparer.Ordinal).FirstOrDefault();
+            if (pick == null) throw new InvalidOperationException("save_not_found: " + (exact ?? prefix + "*") + " (" + saves.Count + " saves known)");
+            log.Info("Bridge loading save " + pick.name);
+            _ = GameManager.instance.Load(Game.GameMode.Game, Colossal.Serialization.Entities.Purpose.LoadGame, pick);
+            return new JObject { ["loading"] = pick.name };
+        }
     }
 }

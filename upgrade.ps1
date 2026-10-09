@@ -68,12 +68,19 @@ $launchedUtc = [DateTime]::UtcNow
 Start-Process -FilePath (Join-Path $GamePath 'Cities2.exe') -ArgumentList '-continuelastsave' -WorkingDirectory $GamePath | Out-Null
 Step 'launched Cities2.exe -continuelastsave'
 
-$clock = [Diagnostics.Stopwatch]::StartNew()
+$clock = [Diagnostics.Stopwatch]::StartNew(); $loadRequested = $false
 while ($clock.Elapsed.TotalSeconds -lt $LoadTimeoutSeconds) {
     Start-Sleep -Seconds 5
     try { $s = Get-Content $sessionFile -Raw | ConvertFrom-Json } catch { continue }
     $beat = if ($s.heartbeatUtc -is [datetime]) { $s.heartbeatUtc.ToUniversalTime() } else { [DateTime]::Parse([string]$s.heartbeatUtc, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime() }
     if ($beat -lt $launchedUtc) { continue }   # still the previous run's heartbeat
+    # CS2's Continue / -continuelastsave ignore bridge-made saves: load the newest
+    # rolling autosave through the bridge as soon as the main menu is up.
+    if ($s.status -eq 'ready' -and $s.gameMode -eq 'MainMenu' -and !$s.loading -and !$loadRequested) {
+        $l = Invoke-Bridge load_save @{ } -AllowError
+        if ($l.ok) { Step "loading $($l.result.loading)"; $loadRequested = $true } else { Step "load_save not available yet: $($l.error)" }
+        continue
+    }
     if ($s.status -eq 'ready' -and $s.gameMode -eq 'Game' -and !$s.loading) {
         if (!$s.controlEnabled) { Step 'city loaded, but bridge controls are OFF (enable "Keep bridge controls enabled across city loads")'; return }
         $v = (Invoke-Bridge ping).modVersion
