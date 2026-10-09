@@ -1,0 +1,11 @@
+Community preview 0.5.0 — validation scope, 2026-09-26
+
+Compiled neutral community DLL against Windows Steam Cities: Skylines II 1.6.2f1 assemblies, without debug symbols. Two existing obsolete-updater warnings remain.
+184 core checks passed: mailbox11, simulation/geometry22, pagination12, district census/assignment21, district drawing36, terrain25, object placement24, recovery23, real PowerShell client10.
+15 atlas/export tests passed, including complete pagination, stale/mixed snapshot rejection, missing-data detection, shared-capacity accounting, escaping and real PowerShell fake-mailbox export.
+Client timeout/error and map export tests, journal tests, 52-command catalog/dispatcher checks, and native district/terrain API/compiled-call checks passed.
+Map-viewer code is unchanged; its browser tests were not rerun.
+
+Shared development-runtime district creation, boundary-only editing, assignments and save/reload persistence were observed. Named district operations can report failure after applying: see RELEASE-NOTES.md. No new live game test was performed for this release. The neutral community DLL has not been loaded in-game or installed on another PC. Terrain/resource overlay comparison, every census edge case and effective service reach remain unverified.
+
+Package uses an explicit source/doc/test allowlist, a neutral bridge DLL and hashes. Game assemblies, developer symbols, local exports, city saves, screenshots, handoffs, journals and credentials are excluded. Installer tests use isolated temporary directories and do not modify the installed game.

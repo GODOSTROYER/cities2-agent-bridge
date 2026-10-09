@@ -1,0 +1,7 @@
+{
+  "modVersion": "0.5.0",
+  "builtUtc": "2026-09-27T01:49:29.1315810Z",
+  "gameAssemblySha256": "AAEE15C4FA41C130ABAA1183840667E4FAAE531D67E8A9FA7536618EFFA2F86A",
+  "dllSha256": "E0B47A6EBB3845E7A89C7685AC78469A13D488FD2DA4C8B791A8B583A2591E02",
+  "compilation": "Managed IMod with derived native tools; no new components, SystemAPI, or Burst jobs"
+}
