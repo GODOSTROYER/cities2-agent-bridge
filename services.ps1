@@ -34,6 +34,10 @@ $skip = 'Ruins|Upgrade|Extension|Wing|Sub0'
 $m = Invoke-Bridge get_city_management
 $pop = [int]$m.city.population; $money = [double]$m.city.money
 if ($money -lt $MinCash -and !$Plan) { "services: skipped (cash $([int]$money) below $MinCash)"; return }
+# Upkeep discipline: every building adds permanent upkeep. While the city loses money,
+# only services citizens are actively complaining about may be added (and power/water).
+$net = [double]$m.budget.balanceRaw
+$affordable = $net -ge 0
 $all = @(Get-BridgePaged get_buildings @{ limit = 4096 } | Where-Object { "$($_.prefab)" -notmatch $skip } |
     ForEach-Object { [pscustomobject]@{ p = "$($_.prefab)"; x = $_.position.x; z = $_.position.z } })
 $homes = @($all | Where-Object { $_.p -match 'Residential' })
@@ -49,6 +53,7 @@ $needs = foreach ($rule in $rules) {
     $missing = !$have.Count -or ($rule.r -lt 99999 -and $share -gt $UncoveredShare)
     if (!$missing) { continue }
     $complained = $complaints -match $rule.chirp
+    if (!$affordable -and !$complained) { continue }   # cannot afford new upkeep yet
     $target = if ($rule.t -eq 'garbage' -and $industry) { $industry } elseif ($uncovered) { $uncovered } else { $homes }
     $cx = ($target.x | Measure-Object -Average).Average; $cz = ($target.z | Measure-Object -Average).Average
     [pscustomobject]@{ t = $rule.t; prefab = $rule.prefab; x = [Math]::Round($cx); z = [Math]::Round($cz); have = $have.Count; uncovered = [Math]::Round($share * 100); complained = [bool]$complained }

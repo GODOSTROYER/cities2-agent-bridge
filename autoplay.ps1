@@ -53,6 +53,23 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
         $mm = Invoke-Bridge get_city_management
         $net = [double]$mm.budget.balanceRaw
         $negStreak = if ($net -lt 0) { $negStreak + 1 } else { 0 }
+        # Deep deficit: act this cycle, not after two. Taxes first (R/I up to MaxTax; C only
+        # while commercial demand holds), then trim service budgets toward 70%.
+        if ($net -lt -20000) {
+            foreach ($area in 'Residential', 'Industrial', 'Commercial') {
+                $rate = [int]$mm.taxes.$area
+                if ($area -eq 'Commercial' -and [double]$mm.demand.commercial -lt 30) { continue }
+                if ($rate -lt $MaxTax) { $null = Invoke-Bridge set_tax @{ area = $area; rate = [Math]::Min($MaxTax, $rate + 2) }; "  budget: $area tax $rate -> $([Math]::Min($MaxTax, $rate + 2)) (net $([int]$net))" }
+            }
+            if ([int]$mm.taxes.Residential -ge $MaxTax) {
+                foreach ($sv in @((Invoke-Bridge get_services).services)) {
+                    $bud = [int]$sv.budget; if ($bud -le 70) { continue }
+                    $res = Invoke-Bridge set_service_budget @{ prefabIndex = [int]$sv.index; prefabVersion = [int]$sv.version; budget = $bud - 10 } -AllowError
+                    if ($res.ok) { "  budget: $($sv.name) $bud% -> $($bud - 10)%" }
+                }
+            }
+            $negStreak = 0
+        }
         if ($negStreak -ge 2) {
             foreach ($area in 'Residential', 'Commercial') { $rate = [int]$mm.taxes.$area; if ($rate -lt $MaxTax) { $null = Invoke-Bridge set_tax @{ area = $area; rate = $rate + 1 }; "  budget: $area tax $rate -> $($rate + 1) (net $([int]$net))" } }
             $negStreak = 0
