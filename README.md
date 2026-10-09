@@ -1,5 +1,17 @@
 # Cities II Agent Bridge 0.5.0 - community preview
 
+## About this fork
+
+This repository is based on [FTPAiYT/cities2-agent-bridge-ndc](https://github.com/FTPAiYT/cities2-agent-bridge-ndc). Credit for the original bridge goes to its authors.
+
+This fork adds an agent harness and mod extensions:
+
+- **Harness:** `play.ps1`, `autoplay.ps1`, `grid.ps1`, `zone-fill.ps1`, `upgrade.ps1`, `services.ps1`, and `lib/BridgeClient.psm1`.
+- **Mod extensions:** `get_ui_state` reports popups, tutorials, milestones and signature buildings; `resolve_pause_blocker`; road previews with rejection reasons; `quit_game` and `load_save` for unattended upgrades; and a persistent keep-controls setting.
+- **Docs:** [PLAY.md](PLAY.md) (agent quickstart), [LEARNINGS.md](LEARNINGS.md), [FAILURES.md](FAILURES.md), and [CITYPLAN.md](CITYPLAN.md).
+
+You need your own copy of Cities: Skylines II. This repository includes no game files. Locally built packages are not the upstream community release.
+
 **You must purchase and install Cities: Skylines II for this to work.** This download does not include the game, make it free, or work with the original Cities: Skylines. You supply the game; the bridge lets your agent interact with it.
 
 ## Give this URL to your agent
