@@ -30,6 +30,7 @@ namespace CitiesIIAgentBridge
         private readonly Dictionary<string, JObject> pendingResponses = new Dictionary<string, JObject>();
         private readonly Dictionary<string, double> recent = new Dictionary<string, double>();
         private IEnumerator<string> scan;
+        private string pendingCursor;
         private bool disposed;
 
         public Mailbox(string root, Func<string, JObject, JObject> dispatch, Func<string> citySession)
@@ -66,8 +67,15 @@ namespace CitiesIIAgentBridge
             foreach (var id in recent.Where(p => p.Value <= now).Select(p => p.Key).ToArray()) recent.Remove(id);
             // Results survive even if a client removes its request before delivery.
             // Bound both memory and work; never evict an undelivered mutation result.
-            foreach (var pair in pendingResponses.Take(DispatchLimit).ToArray())
+            var waiting = pendingResponses.OrderBy(p => p.Key, StringComparer.Ordinal).ToArray();
+            int start = Array.FindIndex(waiting, p => pendingCursor == null || StringComparer.Ordinal.Compare(p.Key, pendingCursor) > 0);
+            if (start < 0) start = 0;
+            for (int i = 0; i < Math.Min(DispatchLimit, waiting.Length); ++i)
+            {
+                var pair = waiting[(start + i) % waiting.Length];
+                pendingCursor = pair.Key;
                 TryDeliver(pair.Key, pair.Value, ref contention);
+            }
             try
             {
                 if (scan == null) scan = Directory.EnumerateFiles(Requests, "*.json").GetEnumerator();

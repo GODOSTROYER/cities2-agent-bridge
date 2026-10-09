@@ -70,6 +70,33 @@ internal static class MailboxFairnessTests
                 }
             }
             else Console.WriteLine("SKIP: Windows-exclusive file sharing");
+            if (OperatingSystem.IsWindows())
+            {
+                // More blocked output files than the per-tick retry allowance must not
+                // permanently hide a later deliverable result after inputs disappear.
+                Mailbox delayed = null;
+                var locks = new System.Collections.Generic.Dictionary<string,FileStream>();
+                using (delayed = new Mailbox(Path.Combine(root,"outputs"),(c,a)=>{
+                    string id=delayed.CurrentRequestId;
+                    locks[id]=new FileStream(Path.Combine(delayed.Responses,id+".json"),FileMode.CreateNew,FileAccess.ReadWrite,FileShare.None);
+                    return new JObject { ["proof"]=id };
+                },()=>"city"))
+                {
+                    try
+                    {
+                        for(int i=0;i<6;i++)Put(delayed,Request(delayed));
+                        for(int i=0;i<6;i++)Pump(delayed);
+                        Check(locks.Count==6,"all six mutation results are retained behind output locks");
+                        foreach(string requestPath in Directory.GetFiles(delayed.Requests,"*.json"))File.Delete(requestPath);
+                        string last=locks.Keys.OrderBy(k=>k,StringComparer.Ordinal).Last();
+                        locks[last].Dispose();locks.Remove(last);
+                        for(int i=0;i<4;i++)Pump(delayed);
+                        var response=JObject.Parse(File.ReadAllText(Path.Combine(delayed.Responses,last+".json")));
+                        Check((string)response["result"]["proof"]==last,"round-robin output retries bypass persistently locked earlier results");
+                    }
+                    finally { foreach(var handle in locks.Values)handle.Dispose(); }
+                }
+            }
             Mailbox context=null; string seen=null;
             using(context=new Mailbox(Path.Combine(root,"context"),(c,a)=>{seen=context.CurrentRequestId;throw new Exception("injected");},()=>"city"))
             { var r=Request(context); Put(context,r);context.Pump();Check(seen==(string)r["id"] && context.CurrentRequestId==null,"request context is visible only during dispatch and clears on failure"); }

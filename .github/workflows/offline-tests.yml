@@ -34,18 +34,25 @@ jobs:
           node --version
           $PSVersionTable
       - name: C# helpers and Windows recovery
+        if: ${{ !cancelled() }}
         run: dotnet run --project tests/MailboxTests.csproj --configuration Release
       - name: Audit reliability regressions
+        if: ${{ !cancelled() }}
         run: dotnet run --project tests/ReliabilityTests.csproj --configuration Release
       - name: PowerShell client guards
+        if: ${{ !cancelled() }}
         run: ./tests/ClientTests.ps1
       - name: Scoped simulation client regressions
+        if: ${{ !cancelled() }}
         run: ./tests/ScopedClientTests.ps1
       - name: Native C# syntax (not native assembly compilation)
+        if: ${{ !cancelled() }}
         run: dotnet run --project tests/SyntaxTests.csproj --configuration Release -- src
       - name: Journal regression tests
+        if: ${{ !cancelled() }}
         run: ./tests/JournalTests.ps1
       - name: Original and audit atlas regressions
+        if: ${{ !cancelled() }}
         run: node --test tests/atlas.test.mjs tests/audit-atlas.test.mjs
       - name: Archive the exact tested public source
         if: always()
