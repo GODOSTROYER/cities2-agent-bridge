@@ -40,6 +40,8 @@ namespace CitiesIIAgentBridge
             citySession = Guid.NewGuid().ToString("N");
             settings = new BridgeSettings(this);
             settings.RegisterInOptionsUI();
+            Colossal.IO.AssetDatabase.AssetDatabase.global.LoadSettings("CitiesIIAgentBridge", settings, new BridgeSettings(this));
+            if (!settings.KeepControlsAcrossLoads) settings.AllowControl = false;
             GameManager.instance.localizationManager.AddSource("en-US", new LocaleEN(settings));
             string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CitiesIIAgentBridge");
             mailbox = new Mailbox(root, Dispatch, () => citySession);
@@ -65,8 +67,9 @@ namespace CitiesIIAgentBridge
             tileOperation = null; pendingTiles = null;
             if (batch != null && (string)batch["status"] == "running") { batch["status"] = "interrupted"; batch["error"] = "city_changed"; }
             citySession = Guid.NewGuid().ToString("N");
-            // Changing saves invalidates pending control permission as well as entity IDs.
-            settings.AllowControl = false;
+            // Changing saves invalidates pending control permission as well as entity IDs,
+            // unless the owner explicitly opted to keep controls on across loads.
+            if (!settings.KeepControlsAcrossLoads) settings.AllowControl = false;
         }
 
         public void OnDispose()
