@@ -29,7 +29,9 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
     for ($w = 0; $w -lt 15; $w++) { $tool = (Invoke-Bridge get_ui_state @{ chirps = 0 }).activeTool; if (!$tool -or $tool -eq 'DefaultToolSystem') { break }; Start-Sleep 1 }
     if ($tool -and $tool -ne 'DefaultToolSystem') { "autoplay stopped: tool $tool still active after 15 s (an interrupted command); run play.ps1 ui, then retry"; break }
     if ($resDemand -ge $GrowDemand -and $m.city.money -gt $CashFloor + 150000) {
-        $args2 = @('grow', '-Cols', '3', '-Rows', '2')
+        # -Demolish: when every free site is walled off by lots, clear at most one ordinary
+        # home for the link (grow tries clean sites first). Saves a wasted 4-minute search.
+        $args2 = @('grow', '-Cols', '3', '-Rows', '2', '-Demolish')
         if (!$NoBuyTiles) { $args2 += '-BuyTiles' }
         $g = @(& $play @args2 2>&1 | ForEach-Object { "$_" })
         $built = if ($g -match 'status=complete|Grid streets built') { 'grid built' } elseif ($g -match 'buy: complete') { 'tile bought' } else { 'no build (' + (($g | Select-Object -Last 1) -replace '^grow: ', '') + ')' }
