@@ -80,7 +80,8 @@ namespace CitiesIIAgentBridge
             RequireControl();
             var world = RequireCity();
             string action = (string)args["action"];
-            if (action != "complete_tutorial_phase") throw new ArgumentException("unsupported_action: only complete_tutorial_phase");
+            if (action == "dismiss_milestone") return DismissMilestone(world, args);
+            if (action != "complete_tutorial_phase") throw new ArgumentException("unsupported_action: complete_tutorial_phase or dismiss_milestone");
             var before = PauseState();
             var phase = before["tutorial"]?["activeTutorialPhase"];
             if (phase == null || phase.Type == JTokenType.Null) throw new InvalidOperationException("no_active_tutorial_phase");

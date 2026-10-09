@@ -144,4 +144,49 @@ function Test-BridgeNodesConnected {
     [bool]$seen[$To]
 }
 
-Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected
+# Keys that dominate response size but rarely matter for decisions. Lean output drops them.
+$script:NoisyKeys = @('components','rotationQuaternion','serviceDataRaw','serviceCoverageNative','trafficDistanceRaw',
+    'trafficDurationRaw','normal','polygon','curve','citySession','session','dateMeaning','protocol')
+function ConvertTo-BridgeLean {
+    param([Parameter(ValueFromPipeline)]$InputObject, [string[]]$Keep = @())
+    process {
+        $v = $InputObject
+        if ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) {
+            if ($v -is [double] -or $v -is [single]) { return [Math]::Round($v, 1) }   # metres/ratios: 0.1 is plenty
+            return $v
+        }
+        if ($v -is [Collections.IEnumerable] -and $v -isnot [Collections.IDictionary]) { return , @($v | ForEach-Object { ConvertTo-BridgeLean $_ -Keep $Keep }) }
+        $o = [ordered]@{}
+        foreach ($p in $v.PSObject.Properties) {
+            if ($p.Name -in $script:NoisyKeys -and $p.Name -notin $Keep) { continue }
+            $o[$p.Name] = ConvertTo-BridgeLean $p.Value -Keep $Keep
+        }
+        [pscustomobject]$o
+    }
+}
+
+# Prefab name -> {index,version}, cached per city session (prefab indexes are only
+# stable within a session). Avoids re-paging thousands of prefabs on every build.
+$script:CachePath = Join-Path (Split-Path $PSScriptRoot) 'journals\prefab-cache.json'
+function Resolve-BridgePrefab {
+    param([Parameter(Mandatory)][string]$Name, [string]$Kind = 'all')
+    $session = (& $script:Client ping | ConvertFrom-Json).citySession
+    $cache = @{}
+    if (Test-Path $script:CachePath) {
+        try { $raw = Get-Content $script:CachePath -Raw | ConvertFrom-Json -AsHashtable; if ($raw.session -eq $session) { $cache = $raw.prefabs } } catch {}
+    }
+    if (!$cache.ContainsKey($Name)) {
+        $hit = @(Get-BridgePaged get_build_prefabs @{ kind = $Kind; filter = $Name; limit = 20000 }) |
+            Where-Object { $_.name -eq $Name } | Select-Object -First 1
+        if (!$hit) { throw "Prefab '$Name' not found (kind=$Kind)." }
+        $cache[$Name] = @{ index = $hit.index; version = $hit.version; locked = $hit.locked; placeable = $hit.bridgePlacementSupported }
+        New-Item -ItemType Directory -Force -Path (Split-Path $script:CachePath) | Out-Null
+        @{ session = $session; prefabs = $cache } | ConvertTo-Json -Depth 4 -Compress | Set-Content $script:CachePath
+    }
+    $p = $cache[$Name]
+    if ($p.locked) { throw "Prefab '$Name' is locked (needs a milestone)." }
+    if (!$p.placeable) { throw "Prefab '$Name' is not placeable through the bridge." }
+    [pscustomobject]$p
+}
+
+Export-ModuleMember -Function Invoke-Bridge, Get-BridgePaged, Get-ResultArrayName, Wait-BridgeOperation, Wait-BridgeBatch, Invoke-BridgeSteps, Invoke-BridgeRoad, Get-BridgeRoadGraph, Find-BridgeNearestNode, Test-BridgeNodesConnected, ConvertTo-BridgeLean, Resolve-BridgePrefab

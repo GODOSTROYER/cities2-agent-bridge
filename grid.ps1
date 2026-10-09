@@ -22,10 +22,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'lib\BridgeClient.psm1') -Force
 function Resolve-Prefab($index, $name, $kind) {
     if ($index -ge 0) { return $index }
-    $hit = (Get-BridgePaged get_build_prefabs @{ kind = $kind; filter = $name; limit = 20000 }) |
-        Where-Object { $_.name -eq $name -and !$_.locked -and $_.bridgePlacementSupported } | Select-Object -First 1
-    if (!$hit) { throw "Unlocked prefab '$name' not found; pass -$($kind)PrefabIndex." }
-    $hit.index
+    (Resolve-BridgePrefab -Name $name -Kind $kind).index
 }
 $road = Resolve-Prefab $RoadPrefabIndex 'Small Road' 'network'
 $zone = if ($NoZoning) { $null } else { Resolve-Prefab $ZonePrefabIndex 'NA Residential Low' 'zone' }

@@ -41,5 +41,4 @@ $after = @(Get-Cells)
 $zoned = @($after | Where-Object { $_.zone -eq $ZonePrefabIndex -or ($_.zone -ne 0 -and $_.zone -ne $null) }).Count
 $left = @($after | Where-Object { Test-Zonable $_ }).Count
 $noop = @($run.results | Where-Object { $_.result.error -eq 'no_zone_cells_in_rectangle' }).Count
-[pscustomobject]@{ status = $run.status; steps = $steps.Count; noOpSteps = $noop; zonableBefore = $before; zonableAfter = $left
-    newlyZoned = $before - $left; failedStep = $run.failedStep; stepError = $run.stepError } | Format-List
+"zone: $($run.status) blocks=$($steps.Count) noop=$noop zoned=$($before - $left) leftZonable=$left" + $(if ($run.status -ne 'complete') { " failedStep=$($run.failedStep) error=$($run.stepError)" } else { '' })
