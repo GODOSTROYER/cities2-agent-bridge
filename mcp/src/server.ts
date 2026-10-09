@@ -389,6 +389,102 @@ server.registerTool('query', {
   } catch (e) { return fail(e); }
 });
 
+// Drops undefined optional args so the mod only sees keys the caller actually set.
+function pick(o: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+}
+
+server.registerTool('free_lots', {
+  description: 'Free, owned, dry, flat land for a width x depth rectangle (metres; x,z = min corner), ranked by link length and land use, with a lot-free connector from the nearest road. Computed in the mod in milliseconds. Pauses the game.',
+  inputSchema: {
+    width: z.number().min(16).max(1500),
+    depth: z.number().min(16).max(1500),
+    count: z.number().int().min(1).max(20).optional(),
+    zone: zoneEnum.optional(),
+    x: z.number().optional(),
+    z: z.number().optional(),
+    radius: z.number().optional(),
+    step: z.number().optional(),
+    margin: z.number().optional(),
+    maxLink: z.number().optional(),
+  },
+}, async (a) => {
+  try {
+    assertIdle();
+    return ok(await callOk('find_free_lots', pick({
+      width: a.width, depth: a.depth, count: a.count, zone: a.zone, x: a.x, z: a.z,
+      radius: a.radius, step: a.step, margin: a.margin, maxLink: a.maxLink,
+    }), 60));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('corridor', {
+  description: 'Lot-free road route on owned land (straight if possible, else A* waypoints); build each segment with link/build tools after a preview. Pauses the game.',
+  inputSchema: {
+    fromX: z.number(),
+    fromZ: z.number(),
+    toX: z.number(),
+    toZ: z.number(),
+    halfWidth: z.number().optional(),
+  },
+}, async (a) => {
+  try {
+    assertIdle();
+    return ok(await callOk('corridor', pick({
+      from: { x: a.fromX, z: a.fromZ },
+      to: { x: a.toX, z: a.toZ },
+      halfWidth: a.halfWidth,
+    }), 60));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('coverage_gaps', {
+  description: 'Homes whose road has low native service coverage, clustered; place the new facility at the densest cluster. Pauses the game.',
+  inputSchema: {
+    service: z.enum(['Healthcare', 'FireRescue', 'Police', 'Park', 'PostService', 'Education', 'EmergencyShelter', 'Welfare']),
+    threshold: z.number().optional(),
+    cell: z.number().optional(),
+    top: z.number().int().min(1).max(10).optional(),
+  },
+}, async (a) => {
+  try {
+    assertIdle();
+    return ok(await callOk('coverage_gaps', pick({
+      service: a.service, threshold: a.threshold, cell: a.cell, top: a.top,
+    }), 60));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('traffic_hotspots', {
+  description: 'Road edges with the lowest native traffic flow (flowPct 100 = free flow). Pauses the game.',
+  inputSchema: {
+    top: z.number().int().min(1).max(30).optional(),
+    minLength: z.number().optional(),
+  },
+}, async (a) => {
+  try {
+    assertIdle();
+    return ok(await callOk('traffic_hotspots', pick({ top: a.top, minLength: a.minLength }), 60));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('project', {
+  description: 'Projected construction cost, monthly upkeep, zone income and net per period for a list of proposed actions, from live city data. Call before building. Pauses the game.',
+  inputSchema: {
+    actions: z.array(z.object({
+      prefab: z.string().optional(),
+      count: z.number().int().min(1).optional(),
+      zone: zoneEnum.optional(),
+      cells: z.number().int().min(0).optional(),
+    })).max(20),
+  },
+}, async (a) => {
+  try {
+    assertIdle();
+    return ok(await callOk('project', { actions: a.actions }, 60));
+  } catch (e) { return fail(e); }
+});
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error('cs2 MCP server ready on stdio');

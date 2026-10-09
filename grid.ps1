@@ -86,18 +86,27 @@ else {
     $targets = [Collections.Generic.List[object]]::new()
     for ($gx = $X; $gx -le $x1 + 0.1; $gx += $BlockWidth / 2) { $targets.Add(@($gx, $Z)); $targets.Add(@($gx, $z1)) }
     for ($gz = $Z + $BlockDepth / 2; $gz -lt $z1 - 0.1; $gz += $BlockDepth / 2) { $targets.Add(@($X, $gz)); $targets.Add(@($x1, $gz)) }
-    # Real lot rectangles from get_city_map, rasterised (lib Get-BridgeOccupancy).
-    $occ = Get-BridgeOccupancy -MinX ($X - $MaxConnectorLength) -MinZ ($Z - $MaxConnectorLength) -MaxX ($x1 + $MaxConnectorLength) -MaxZ ($z1 + $MaxConnectorLength)
-    $candidates = foreach ($st in $starts) { foreach ($tg in $targets) {
-        $d = [Math]::Sqrt([Math]::Pow($st.p.x - $tg[0], 2) + [Math]::Pow($st.p.z - $tg[1], 2))
-        if ($d -lt 8 -or $d -gt $MaxConnectorLength) { continue }
-        [pscustomobject]@{ node = $st.node; p = $st.p; c = $tg; d = $d; edge = $st.edge; t = $st.t; clear = (Test-OccupancySegmentFree $occ $st.p ([pscustomobject]@{ x = $tg[0]; z = $tg[1] }) 6) } } }
-    $all = @($candidates)
-    $candidates = @($all | Where-Object clear)
-    # With -AllowDemolition and no clear link, validate the shortest blocked links so the
-    # single-house demolition path below has something to work with.
-    if (!$candidates -and $AllowDemolition) { $candidates = @($all | Sort-Object d | Select-Object -First 12) }    $candidates = @($candidates | Sort-Object d | Select-Object -First 12)
-    "Connector search: $($starts.Count) starts x $($targets.Count) targets, $($occ.Buildings) lots rasterised; $($candidates.Count) clear links to validate"
+    # Phase 2: the mod rasterises lots and tests every road-point x perimeter link in ms.
+    $gc = if ($AllowDemolition) { $null } else { Invoke-Bridge grid_connectors @{ x0 = $X; z0 = $Z; x1 = $x1; z1 = $z1; maxLength = $MaxConnectorLength; top = 12 } -AllowError }
+    if ($gc.ok -and @($gc.result.links).Count) {
+        $candidates = @($gc.result.links | ForEach-Object {
+            $edgeRef = if ($_.from.endpoint) { $null } else { [pscustomobject]@{ index = [int]$_.from.index; version = [int]$_.from.version } }
+            [pscustomobject]@{ node = "edge $($_.from.index)@$($_.from.t)"; p = [pscustomobject]@{ x = [double]$_.from.x; z = [double]$_.from.z }; c = @([double]$_.to.x, [double]$_.to.z); d = [double]$_.d; edge = $edgeRef; t = [double]$_.from.t; clear = $true } })
+        "Connector search (mod): $($gc.result.tested) links tested, $($gc.result.lots) lots, $($gc.result.ms) ms; $($candidates.Count) clear links to validate"
+    } else {
+        # Real lot rectangles from get_city_map, rasterised (lib Get-BridgeOccupancy).
+        $occ = Get-BridgeOccupancy -MinX ($X - $MaxConnectorLength) -MinZ ($Z - $MaxConnectorLength) -MaxX ($x1 + $MaxConnectorLength) -MaxZ ($z1 + $MaxConnectorLength)
+        $candidates = foreach ($st in $starts) { foreach ($tg in $targets) {
+            $d = [Math]::Sqrt([Math]::Pow($st.p.x - $tg[0], 2) + [Math]::Pow($st.p.z - $tg[1], 2))
+            if ($d -lt 8 -or $d -gt $MaxConnectorLength) { continue }
+            [pscustomobject]@{ node = $st.node; p = $st.p; c = $tg; d = $d; edge = $st.edge; t = $st.t; clear = (Test-OccupancySegmentFree $occ $st.p ([pscustomobject]@{ x = $tg[0]; z = $tg[1] }) 6) } } }
+        $all = @($candidates)
+        $candidates = @($all | Where-Object clear)
+        # With -AllowDemolition and no clear link, validate the shortest blocked links so the
+        # single-house demolition path below has something to work with.
+        if (!$candidates -and $AllowDemolition) { $candidates = @($all | Sort-Object d | Select-Object -First 12) }    $candidates = @($candidates | Sort-Object d | Select-Object -First 12)
+        "Connector search: $($starts.Count) starts x $($targets.Count) targets, $($occ.Buildings) lots rasterised; $($candidates.Count) clear links to validate"
+    }
     if (!$candidates) { "Failed: no clear link from existing roads within $MaxConnectorLength m (lots block every route). Nothing was changed." + $(if (!$AllowDemolition) { ' (-AllowDemolition can open a street through one house)' } else { '' }); return }
     $coreCount = $roads.Count   # grid streets; stubs and the connector are appended after these
     $gridPlan = if ($stubRoads) { New-Plan ($roads + $stubRoads) }

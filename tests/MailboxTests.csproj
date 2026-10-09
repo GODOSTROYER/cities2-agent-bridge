@@ -10,6 +10,7 @@
     <Compile Include="../src/BridgeTick.cs" /><Compile Include="RecoveryTests.cs" />
     <Compile Include="MailboxClientTests.cs" />
     <Compile Include="../src/SimulationWindow.cs" /><Compile Include="../src/PlanGeometry.cs" /><Compile Include="PolicyTests.cs" />
+    <Compile Include="../src/PlanningCore.cs" /><Compile Include="PlanningTests.cs" />
     <Reference Include="Newtonsoft.Json"><HintPath>$(GamePath)\Cities2_Data\Managed\Newtonsoft.Json.dll</HintPath></Reference>
   </ItemGroup>
 </Project>

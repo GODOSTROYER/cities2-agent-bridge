@@ -19,13 +19,13 @@ $play = Join-Path $PSScriptRoot 'play.ps1'
 # type: existing-building regex, prefab to place, coverage radius (m), min population
 # for the first one, chirp keywords that signal a shortage.
 $rules = @(
-    @{ t = 'health';    rx = '^(MedicalClinic|Hospital)';                 prefab = 'MedicalClinic01,MedicalClinic02';    r = 1100;  minPop = 300;  chirp = 'health|sick|doctor|clinic|hospital|medical' }
+    @{ t = 'health';    rx = '^(MedicalClinic|Hospital)';                 prefab = 'MedicalClinic01,MedicalClinic02';    r = 1100;  minPop = 300;  chirp = 'health|sick|doctor|clinic|hospital|medical' ; cov = 'Healthcare' }
     @{ t = 'deathcare'; rx = '^(Cemetery|Crematorium)';                   prefab = 'Cemetery01,Cemetery02,Crematorium01';         r = 99999; minPop = 500;  chirp = 'hearse|dead|cemetery|funeral|deceased' }
-    @{ t = 'fire';      rx = '^(FireHouse|RS_FireHouse|FireStation)';     prefab = 'FireHouse01,FireHouse02';        r = 1100;  minPop = 600;  chirp = 'fire|burn|flame' }
-    @{ t = 'police';    rx = '^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)'; prefab = 'PoliceStation01,PoliceStation02'; r = 1000; minPop = 800; chirp = 'crime|police|robbed|theft|safe' }
-    @{ t = 'school';    rx = '^ElementarySchool';                         prefab = 'ElementarySchool01,ElementarySchool02'; r = 1200;  minPop = 600;  chirp = 'school|education|kids' }
+    @{ t = 'fire';      rx = '^(FireHouse|RS_FireHouse|FireStation)';     prefab = 'FireHouse01,FireHouse02';        r = 1100;  minPop = 600;  chirp = 'fire|burn|flame' ; cov = 'FireRescue' }
+    @{ t = 'police';    rx = '^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)'; prefab = 'PoliceStation01,PoliceStation02'; r = 1000; minPop = 800; chirp = 'crime|police|robbed|theft|safe' ; cov = 'Police' }
+    @{ t = 'school';    rx = '^ElementarySchool';                         prefab = 'ElementarySchool01,ElementarySchool02'; r = 1200;  minPop = 600;  chirp = 'school|education|kids' ; cov = 'Education' }
     @{ t = 'highschool'; rx = '^HighSchool';                            prefab = 'HighSchool01,HighSchool02'; r = 2000;  minPop = 2500; chirp = 'high school|teen' }
-    @{ t = 'post';      rx = '^(PostOffice|PostSorting)';                 prefab = 'PostOffice01,PostOffice02'; r = 1500; minPop = 1500; chirp = 'mail|post|letter|parcel' }
+    @{ t = 'post';      rx = '^(PostOffice|PostSorting)';                 prefab = 'PostOffice01,PostOffice02'; r = 1500; minPop = 1500; chirp = 'mail|post|letter|parcel' ; cov = 'PostService' }
     @{ t = 'hospital';  rx = '^Hospital';                                 prefab = 'Hospital01';          r = 99999; minPop = 6000; chirp = 'hospital' }
     @{ t = 'garbage';   rx = '^(Landfill|Incinerat|Recycling)';           prefab = 'Landfill01,IncinerationPlant01';         r = 99999; minPop = 1000; chirp = 'garbage|trash|waste' }
 )
@@ -50,8 +50,16 @@ function Test-Near($a, $b, $r) { [Math]::Pow($a.x - $b.x, 2) + [Math]::Pow($a.z 
 $needs = foreach ($rule in $rules) {
     if ($pop -lt $rule.minPop) { continue }
     $have = @($all | Where-Object { $_.p -match $rule.rx })
-    $uncovered = @($homes | Where-Object { $h = $_; -not @($have | Where-Object { Test-Near $_ $h $rule.r }).Count })
-    $share = if ($homes.Count) { $uncovered.Count / $homes.Count } else { 0 }
+    # Phase 2: the game's own per-road coverage (coverage_gaps) when the mod has it;
+    # distance-to-building only as a fallback.
+    $gap = if ($rule.cov) { Invoke-Bridge coverage_gaps @{ service = $rule.cov; top = 1 } -AllowError } else { $null }
+    if ($gap.ok) {
+        $share = [double]$gap.result.uncoveredPct / 100
+        $uncovered = @($gap.result.gapClusters | ForEach-Object { [pscustomobject]@{ x = [double]$_.x; z = [double]$_.z } })
+    } else {
+        $uncovered = @($homes | Where-Object { $h = $_; -not @($have | Where-Object { Test-Near $_ $h $rule.r }).Count })
+        $share = if ($homes.Count) { $uncovered.Count / $homes.Count } else { 0 }
+    }
     $missing = !$have.Count -or ($rule.r -lt 99999 -and $share -gt $UncoveredShare)
     if (!$missing) { continue }
     $complained = $complaints -match $rule.chirp
@@ -69,7 +77,10 @@ $sUse = if ($outlets) { ($outlets.sewageOutlet.lastProcessedRaw | Measure-Object
 $problems = @(Get-BridgePaged diagnose_connections @{ limit = 4096 })
 $powerShort = @($problems | Where-Object { $_.issues -contains 'electricity_shortfall' }).Count
 $importing = [double]$m.budget.expenseBySourceRaw.ImportElectricity -gt 0
-$powerLoad = try { [double](Get-Content (Join-Path $PSScriptRoot 'journals\status.json') -Raw | ConvertFrom-Json).utilities.power } catch { 0 }
+# City use vs production from the non-pausing snapshot (plants run flat out when exporting; FAILURES #33).
+$snap = try { Invoke-Bridge get_snapshot } catch { $null }
+$powerLoad = if ($snap.util.power) { [double]$snap.util.power.pct } else { 0 }
+if ($snap.util.power.import -gt 0) { $importing = $true }
 if ($powerLoad -gt 85) { $importing = $true }   # build before blackouts, not after
 $powerSites = @($all | Where-Object { $_.p -match 'Power|WindTurbine|Transformer' })
 $anchor = { param($set) if ($set) { [pscustomobject]@{ x = [Math]::Round(($set.x | Measure-Object -Average).Average); z = [Math]::Round(($set.z | Measure-Object -Average).Average) } } else { [pscustomobject]@{ x = [Math]::Round(($homes.x | Measure-Object -Average).Average); z = [Math]::Round(($homes.z | Measure-Object -Average).Average) } } }

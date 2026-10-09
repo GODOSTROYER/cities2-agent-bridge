@@ -57,3 +57,4 @@ Console.WriteLine($"{TerrainSampleTests.Run()} terrain sampling value and bounda
 Console.WriteLine($"{ObjectPlacementTests.Run()} object placement safety checks passed.");
 Console.WriteLine($"{RecoveryTests.Run()} mailbox recovery checks passed.");
 Console.WriteLine($"{MailboxClientTests.Run()} real PowerShell mailbox client checks passed.");
+Console.WriteLine($"{PlanningTests.Run()} planning core checks passed.");

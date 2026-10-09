@@ -182,12 +182,18 @@ namespace CitiesIIAgentBridge
                     ["relevantAssemblies"] = new JArray(AppDomain.CurrentDomain.GetAssemblies()
                         .Where(a => new[] { "Traffic", "BuildingUse", "RoadBuilder", "FindIt", "PlopTheGrowables", "CityPlanningDraft", "CitiesIIAgentBridge" }.Contains(a.GetName().Name))
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
-                    ["planning"] = new JArray("get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
+                    ["planning"] = new JArray("find_free_lots","corridor","grid_connectors","coverage_gaps","traffic_hotspots","project","get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
                     ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker","quit_game","load_save"),
                     ["analysisPausesGame"] = true, ["snapshot"] = "non_pausing_cached_256_frames", ["events"] = "events.jsonl", ["prefabCosts"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
                 case "get_snapshot": return GetSnapshot();
+                case "find_free_lots": return FindFreeLots(args);
+                case "corridor": return FindCorridor(args);
+                case "grid_connectors": return GridConnectors(args);
+                case "coverage_gaps": return CoverageGaps(args);
+                case "traffic_hotspots": return TrafficHotspots(args);
+                case "project": return Project(args);
                 case "get_city_state": return CityState();
                 case "get_pause_state": return PauseState();
                 case "get_ui_state": return UiState(args);

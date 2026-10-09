@@ -73,7 +73,15 @@ function Show-Look {
 # Empty, dry, flat, owned land for a cols x rows grid, ranked by whether a straight link
 # from an existing road can reach it without crossing a building lot (occupancy raster
 # from real lot rectangles; see lib Get-BridgeOccupancy).
+# Phase 2: the mod computes the same search (raster, links, terrain, land-use score) in
+# milliseconds. Falls back to the PowerShell raster on mods without find_free_lots.
 function Find-Sites([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$count, [string]$zoneKey = 'res') {
+    $r = Invoke-Bridge find_free_lots @{ width = $cols * $bw; depth = $rows * $bd; count = $count; zone = $zoneKey } -AllowError
+    if ($r.ok) { return @($r.result.sites) }
+    if ("$($r.error)" -notmatch 'unknown_command') { throw "find_free_lots failed: $($r.error)" }
+    Find-SitesRaster $cols $rows $bw $bd $count $zoneKey
+}
+function Find-SitesRaster([int]$cols, [int]$rows, [double]$bw, [double]$bd, [int]$count, [string]$zoneKey = 'res') {
     $w = $cols * $bw; $dpt = $rows * $bd
     $tiles = @((Invoke-Bridge get_tiles).tiles | Where-Object purchased | ForEach-Object {
         $xs = $_.polygon.x; $zs = $_.polygon.z
