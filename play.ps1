@@ -139,17 +139,18 @@ function Invoke-BuyTiles([int]$n, [long]$maxCost, [bool]$plan) {
     if ($r.id) { $r = Wait-BridgeOperation $r.id }
     "buy: $($r.status) cost $(Money ($r.cost ?? $r.previewCost ?? $r.totalCost))" + $(if ($r.error) { " error $($r.error)" } else { '' })
 }
-function Invoke-Grid([double]$x, [double]$z, [int]$cols, [int]$rows, [string]$zoneKey, [bool]$plan, [bool]$demolish = $false) {
+function Invoke-Grid([double]$x, [double]$z, [int]$cols, [int]$rows, [string]$zoneKey, [bool]$plan, [bool]$demolish = $false, [bool]$screen = $false) {
     $zone = Resolve-BridgePrefab $Zones[$zoneKey] 'zone'
     $road = Resolve-BridgePrefab 'Small Road' 'network'
     $a = @{ X = $x; Z = $z; Columns = $cols; Rows = $rows; RoadPrefabIndex = $road.index; RoadPrefabVersion = $road.version; ZonePrefabIndex = $zone.index; ZonePrefabVersion = $zone.version }
     if ($plan) { $a.PlanOnly = $true }
     if ($demolish) { $a.AllowDemolition = $true }
+    if ($screen) { $a.SkipNativePreview = $true }
     & (Join-Path $H 'grid.ps1') @a *>&1 | ForEach-Object { "$_" } |
-        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:|Demolished|Stubs|Shared|Native preview|Grid streets|Connector rebuilt|  skipped|  road)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
+        Where-Object { $_ -match '^(Plan |Batch|Grid connected|PlanOnly|Failed|zone:|Demolished|Stubs|Shared|Native preview|Grid streets|Connector rebuilt|  skipped|  road|Stub dropped)' -or $_ -match 'rror|: ready' } | ForEach-Object { $_ -replace '\s{2,}', ' ' } |
         Tee-Object -Variable lines
     # execute_neighborhood writes before/after saves; after a clean build keep only the newest.
-    if (!$plan -and ($lines -match 'status=complete') -and !($lines -match 'Failed|rror')) { $x = Clear-BridgeRollingSaves -KeepNewest 1; if ($x.recycled) { "recycled $($x.recycled.Count) automatic save(s)" } }
+    if (!$plan -and ($lines -match 'status=complete') -and !($lines -match 'Failed|rror')) { $cleanup = Clear-BridgeRollingSaves -KeepNewest 1; if ($cleanup.recycled) { "recycled $($cleanup.recycled.Count) automatic save(s)" } }
 }
 
 switch ($Verb.ToLower()) {
@@ -201,7 +202,9 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         foreach ($c in $choices) { try { $null = Resolve-BridgePrefab $Zones[$c.k] 'zone'; $pick = $c; break } catch {} }
         if (!$pick -or $pick.v -lt 20) { "grow: demand too low (R $(@($d.residential)[0]) C $($d.commercial) I $($d.industrial)); simulate instead"; break }
         $cols = [int](Opt 'cols' 3); $rows = [int](Opt 'rows' 2)
-        # Validate candidates read-only (plan) in distance order; build the first that passes.
+        $growClock = [Diagnostics.Stopwatch]::StartNew()
+        # Validate candidates read-only (geometric plan only, fast) in distance order; the
+        # chosen site gets the native game check when it is built. Hard 4-minute budget.
         # Step down in size when the requested grid does not fit (land is often fragmented).
         $sites = @()
         foreach ($size in @(@($cols, $rows), @(2, 2), @(2, 1), @(1, 1)) | Where-Object { $_[0] * $_[1] -le $cols * $rows } | Select-Object -Unique) {
@@ -212,7 +215,8 @@ play.ps1 <verb> [options]   (city must be loaded; tick "Allow local bridge contr
         if (!$sites) { "grow: no free site for ${cols}x${rows}" + $(if (!(Opt 'buytiles' $false)) { ' (land is full: add -BuyTiles, or play.ps1 buy)' } else { '' }); break }
         $chosen = $null
         foreach ($site in $sites) {
-            $check = @(Invoke-Grid $site.x $site.z $cols $rows $pick.k $true 2>&1 | ForEach-Object { "$_" })
+            if ($growClock.Elapsed.TotalMinutes -gt 4) { "grow: time budget (4 min) used; stopping search"; break }
+            $check = @(Invoke-Grid $site.x $site.z $cols $rows $pick.k $true $false $true 2>&1 | ForEach-Object { "$_" })
             if ($check -match 'PlanOnly: nothing changed') { $chosen = $site; break }
             "grow: site -X $($site.x) -Z $($site.z) rejected by plan"
         }

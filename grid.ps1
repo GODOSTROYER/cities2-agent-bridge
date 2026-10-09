@@ -17,7 +17,7 @@ param(
     [long]$MaxCostPerRoad = 8000, [long]$MaxTotalCost = 200000, [long]$Reserve = 100000,
     [ValidateRange(0,2000)][double]$MaxConnectorLength = 400,
     [ValidateRange(0,60)][double]$Clearance = 20,
-    [switch]$NoConnector, [switch]$NoZoning, [switch]$NoStubs, [switch]$AllowDemolition, [switch]$PlanOnly
+    [switch]$NoConnector, [switch]$NoZoning, [switch]$NoStubs, [switch]$AllowDemolition, [switch]$SkipNativePreview, [switch]$PlanOnly
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'lib\BridgeClient.psm1') -Force
@@ -140,18 +140,28 @@ if ($plan.status -ne 'ready') { 'Failed: plan is blocked. Nothing was changed.';
 # slopes, water, map limits and tight geometry. When the mod supports road previews, run
 # every road through the game's own validator before anything is built. (An older mod
 # would apply a "preview", so this is gated on the advertised capability.)
-if ((Invoke-Bridge get_capabilities).roadPreview) {
-    $i = 0
+# Screening callers (grow) pass -SkipNativePreview: native checks cost ~1-2 s per road, so
+# they run once on the chosen site, not on every candidate.
+if (!$SkipNativePreview -and (Invoke-Bridge get_capabilities).roadPreview) {
+    $i = 0; $dropped = @()
     foreach ($r in $roads) {
         $pv = Invoke-Bridge build_road ($r + @{ previewOnly = $true })
         $res = Wait-BridgeOperation $pv.id
         if ($res.status -ne 'complete') {
             $why = @($res.placementErrors | ForEach-Object { $_.reasons } | Select-Object -Unique) -join ','
+            $isStub = $i -ge $coreCount -and @($stubRoads | Where-Object { $_ -eq $r }).Count -gt 0
+            if ($isStub) { "Stub dropped ($([int]$r.end.x),$([int]$r.end.z)): $why"; $dropped += , $r; $i++; continue }
             "Failed: native preview rejected road $i ($([int]$r.start.x),$([int]$r.start.z) -> $([int]$r.end.x),$([int]$r.end.z)): $($res.error) [$why]. Nothing was changed."; return
         }
         $i++
     }
-    "Native preview: all $($roads.Count) roads accepted by the game."
+    if ($dropped) {
+        # Stubs are optional; re-plan without the rejected ones so the batch matches.
+        $roads = @($roads | Where-Object { $rr = $_; -not @($dropped | Where-Object { $_ -eq $rr }).Count })
+        $plan = New-Plan $roads
+        if ($plan.status -ne 'ready') { 'Failed: re-plan without rejected stubs is blocked. Nothing was changed.'; return }
+    }
+    "Native preview: $($roads.Count) roads accepted by the game" + $(if ($dropped) { " ($($dropped.Count) stub(s) dropped)" } else { '' }) + '.'
 }
 if ($PlanOnly) { 'PlanOnly: nothing changed.'; return }
 

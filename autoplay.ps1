@@ -21,6 +21,10 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
     $m = Invoke-Bridge get_city_management
     $resDemand = [double]@($m.demand.residential)[0]
     $built = ''
+    # An interrupted earlier command can leave the bridge road/zone tool active, and every
+    # build then fails with finish_or_cancel_current_tool_first. Wait for it to clear.
+    for ($w = 0; $w -lt 15; $w++) { $tool = (Invoke-Bridge get_ui_state @{ chirps = 0 }).activeTool; if (!$tool -or $tool -eq 'DefaultToolSystem') { break }; Start-Sleep 1 }
+    if ($tool -and $tool -ne 'DefaultToolSystem') { "autoplay stopped: tool $tool still active after 15 s (an interrupted command); run play.ps1 ui, then retry"; break }
     if ($resDemand -ge $GrowDemand -and $m.city.money -gt $CashFloor + 150000) {
         $args2 = @('grow', '-Cols', '3', '-Rows', '2')
         if (!$NoBuyTiles) { $args2 += '-BuyTiles' }
