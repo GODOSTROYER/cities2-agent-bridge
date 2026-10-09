@@ -2,6 +2,9 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
   <ItemGroup>
     <Compile Include="../src/Mailbox.cs" />
+    <Compile Include="../src/BridgeTick.cs" /><Compile Include="MaintenanceTests.cs" />
+    <Compile Include="../src/OperationRegistry.cs" /><Compile Include="OperationRegistryTests.cs" />
+    <Compile Include="../src/SimulationArguments.cs" /><Compile Include="SimulationArgumentsTests.cs" />
     <Compile Include="MailboxFairnessTests.cs" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>

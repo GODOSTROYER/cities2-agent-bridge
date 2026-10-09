@@ -74,6 +74,9 @@ internal static class MailboxFairnessTests
             using(context=new Mailbox(Path.Combine(root,"context"),(c,a)=>{seen=context.CurrentRequestId;throw new Exception("injected");},()=>"city"))
             { var r=Request(context); Put(context,r);context.Pump();Check(seen==(string)r["id"] && context.CurrentRequestId==null,"request context is visible only during dispatch and clears on failure"); }
             Console.WriteLine($"{passed} mailbox reliability checks passed.");
+            Console.WriteLine($"{MaintenanceTests.Run()} maintenance routing checks passed.");
+            Console.WriteLine($"{OperationRegistryTests.Run()} operation identity/outcome checks passed.");
+            Console.WriteLine($"{SimulationArgumentsTests.Run()} simulation argument checks passed.");
         }
         finally { if(Directory.Exists(root))Directory.Delete(root,true); }
     }

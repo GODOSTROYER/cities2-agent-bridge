@@ -7,11 +7,14 @@ namespace CitiesIIAgentBridge
     internal static class BridgeTick
     {
         internal static bool Run(Action enforceStop, Action simulationTick, Action publish,
-            Action pump, Action workflowTick, Action<IOException> contention)
+            Action pump, Action workflowTick, Action<IOException> contention, Action maintenance = null)
         {
             // A blocked heartbeat must never postpone a stop or a simulation deadline.
             enforceStop();
             simulationTick();
+            // Reconcile and enforce deadlines even when transport cannot publish.
+            // This callback must not dispatch new batch work or apply tile purchases.
+            maintenance?.Invoke();
             if (!Communicate(publish, contention)) return false;
             if (!Communicate(pump, contention)) return false;
             workflowTick();

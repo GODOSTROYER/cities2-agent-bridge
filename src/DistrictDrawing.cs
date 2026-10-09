@@ -170,7 +170,7 @@ namespace CitiesIIAgentBridge
                     if(problem!=null)throw new InvalidOperationException(problem);
                     if(!OriginalsUnchanged(true) || Districts().Count!=before.Count)throw new InvalidOperationException("districts_changed_during_preview");
                     if(!commit) { ConstructionAccess.Results[operation]["applied"]=false;Finish("complete");return deps; }
-                    applyMode=ApplyMode.Apply;submitted=true;ConstructionAccess.Results[operation]["applicationMayHaveOccurred"]=true;
+                    ConstructionAccess.Submitted(operation);applyMode=ApplyMode.Apply;submitted=true;
                     ConstructionAccess.Results[operation]["status"]="applying";stage=2;frames=0;return deps;
                 }
                 applyMode=ApplyMode.Clear;if(++frames<4)return deps;
@@ -183,6 +183,7 @@ namespace CitiesIIAgentBridge
                 { if(frames<60)return deps;throw new InvalidOperationException("district_boundary_change_not_verified"); }
                 if(!EntityManager.HasComponent<PrefabRef>(changed) || EntityManager.GetComponentData<PrefabRef>(changed).m_Prefab!=expectedPrefab)throw new InvalidOperationException("district_result_prefab_mismatch");
                 result["district"]=NativeBuild.Id(changed);result["polygon"]=DistrictGeometry.Json(actual);
+                ConstructionAccess.Verified(operation, "native_district_entity_and_polygon_readback");
                 var names=World.GetExistingSystemManaged<Game.UI.NameSystem>();
                 if(requestedName!=null) { names.SetCustomName(changed,requestedName);if(!names.TryGetCustomName(changed,out var actualName)||actualName!=requestedName)throw new InvalidOperationException("district_name_not_verified"); }
                 result["district"]=NativeBuild.Id(changed);result["polygon"]=DistrictGeometry.Json(actual);

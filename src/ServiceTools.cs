@@ -69,7 +69,7 @@ namespace CitiesIIAgentBridge
         }
         protected override JobHandle OnUpdate(JobHandle deps)
         {
-            if (operation == null) return deps;
+            if (operation == null || ConstructionAccess.Active != operation) return deps;
             try
             {
                 deps.Complete();
@@ -121,7 +121,7 @@ namespace CitiesIIAgentBridge
                     ConstructionAccess.Results[operation]["snappedPosition"] = new JObject{["x"]=point.m_Position.x,["y"]=point.m_Position.y,["z"]=point.m_Position.z};
                     ConstructionAccess.Results[operation]["snappedRotation"] = new JArray(point.m_Rotation.value.x,point.m_Rotation.value.y,point.m_Rotation.value.z,point.m_Rotation.value.w);
                     if(previewOnly) { ConstructionAccess.Results[operation]["previewOnly"]=true; Finish("complete"); return deps; }
-                    applied = true; ConstructionAccess.Results[operation]["applied"] = true;
+                    applied = true; ConstructionAccess.Submitted(operation);
                     applyMode = ApplyMode.Apply; stage = 2; frames = 0; ConstructionAccess.Results[operation]["status"] = "applying"; return deps;
                 }
                 if(stage == 3) { applyMode = ApplyMode.Clear; if(++frames<4)return deps; stage=0;frames=0;return deps; }
@@ -132,6 +132,7 @@ namespace CitiesIIAgentBridge
                 ConstructionAccess.Results[operation]["createdBuildings"] = created;
                 bool movedSuccessfully = moved != Entity.Null && EntityManager.Exists(moved) && EntityManager.HasComponent<PrefabRef>(moved) && EntityManager.GetComponentData<PrefabRef>(moved).m_Prefab == expectedPrefab && EntityManager.HasComponent<Game.Objects.Transform>(moved) && Unity.Mathematics.math.distance(EntityManager.GetComponentData<Game.Objects.Transform>(moved).m_Position, point.m_Position) < 16;
                 if (created.Count == 0 && !movedSuccessfully) throw new InvalidOperationException("building_change_not_observed");
+                ConstructionAccess.Verified(operation, "native_entity_readback");
                 Finish("complete");
             }
             catch (Exception e) { Finish("failed", e.Message); }
@@ -202,7 +203,7 @@ namespace CitiesIIAgentBridge
         }
         protected override JobHandle OnUpdate(JobHandle deps)
         {
-            if (operation == null) return deps;
+            if (operation == null || ConstructionAccess.Active != operation) return deps;
             try
             {
                 deps.Complete();
@@ -225,10 +226,12 @@ namespace CitiesIIAgentBridge
                         foreach (var t in ts) if (t.m_Original == target && (t.m_Flags & TempFlags.Delete) != 0) found = true;
                         if (!found) throw new InvalidOperationException("target_not_in_demolition_preview");
                     }
+                    ConstructionAccess.Submitted(operation);
                     applyMode = ApplyMode.Apply; stage = 2; frames = 0; return deps;
                 }
                 applyMode = ApplyMode.Clear; if (++frames < 5) return deps;
                 if (EntityManager.Exists(target) && !EntityManager.HasComponent<Deleted>(target)) throw new InvalidOperationException("demolition_not_observed");
+                ConstructionAccess.Verified(operation, "native_entity_readback");
                 Finish("complete");
             }
             catch (Exception e) { Finish("failed", e.Message); }

@@ -39,6 +39,10 @@ jobs:
         run: dotnet run --project tests/ReliabilityTests.csproj --configuration Release
       - name: PowerShell client guards
         run: ./tests/ClientTests.ps1
+      - name: Scoped simulation client regressions
+        run: ./tests/ScopedClientTests.ps1
+      - name: Native C# syntax (not native assembly compilation)
+        run: dotnet run --project tests/SyntaxTests.csproj --configuration Release -- src
       - name: Journal regression tests
         run: ./tests/JournalTests.ps1
       - name: Original and audit atlas regressions

@@ -27,7 +27,7 @@ namespace CitiesIIAgentBridge
         private BridgeSettings settings;
         private Func<bool> updater;
         private string citySession;
-        private DateTime nextTick;
+        private long nextTick;
         private bool disposed;
         private bool faulted;
         private bool mailboxContended;
@@ -43,6 +43,8 @@ namespace CitiesIIAgentBridge
             GameManager.instance.localizationManager.AddSource("en-US", new LocaleEN(settings));
             string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CitiesIIAgentBridge");
             mailbox = new Mailbox(root, Dispatch, () => citySession);
+            ConstructionAccess.Registry.Configure(() => mailbox.Session, () => citySession,
+                () => dispatchingBatch ? (string)batch?["requestId"] : mailbox.CurrentRequestId);
             updater = Tick;
             ConstructionAccess.Allowed = () => !disposed && settings.AllowControl && !File.Exists(Path.Combine(mailbox.Root, "STOP"));
             updateSystem.UpdateAt<BridgeRoadTool>(SystemUpdatePhase.ToolUpdate);
@@ -81,14 +83,16 @@ namespace CitiesIIAgentBridge
             settings?.UnregisterInOptionsUI();
             try { mailbox?.Publish(new JObject { ["status"] = "stopped", ["modVersion"] = ModVersion }); }
             catch (Exception e) { log?.Warn(e.Message); }
+            mailbox?.Dispose();
             log?.Info("Bridge disposed");
         }
 
         private bool Tick()
         {
             if (disposed) return true; // MainThreadDispatcher removes a callback returning true.
-            if (DateTime.UtcNow < nextTick) return false;
-            nextTick = DateTime.UtcNow.AddMilliseconds(250);
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (now < nextTick) return false;
+            nextTick = now + System.Diagnostics.Stopwatch.Frequency / 4;
             try
             {
                 bool communicated = BridgeTick.Run(
@@ -103,7 +107,7 @@ namespace CitiesIIAgentBridge
                     ["controlEnabled"] = settings.AllowControl,
                     ["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id
                 }),
-                    () => mailbox.Pump(), WorkflowTick, MailboxContention);
+                    () => mailbox.Pump(), WorkflowTick, MailboxContention, WorkflowMaintenanceTick);
                 if (communicated && mailboxContended)
                 {
                     log.Info("Mailbox access recovered; control permission was not changed by recovery.");
@@ -163,6 +167,9 @@ namespace CitiesIIAgentBridge
                     ["read"] = new JArray("ping", "get_capabilities", "get_city_state", "get_camera", "get_selected", "inspect_entity", "get_water_facilities"),
                     ["control"] = new JArray("create_district","edit_district","set_service_districts","set_camera", "set_simulation_speed", "build_road", "build_network", "upgrade_network", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "purchase_tiles", "set_tax", "set_service_budget", "save_checkpoint", "batch_execute"),
                     ["constructionQueries"] = new JArray("get_build_prefabs", "get_prefab_details", "get_network", "get_network_edges", "trace_network", "get_zone_cells", "get_operation", "get_batch", "get_city_management", "get_services", "sample_terrain", "get_tiles", "get_buildings", "diagnose_connections"),
+                    ["operationOriginRequired"] = true,
+                    ["scopedSimulationCancellation"] = true,
+                    ["requestReplayHorizonSeconds"] = Mailbox.ReplayHorizonSeconds,
                     ["buildVersion"] = ModVersion, ["liveValidation"] = "community_binary_requires_live_validation",
                     ["visibility"] = new JObject {
                         ["districtAtlas"] = true, ["districtServiceAssignments"] = true,
@@ -200,8 +207,7 @@ namespace CitiesIIAgentBridge
                 case "simulate_step": return BeginSimulation(args);
                 case "cancel_simulation_step": return EndSimulation(args);
                 case "get_simulation_step":
-                    if(simulationOperation == null || (string)args["id"] != simulationOperation) throw new ArgumentException("simulation_step_not_found");
-                    return ConstructionAccess.Status(simulationOperation);
+                    return SimulationStatus(args);
                 case "get_camera": RequireCity(); return CameraState();
                 case "get_selected":
                 {

@@ -25,18 +25,15 @@ namespace CitiesIIAgentBridge
         }
         private JObject BeginSimulation(JObject args)
         {
+            args = SimulationArguments.Normalize(args);
             var w = RequireCity(); RequireControl();
             if (SimulationRunning || ConstructionAccess.Active != null || (string)batch?["status"] == "running")
                 throw new InvalidOperationException("finish_current_operation_before_simulating");
             if (stagnantSteps >= 3 && (bool?)args["acknowledgeNoProgress"] != true)
                 throw new InvalidOperationException("reassess_required_after_three_stagnant_steps");
-            int frames = args["frames"] == null ? 4096 : RequiredInt(args,"frames");
-            double wall = args["wallSeconds"] == null ? 30 : RequiredFloat(args,"wallSeconds");
-            double stall = args["stallSeconds"] == null ? Math.Min(5,wall) : RequiredFloat(args,"stallSeconds");
-            float speed = args["speed"] == null ? 4 : RequiredFloat(args,"speed");
-            if (speed != 1 && speed != 2 && speed != 4) throw new ArgumentException("step_speed_must_be_1_2_or_4");
-            if (frames < 1) throw new ArgumentException("frames_must_be_positive");
-            if (args["populationChange"] != null && RequiredInt(args,"populationChange") < 1) throw new ArgumentException("populationChange_must_be_positive");
+            int frames = (int)args["frames"];
+            double wall = (double)args["wallSeconds"], stall = (double)args["stallSeconds"];
+            float speed = (float)args["speed"];
             var sim = w.GetExistingSystemManaged<SimulationSystem>();
             var window = new SimulationWindow(sim.frameIndex,(ulong)frames,wall,stall);
             sim.selectedSpeed = 0;
@@ -47,6 +44,7 @@ namespace CitiesIIAgentBridge
             var result = ConstructionAccess.Results[simulationOperation];
             result["status"] = "running"; result["before"] = simulationBefore;
             result["bounds"] = new JObject { ["frames"] = frames, ["wallSeconds"] = wall, ["stallSeconds"] = stall };
+            ConstructionAccess.Submitted(simulationOperation);
             sim.selectedSpeed = speed;
             return ConstructionAccess.Status(simulationOperation);
         }
@@ -77,12 +75,24 @@ namespace CitiesIIAgentBridge
             }
             catch (Exception e) { FinishSimulation("observation_failed: " + e.GetBaseException().Message); }
         }
+        private JObject SimulationStatus(JObject args)
+        {
+            string id = SimulationArguments.OperationId(args);
+            var result = ConstructionAccess.Status(id);
+            if ((string)result["kind"] != "simulation_step") throw new ArgumentException("simulation_step_not_found");
+            return result;
+        }
         private JObject EndSimulation(JObject args)
         {
             RequireCity(); RequireControl();
-            if (SimulationRunning) FinishSimulation("cancelled");
-            else PauseAnalysis();
-            return simulationOperation == null ? new JObject { ["paused"] = true } : ConstructionAccess.Status(simulationOperation);
+            var original = SimulationStatus(args); // Validate ID and origin before touching simulation.
+            string id = (string)original["id"];
+            bool ownsActive = SimulationRunning && simulationOperation == id && simulationCity == citySession;
+            if (ownsActive) FinishSimulation("cancelled");
+            var result = ConstructionAccess.Status(id);
+            result["cancelledActiveOperation"] = ownsActive;
+            // A completed A must never pause/cancel a newer B, or a manual interval.
+            return result;
         }
         private void FinishSimulation(string reason, bool pause = true)
         {
@@ -102,6 +112,7 @@ namespace CitiesIIAgentBridge
                     result["delta"] = delta;
                     bool changed = ((double?)delta["population"]??0) != 0 || ((double?)delta["xp"]??0) != 0 || !JToken.DeepEquals(after["demand"],simulationBefore["demand"]) || !JToken.DeepEquals(after["underConstruction"],simulationBefore["underConstruction"]);
                     stagnantSteps = changed ? 0 : stagnantSteps + 1;
+                    ConstructionAccess.Verified(id, "paused_simulation_and_observation_readback");
                 }
             }
             catch (Exception e) { result["snapshotError"] = e.GetBaseException().Message; }

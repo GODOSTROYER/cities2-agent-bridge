@@ -81,7 +81,7 @@ namespace CitiesIIAgentBridge
         private Entity[] pendingTiles;
         private string tileOperation;
         private int tileBudget;
-        private DateTime tileDeadline;
+        private System.Diagnostics.Stopwatch tileClock;
         private JObject PurchaseTiles(JObject args)
         {
             var w = RequireCity(); RequireControl(); CheckBuildTool(w); var em = w.EntityManager;
@@ -92,17 +92,18 @@ namespace CitiesIIAgentBridge
                 if (!em.Exists(e) || !em.HasComponent<Game.Areas.MapTile>(e) || !em.HasComponent<Native>(e)) throw new ArgumentException("tile_stale_or_already_owned"); tiles.Add(e);
             }
             int budget = RequiredInt(args,"maxCost"); if (budget < 0) throw new ArgumentException("invalid_budget");
-            tileOperation = ConstructionAccess.Begin("purchase_tiles"); pendingTiles = tiles.ToArray(); tileBudget = budget; tileDeadline = DateTime.UtcNow.AddSeconds(10);
+            tileOperation = ConstructionAccess.Begin("purchase_tiles"); pendingTiles = tiles.ToArray(); tileBudget = budget; tileClock = System.Diagnostics.Stopwatch.StartNew();
             w.GetExistingSystemManaged<MapTilePurchaseSystem>().selecting = true;
             return ConstructionAccess.Status(tileOperation);
         }
-        private void TileTick()
+        private void TileTick(bool allowApply = true)
         {
             if (tileOperation == null) return;
             var world = RequireCity(); var system = world.GetExistingSystemManaged<MapTilePurchaseSystem>(); var em = world.EntityManager;
             try
             {
-                RequireControl(); if (!system.selecting || DateTime.UtcNow > tileDeadline) throw new InvalidOperationException("tile_purchase_interrupted");
+                RequireControl(); if (!system.selecting || tileClock.Elapsed.TotalSeconds > 10) throw new InvalidOperationException("tile_purchase_interrupted");
+                if (!allowApply) return; // Maintenance may cancel/clean up, never spend.
                 using (var q = em.CreateEntityQuery(ComponentType.ReadWrite<SelectionElement>()))
                 {
                     if (q.IsEmptyIgnoreFilter) return;
@@ -110,9 +111,10 @@ namespace CitiesIIAgentBridge
                     ConstructionAccess.Call(typeof(MapTilePurchaseSystem),system,"UpdateStatus");
                     if (system.status != TilePurchaseErrorFlags.None) throw new InvalidOperationException("tile_purchase_rejected: " + system.status);
                     if (system.cost > tileBudget) throw new InvalidOperationException("tile_cost_exceeds_budget");
-                    ConstructionAccess.Results[tileOperation]["cost"] = system.cost; system.PurchaseSelection();
+                    ConstructionAccess.Results[tileOperation]["cost"] = system.cost; ConstructionAccess.Submitted(tileOperation); system.PurchaseSelection();
                     foreach (var tile in pendingTiles) if (em.HasComponent<Native>(tile)) throw new InvalidOperationException("tile_purchase_not_observed");
                     ConstructionAccess.Results[tileOperation]["tiles"] = new JArray(pendingTiles.Select(NativeBuild.Id));
+                    ConstructionAccess.Verified(tileOperation, "native_tile_ownership_readback");
                     ConstructionAccess.Finish(tileOperation,"complete");
                 }
             }

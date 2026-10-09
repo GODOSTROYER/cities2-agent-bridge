@@ -101,7 +101,10 @@ namespace CitiesIIAgentBridge
                         else
                         {
                             if (recent.Count >= RecentLimit) break; // Backpressure, not unsafe eviction.
-                            string text = ReadRequest(path); // Contention is deferred without consuming an ID.
+                            string text;
+                            try { text = ReadRequest(path); }
+                            catch (IOException e) when (IsSharingViolation(e)) { continue; }
+                            // A locked input is not a failed dispatch or an output fault.
                             try
                             {
                                 JObject request;
@@ -180,7 +183,8 @@ namespace CitiesIIAgentBridge
                 while (length < bytes.Length && (read = stream.Read(bytes, length, bytes.Length - length)) > 0) length += read;
                 if (length > maximum) throw new InvalidDataException("request_too_large");
                 int start = length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf ? 3 : 0;
-                return new UTF8Encoding(false, true).GetString(bytes, start, length - start);
+                try { return new UTF8Encoding(false, true).GetString(bytes, start, length - start); }
+                catch (DecoderFallbackException e) { throw new InvalidDataException("invalid_request_utf8", e); }
             }
         }
 

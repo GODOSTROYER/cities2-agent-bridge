@@ -15,6 +15,7 @@ New-Item -ItemType Directory -Path $package -Force | Out-Null
 # Explicit allowlist: never copy local city records, logs, compiler response files,
 # game assemblies, credentials, debug symbols, or arbitrary working-tree files.
 $files = @(
+    'src/OperationRegistry.cs','src/SimulationArguments.cs','tests/ReliabilityTests.csproj','tests/MailboxFairnessTests.cs','tests/OperationRegistryTests.cs','tests/SimulationArgumentsTests.cs','tests/MaintenanceTests.cs','tests/ScopedClientTests.ps1','tests/Directory.Build.props','tests/SyntaxTests.csproj','tests/SyntaxTests.cs','tests/audit-atlas.test.mjs',
     'src/DistrictAtlas.cs','src/DistrictCensus.cs','src/DistrictDrawing.cs','src/DistrictGeometry.cs','src/TerrainSampleValues.cs','export-atlas.ps1','atlas/export.mjs','tests/DistrictTests.cs','tests/DistrictDrawingTests.cs','tests/TerrainSampleTests.cs','tests/DistrictApiTests.ps1','tests/TerrainApiTests.ps1','tests/atlas.test.mjs','atlas/README.md',
     'README.md','INSTALL.md','AGENTS.md','DEVELOPMENT.md','SHARING.md',
     'RELEASE-NOTES.md','VALIDATION.txt','CONTRIBUTING.md','COMMANDS.md','commands.json',
