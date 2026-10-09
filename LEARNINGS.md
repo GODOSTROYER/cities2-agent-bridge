@@ -77,7 +77,7 @@ $op = Invoke-Bridge save_checkpoint @{ label = 'after-agent-session' }; Wait-Bri
 - Stop reasons: `wall_deadline` and `frame_limit` are normal. `cash_floor`, `new_utility_shortage`, `population_changed`, `demand_changed`, `simulation_stalled`, `game_paused`, `control_stopped` and `city_changed` need a look.
 - To stop a run safely: kill the client loop first so no new step starts, then `cancel_simulation_step`. It returns `paused:true`; confirm with `get_city_state` (`selectedSpeed` 0).
 - Growth follows **zoned capacity**. With residential demand at 100, population went 127 → 201 → 281 → 316 and then flattened (+1, +3 per 50 s) once the zoned lots filled. When `delta.population` stalls while demand is high, zone more land; don't just simulate longer.
-- `analysisPausesGame: true`: read commands pause the game, so never run analysis while an interval is meant to be running.
+- `analysisPausesGame: true`: **any** read command (even `get_build_prefabs`) pauses the game, ending the active step with `game_paused`. Never query while `run-session.ps1` is running; wait for it to finish.
 
 ## Harness bugs fixed in this copy (see `git log`)
 1. **Culture-dependent heartbeat parse.** PS7 `ConvertFrom-Json` turns `heartbeatUtc` into a `DateTime`. `[DateTimeOffset]::Parse()` then re-parsed its string form in the user's culture (en-IN read 10/09 as 10 Sep), so every command failed with "heartbeat stale". Fixed by using the DateTime directly and parsing strings with InvariantCulture.

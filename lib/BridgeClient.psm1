@@ -37,7 +37,8 @@ function Get-BridgePaged {
         if ($name) { $items.AddRange([object[]]$page.$name) }
         $offset = $page.nextOffset
     } while ($null -ne $offset -and "$offset" -ne '')
-    , $items.ToArray()
+    # Emit items individually; wrap calls in @() to always get an array (count works).
+    $items.ToArray()
 }
 
 function Wait-BridgeOperation {
