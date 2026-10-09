@@ -9,7 +9,9 @@ param(
     [ValidateRange(0, 100)][int]$GrowDemand = 50,
     [int]$CashFloor = 150000,
     [switch]$UntilMilestone,
-    [switch]$NoBuyTiles
+    [switch]$NoBuyTiles,
+    [switch]$NoBudgetPilot,
+    [ValidateRange(5, 20)][int]$MaxTax = 15
 )
 $ErrorActionPreference = 'Stop'
 $play = Join-Path $PSScriptRoot 'play.ps1'
@@ -17,6 +19,7 @@ Import-Module (Join-Path $PSScriptRoot 'lib\BridgeClient.psm1') -Force
 function Get-Milestone { (Invoke-Bridge get_ui_state @{ chirps = 0 }).milestone }
 $start = Get-Milestone
 "autoplay: milestone $($start.achieved), next in $($start.xpToNext) xp"
+$negStreak = 0
 for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
     $m = Invoke-Bridge get_city_management
     $resDemand = [Math]::Max([double]@($m.demand.residential)[0], [Math]::Max([double]@($m.demand.residential)[1], [double]$m.demand.commercial))
@@ -31,12 +34,29 @@ for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
         $g = @(& $play @args2 2>&1 | ForEach-Object { "$_" })
         $built = if ($g -match 'status=complete|Grid streets built') { 'grid built' } elseif ($g -match 'buy: complete') { 'tile bought' } else { 'no build (' + (($g | Select-Object -Last 1) -replace '^grow: ', '') + ')' }
     }
+    if ($cycle % 3 -eq 1 -and (Test-Path (Join-Path $PSScriptRoot 'services.ps1'))) {
+        $svc = @(& (Join-Path $PSScriptRoot 'services.ps1') -MaxPlacements 1 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match '^(place|services)' })
+        if ($svc) { $built = ($built, ($svc -join '; ')) -join ' | ' }
+    }
     $r = @(& $play run -Seconds $SecondsPerCycle -Floor $CashFloor 2>&1 | ForEach-Object { "$_" })
     $summary = ($r | Where-Object { $_ -like 'run:*' } | Select-Object -First 1) -replace '^run: ', ''
     $ms = Get-Milestone
     "cycle ${cycle}: $built | $summary | R demand $resDemand | next milestone in $($ms.xpToNext) xp" + $(if ($r -match 'resolved') { ' | popups passed: ' + (@($r -match 'resolved').Count) } else { '' })
     if ($ms.blockedBy -eq 'tutorial_intro') { "  milestones held by unfinished tutorial intro; " + ((& $play fix 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -like 'fix:*' }) -join '; ') }
-    $stop = $r | Where-Object { $_ -match 'STOPPED' }
+    # Budget autopilot: keep net >= 0 (raise R/C by 1 after two negative cycles, up to
+    # MaxTax); give growth back (lower by 1, not below 10) when net is strongly positive
+    # and residential demand has fallen off.
+    if (!$NoBudgetPilot) {
+        $mm = Invoke-Bridge get_city_management
+        $net = [double]$mm.budget.balanceRaw
+        $negStreak = if ($net -lt 0) { $negStreak + 1 } else { 0 }
+        if ($negStreak -ge 2) {
+            foreach ($area in 'Residential', 'Commercial') { $rate = [int]$mm.taxes.$area; if ($rate -lt $MaxTax) { $null = Invoke-Bridge set_tax @{ area = $area; rate = $rate + 1 }; "  budget: $area tax $rate -> $($rate + 1) (net $([int]$net))" } }
+            $negStreak = 0
+        } elseif ($net -gt 20000 -and [double]@($mm.demand.residential)[0] -lt 30 -and [double]@($mm.demand.residential)[1] -lt 30) {
+            foreach ($area in 'Residential', 'Commercial') { $rate = [int]$mm.taxes.$area; if ($rate -gt 10) { $null = Invoke-Bridge set_tax @{ area = $area; rate = $rate - 1 }; "  budget: $area tax $rate -> $($rate - 1) (net +$([int]$net), demand low)" } }
+        }
+    }    $stop = $r | Where-Object { $_ -match 'STOPPED' }
     if ($stop) { "autoplay stopped: $stop"; break }
     if ($UntilMilestone -and [int]$ms.achieved -gt [int]$start.achieved) { "MILESTONE reached: $($ms.achieved) (was $($start.achieved))"; break }
 }
