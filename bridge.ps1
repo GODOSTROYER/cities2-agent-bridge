@@ -44,7 +44,11 @@ for ($heartbeatAttempt = 0; $heartbeatAttempt -lt 10; $heartbeatAttempt++) {
     try { $session = Read-MailboxText $sessionPath | ConvertFrom-Json; break }
     catch { if ($heartbeatAttempt -eq 9) { throw }; Start-Sleep -Milliseconds 50 }
 }
-if ($session.status -ne 'ready' -or ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($session.heartbeatUtc)).TotalSeconds -gt 10) {
+# PS7 ConvertFrom-Json already yields a UTC DateTime; re-parsing its string form is
+# culture-dependent (e.g. en-IN reads 10/09 as 10 Sep) and falsely reports a stale heartbeat.
+$heartbeat = $session.heartbeatUtc
+$heartbeat = if ($heartbeat -is [datetime]) { [DateTimeOffset]$heartbeat.ToUniversalTime() } else { [DateTimeOffset]::Parse([string]$heartbeat, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal) }
+if ($session.status -ne 'ready' -or ([DateTimeOffset]::UtcNow - $heartbeat).TotalSeconds -gt 10) {
     throw 'Bridge is not responding: heartbeat stale or game stopped.'
 }
 $arguments = $ArgsJson | ConvertFrom-Json
