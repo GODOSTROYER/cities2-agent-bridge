@@ -138,6 +138,10 @@ internal static class ServiceSignalsTests
         Check(ServiceSignals.PersistencePoints(1, 70000) == 2, "a single long-lived icon adds two points and still needs another signal");
         Check(ServiceSignals.PersistencePoints(0, 999999) == 0, "no icons, no points");
 
+        Check(DevTreeRules.CanBuy(false, true, true, 2, 5) == null, "an open node with met requirements and enough points can be bought");
+        Check(DevTreeRules.CanBuy(true, true, true, 2, 5) == "already_bought" && DevTreeRules.CanBuy(false, false, true, 2, 5) == "service_locked", "bought nodes and locked services are refused");
+        Check(DevTreeRules.CanBuy(false, true, false, 2, 5) == "requirement_missing" && DevTreeRules.CanBuy(false, true, true, 6, 5) == "not_enough_points", "missing requirement and missing points are refused");
+
         return count;
     }
 }

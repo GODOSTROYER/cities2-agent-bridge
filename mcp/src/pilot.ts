@@ -7,21 +7,34 @@ import { blockingNeeds, RESERVE } from './budget.ts';
 
 export interface PilotAction { tool: string; args: Record<string, any>; why: string; key: string }
 export interface PilotPlan { actions: PilotAction[]; attention: string[] }
-export interface PilotMemo { last: Record<string, number>; backoff: Record<string, number>; wantTile?: boolean; milestone?: number }
+export interface PilotMemo { last: Record<string, number>; backoff: Record<string, number>; wantTile?: boolean; milestone?: number; turn?: number; lockedZones?: string[] }
 
 const MIN = 60_000;
 const due = (memo: PilotMemo, key: string, now: number, everyMin: number) => now - (memo.last[key] ?? 0) >= everyMin * MIN && now >= (memo.backoff[key] ?? 0);
 const JOBS = ['com', 'off', 'ind'];
 
 // Which zone to grow, by the standing rules: jobs first; housing only under 10% unemployment.
-export function growthZone(demand: Record<string, any> | undefined, unemployment: number): { zone: string; demand: number } | null {
+export function growthZone(demand: Record<string, any> | undefined, unemployment: number, turn = 0, locked: string[] = []): { zone: string; demand: number } | null {
   const d = demand ?? {}; const v = (k: string) => Number(d[k] ?? 0);
   const jobs = [{ zone: 'com', demand: v('c') }, { zone: 'off', demand: v('o') }, { zone: 'ind', demand: v('i') }].filter(z => z.demand >= 20).sort((a, b) => b.demand - a.demand);
   if (unemployment >= 10) return jobs[0] ?? null;
-  const homes = [{ zone: 'resmed', demand: v('rM') }, { zone: 'res', demand: v('rL') }].filter(z => z.demand >= 20).sort((a, b) => b.demand - a.demand);
+  // Housing: the densities take turns (high, row, mixed, medium, low) so the city scales up
+  // without becoming one building type; a density with weak demand or a locked zone is skipped.
+  const order = [{ zone: 'reshigh', demand: v('rH') }, { zone: 'resmed', demand: v('rM') }, { zone: 'mixed', demand: v('rM') }, { zone: 'resmid', demand: v('rM') }, { zone: 'res', demand: v('rL') }].filter(z => z.demand >= 20 && !locked.includes(z.zone));
+  const homes = order.length ? [order[turn % order.length]] : [];
   // Under 10%: the strongest demand wins; a job zone at 60+ goes before housing so jobs keep pace.
   if (jobs[0] && (jobs[0].demand >= 60 || !homes[0])) return jobs[0];
   return homes[0] ?? jobs[0] ?? null;
+}
+
+// What to buy with development points, in the order that unblocks growth: education (college for
+// the college-level vacancies), transport (bus lines), roads (wider roads, highways), then the
+// services whose needs escalate most (health, deathcare, garbage, fire, police), then anything.
+export const WISH: RegExp[] = [/college/i, /universit/i, /bus/i, /road|highway|roundabout|bridge/i, /hospital|health|clinic/i, /cremat|death/i, /recycl|incinerat|garbage/i, /fire/i, /police/i, /park|transport|train|tram|subway|taxi/i, /telecom|server|post|welfare/i, /./];
+export function wishedNode(nodes: Record<string, any>[], points: number): Record<string, any> | null {
+  const open = nodes.filter(n => n.canBuy && Number(n.cost ?? 0) <= points);
+  for (const rx of WISH) { const hit = open.filter(n => rx.test(String(n.name)) || rx.test(String(n.service ?? ''))).sort((a, b) => Number(a.cost) - Number(b.cost))[0]; if (hit) return hit; }
+  return null;
 }
 
 export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, reserve = RESERVE): PilotPlan {
@@ -49,11 +62,18 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   //    the reserve rule is enforced by grow / buy_tile themselves.
   if (!blockers.length) {
     if (memo.wantTile && due(memo, 'tile', now, 6)) push('tile', 'buy_tile', { n: 1 }, 'no free site left for the last growth step');
-    const pick = growthZone(snap.demand, unemp);
+    const pick = growthZone(snap.demand, unemp, memo.turn ?? 0, memo.lockedZones ?? []);
     if (pick && due(memo, 'grow', now, 2)) {
       const big = cash >= reserve + 300_000;
       push('grow', 'grow', { zone: pick.zone, cols: big ? 4 : 3, rows: big ? 3 : 2 }, `${pick.zone} demand ${pick.demand}, unemployment ${unemp}%`);
     }
+  }
+
+  // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
+  const tree = snap.devTree;
+  if (tree && Number(tree.points ?? 0) > 0 && due(memo, 'unlock', now, 1)) {
+    const want = wishedNode(tree.nodes ?? [], Number(tree.points));
+    if (want) push('unlock', 'dev_tree', { unlock: want.name }, `development points ${tree.points}: ${want.name} (${want.service}) costs ${want.cost}`);
   }
 
   // 4. Housekeeping.
@@ -68,6 +88,8 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
 export function learn(memo: PilotMemo, action: PilotAction, result: Record<string, any>, now: number): string {
   memo.last[action.key] = now; const reason = String(result?.reason ?? result?.error ?? '');
   if (action.key === 'grow') {
+    memo.turn = (memo.turn ?? 0) + 1;
+    if (/locked|unknown_zone|zone_prefab/i.test(reason)) { memo.lockedZones = [...new Set([...(memo.lockedZones ?? []), String(action.args.zone)])]; return `zone ${action.args.zone} is locked: skipped from now on`; }
     if (result?.ok) { memo.wantTile = false; return `built ${action.args.zone} ${result.site?.cols ?? action.args.cols}x${result.site?.rows ?? action.args.rows} for ${result.cost ?? '?'}`; }
     if (reason === 'no_free_site') { memo.wantTile = true; memo.backoff.grow = now + 3 * MIN; return 'no free site: will buy a tile'; }
     if (reason === 'below_reserve' || reason === 'not_enough_money') { memo.backoff.grow = now + 6 * MIN; return `growth waits: ${reason}`; }
@@ -79,6 +101,7 @@ export function learn(memo: PilotMemo, action: PilotAction, result: Record<strin
   }
   if (action.key === 'services') { const placed = (result?.placed ?? []).map((p: any) => p.prefab); return placed.length ? `services placed ${placed.join(', ')}` : ''; }
   if (action.key === 'traffic') { const n = (result?.jamIcons?.upgraded ?? result?.upgraded ?? []).filter((u: any) => u.status === 'complete').length; return n ? `widened ${n} roads` : ''; }
+  if (action.key === 'unlock') { if (!result?.ok) memo.backoff.unlock = now + 10 * MIN; return result?.ok ? `unlocked ${result.name} (${result.cost} points)` : `unlock refused: ${reason}`; }
   if (action.key === 'tax') return result?.applied ? `tax ${result.area} ${result.from}->${result.to}` : '';
   if (action.key === 'ruins') return result?.cleared ? `cleared ${result.cleared} ruins` : '';
   if (action.key === 'save') return result?.exit === 0 ? 'saved' : `save exit ${result?.exit}`;

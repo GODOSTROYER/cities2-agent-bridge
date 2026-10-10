@@ -84,6 +84,13 @@
     "undocumented": true
   },
   {
+    "name": "dev_tree",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "diagnose_connections",
     "description": "",
     "pausing": true,
@@ -395,6 +402,13 @@
     "name": "project",
     "description": "",
     "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "purchase_dev_node",
+    "description": "",
+    "pausing": true,
     "control": false,
     "undocumented": true
   },

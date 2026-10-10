@@ -46,6 +46,7 @@ while (!existsSync(join(dir, 'STOP'))) {
     const snap = await tool('snapshot', {}, 60_000);
     if (snap.error || !snap.city) throw new Error(`snapshot_failed:${snap.error ?? 'no city'}`);
     failures = 0;
+    try { snap.devTree = await tool('dev_tree', {}, 30_000); } catch { /* optional */ }
     const now = Date.now(); const plan = decide(snap, memo, now); attention = [...plan.attention, ...sticky.slice(-4)];
     const milestone = Number(snap.milestone?.achieved ?? NaN); const reached = memo.milestone !== undefined && milestone > memo.milestone;
     for (const a of plan.actions) {

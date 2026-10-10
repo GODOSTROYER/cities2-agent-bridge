@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate, devTree, unlockNode } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
@@ -66,8 +66,8 @@ function uiView(u: any) {
   };
 }
 
-const zoneEnum = z.enum(['res', 'resmed', 'com', 'ind', 'off']);
-const growZoneEnum = z.enum(['res', 'resmed', 'com', 'ind', 'off']);
+const zoneEnum = z.enum(['res', 'resmed', 'resmid', 'reshigh', 'mixed', 'com', 'ind', 'off']);
+const growZoneEnum = z.enum(['res', 'resmed', 'resmid', 'reshigh', 'mixed', 'com', 'ind', 'off']);
 
 server.registerTool('snapshot', {
   description: 'Cached city state (about 1 s old) without pausing the game; safe during a run. brief=true returns only the decision fields (~1/3 of the tokens): money, net, pop, demand, unemployment, vacancies, utilities %, escalated needs, milestone, blocker.',
@@ -422,6 +422,20 @@ server.registerTool('build_arterial', {
   } catch (e) { return fail(e); }
 });
 
+server.registerTool('dev_tree', {
+  description: 'Development tree: points available and the nodes that can be bought now (all=true lists every node with why it cannot be bought). unlock=<node name> buys that node through the game and confirms it; many buildings (college, bus lines, wider roads) stay locked until their node is bought.',
+  inputSchema: { all: z.boolean().optional(), unlock: z.string().optional() },
+}, async (a) => {
+  try {
+    if (!a.unlock) return ok(await devTree(!!a.all));
+    const cleared = await ensureClear();
+    assertIdle();
+    const r = await unlockNode(a.unlock);
+    if (r.ok) await recordAction({ need: 'unlock', tool: 'dev_tree', detail: `${r.name} (${r.service}) for ${r.cost} points` });
+    return ok(withCleared(r, cleared));
+  } catch (e) { return fail(e); }
+});
+
 server.registerTool('relocate_building', {
   description: 'Moves a placed building by id (index/version from notifications or the pollution_sources query) to a roadside site near (x,z). For a noisy or polluting building the site rules apply automatically: no homes within 300 m and, for air polluters, no homes downwind. Use it for noise or air-pollution icon clusters whose source is a turbine or plant, instead of rezoning the homes. plan=true only reports the site.',
   inputSchema: { index: z.number().int(), version: z.number().int(), x: z.number(), z: z.number(), radius: z.number().min(50).max(2000).optional(), plan: z.boolean().optional() },
@@ -512,7 +526,7 @@ server.registerTool('query', {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'utility_check', 'network_ends', 'pollution_sources', 'find_free_lots', 'find_roadside_lots',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'dev_tree', 'utility_check', 'network_ends', 'pollution_sources', 'find_free_lots', 'find_roadside_lots',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),

@@ -1,5 +1,5 @@
 // Offline checks for the rule loop (pure decide / learn / progressBlock).
-import { decide, learn, growthZone, progressBlock } from '../src/pilot.ts';
+import { decide, learn, growthZone, progressBlock, wishedNode } from '../src/pilot.ts';
 import type { PilotMemo } from '../src/pilot.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 const T = 1_000_000_000_000; const MIN = 60_000;
@@ -9,7 +9,9 @@ const keys = (snap: any, memo = fresh(), now = T) => decide(snap, memo, now).act
 
 check(growthZone(base.demand, 14.6) === null, 'the live case: 14.6% unemployment and no job zone with demand means no growth (housing is held)');
 check(growthZone({ ...base.demand, o: 85 }, 17)!.zone === 'off', 'above 10% unemployment the strongest job zone is grown');
-check(growthZone({ rL: 100, rM: 100, c: 30 }, 6)!.zone === 'resmed', 'under 10% housing is grown, medium density first when its demand is as strong');
+check(growthZone({ rL: 100, rM: 100, c: 30 }, 6)!.zone === 'resmed', 'under 10% housing is grown, row houses first when high density has no demand');
+check(growthZone({ rL: 100, rM: 100, rH: 100 }, 6, 0)!.zone === 'reshigh' && growthZone({ rL: 100, rM: 100, rH: 100 }, 6, 1)!.zone === 'resmed' && growthZone({ rL: 100, rM: 100, rH: 100 }, 6, 2)!.zone === 'mixed' && growthZone({ rL: 100, rM: 100, rH: 100 }, 6, 4)!.zone === 'res', 'the housing densities take turns');
+check(growthZone({ rL: 100, rM: 100, rH: 100 }, 6, 0, ['reshigh'])!.zone === 'resmed', 'a locked zone is skipped');
 check(growthZone({ rL: 100, rM: 10, c: 30 }, 6)!.zone === 'res', 'low density when medium has no demand');
 check(growthZone({ rL: 100, rM: 100, c: 70 }, 6)!.zone === 'com', 'a job zone at 60+ goes before housing so jobs keep pace');
 check(growthZone({ rL: 10, rM: 5, c: 10, o: 0, i: 0 }, 4) === null, 'no demand, no growth');
@@ -22,7 +24,7 @@ check(keys(base, memo, T + MIN).length === 0, 'nothing is repeated one minute la
 check(keys(base, memo, T + 5 * MIN).join() === 'services', 'services again after 4 minutes');
 check(keys({ ...base, jobs: { unemp: 6 } }, memo, T + MIN).join() === 'grow', 'under 10% unemployment housing growth starts');
 let plan = decide({ ...base, jobs: { unemp: 6 }, city: { money: 1_400_000 } }, memo, T + MIN);
-check(plan.actions[0].args.cols === 4 && plan.actions[0].args.rows === 3 && plan.actions[0].args.zone === 'resmed', 'with 300k above the reserve the district is 4x3');
+check(plan.actions[0].args.cols === 4 && plan.actions[0].args.rows === 3 && plan.actions[0].args.zone === 'reshigh', 'with 300k above the reserve the district is 4x3');
 
 // Utilities and loose ends are immediate: no growth, and the agent is told where.
 plan = decide({ ...base, jobs: { unemp: 6 }, needs: { power: { unserved: 65, action: 'connect', say: 'connect district at (-1512,-175)', at: [-1512, -175] } } }, memo, T + MIN);
@@ -49,6 +51,13 @@ check(!decide({ ...base, jobs: { unemp: 6 } }, m4, T + 3 * MIN).actions.some(a =
 check(learn(fresh(), g, { ok: true, cost: 7904, site: { cols: 3, rows: 2 } }, T) === 'built res 3x2 for 7904', 'a built district is summarised');
 check(learn(fresh(), { key: 'services', tool: 'fix_services', args: {}, why: '' }, { placed: [{ prefab: 'PostOffice02' }] }, T) === 'services placed PostOffice02', 'placed services are summarised');
 
+const nodes = [{ name: 'Crematorium', service: 'Deathcare', cost: 2, canBuy: true }, { name: 'College', service: 'Education', cost: 3, canBuy: true }, { name: 'University', service: 'Education', cost: 5, canBuy: false }, { name: 'Bus Depot', service: 'Transportation', cost: 1, canBuy: true }];
+check(wishedNode(nodes, 4)!.name === 'College', 'development points go to the college first');
+check(wishedNode(nodes, 2)!.name === 'Bus Depot', 'when the college is too dear the next wish that fits is bought');
+check(wishedNode(nodes, 0) === null && wishedNode([], 9) === null, 'no points or no open node buys nothing');
+const mu = fresh(); mu.last = { services: T, traffic: T, tax: T, save: T };
+check(decide({ ...base, devTree: { points: 4, nodes } }, mu, T + MIN).actions.some(a => a.key === 'unlock' && a.args.unlock === 'College'), 'the loop spends development points');
+const ml = fresh(); check(learn(ml, { key: 'grow', tool: 'grow', args: { zone: 'reshigh' }, why: '' }, { ok: false, reason: 'zone_prefab_locked' }, T).includes('locked') && ml.lockedZones![0] === 'reshigh', 'a locked zone is remembered');
 const block = progressBlock(base, ['21:10 built off 3x2 for 9216'], ['keep growing'], ['power: connect district at (x,z)'], '2026-10-11 02:00 UTC');
 check(block.split('\n').length <= 25 && block.includes('pop 10840') && block.includes('TrafficPenalty -3.3') && block.includes('Tax -5 (exempt)') && block.includes('ATTENTION'), 'the progress block is short and carries the fields the coordinator asked for');
 process.exit(failed ? 1 : 0);

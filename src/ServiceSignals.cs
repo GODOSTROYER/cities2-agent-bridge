@@ -156,4 +156,11 @@ namespace CitiesIIAgentBridge
         internal static string Verdict(bool linked, int buildings, int unserved)
             => !linked ? "not_connected" : unserved > 0 ? "unserved" : buildings == 0 ? "connected_no_buildings_yet" : "served";
     }
+
+    // Pure development-tree rule (unit-tested): why a node cannot be bought, or null.
+    internal static class DevTreeRules
+    {
+        internal static string CanBuy(bool bought, bool serviceOpen, bool requirementsMet, int cost, int points)
+            => bought ? "already_bought" : !serviceOpen ? "service_locked" : !requirementsMet ? "requirement_missing" : cost > points ? "not_enough_points" : null;
+    }
 }

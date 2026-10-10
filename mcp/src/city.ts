@@ -6,7 +6,8 @@ import type { Json } from './bridge.ts';
 import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater } from './budget.ts';
 import type { SpendClass } from './budget.ts';
 
-export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
+export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', resmid: 'NA Residential Medium', reshigh: 'NA Residential High', mixed: 'NA Residential Mixed', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
+const HOUSING = ['res', 'resmed', 'resmid', 'reshigh', 'mixed'];
 const ROAD_CAP = 8000;        // per road (a full grid line up to ~900 m); Small Road costs ~4 per metre
 const now = () => Date.now();
 export function quotedCost(quoted: unknown, cashBefore: number, cashAfter: number): { cost: number; costSource: 'quoted' | 'cash_delta' } {
@@ -121,6 +122,8 @@ export async function recheckDistricts(): Promise<Json[]> {
 export async function buildGrid(o: GridOptions): Promise<Json> {
   const phases: Record<string, number> = {}; let t = now();
   const zoneName = ZONES[o.zone]; if (!zoneName) return { ok: false, reason: `unknown_zone:${o.zone}` };
+  // A locked zone must be refused BEFORE any road is built (zoning would fail afterwards).
+  const zonePrefab = await prefab(zoneName, 'zone'); if (!zonePrefab.found || zonePrefab.locked) return { ok: false, reason: 'zone_prefab_locked', zone: o.zone };
   const [plan, city0] = await multi([{ command: 'plan_grid', args: { x: o.x, z: o.z, cols: o.cols, rows: o.rows, road: o.road ?? 'Small Road' } }, { command: 'get_city_state' }]);
   phases.plan = now() - t; t = now();
   if (plan.blocked) return { ok: false, reason: 'grid_blocked', lotCells: plan.lotCells, outsideCells: plan.outsideCells, phases };
@@ -262,7 +265,7 @@ export interface GrowOptions { zone?: string; cols?: number; rows?: number; plan
 export async function grow(o: GrowOptions): Promise<Json> {
   const phases: Record<string, number> = {}; let t = now();
   const snap = await callOk('get_snapshot', {}, 10); const d = snap.demand ?? {}; const unemp = Number(snap.jobs?.unemp ?? 0);
-  let choices = [{ k: 'res', v: d.rL }, { k: 'resmed', v: d.rM }, { k: 'com', v: d.c }, { k: 'ind', v: d.i }, { k: 'off', v: d.o }].map(c => ({ k: c.k, v: Number(c.v ?? 0) })).sort((a, b) => b.v - a.v);
+  let choices = [{ k: 'res', v: d.rL }, { k: 'resmed', v: d.rM }, { k: 'resmid', v: d.rM }, { k: 'mixed', v: d.rM }, { k: 'reshigh', v: d.rH }, { k: 'com', v: d.c }, { k: 'ind', v: d.i }, { k: 'off', v: d.o }].map(c => ({ k: c.k, v: Number(c.v ?? 0) })).sort((a, b) => b.v - a.v);
   const jobs = ['com', 'ind', 'off'];
   if (unemp > 10) choices = [...choices.filter(c => jobs.includes(c.k)), ...choices.filter(c => !jobs.includes(c.k))];
   if (o.zone) choices = choices.filter(c => c.k === o.zone);
@@ -280,12 +283,12 @@ export async function grow(o: GrowOptions): Promise<Json> {
   const sizes = ([want, [2, 2], [2, 1], [1, 1]] as [number, number][]).filter((s, i, all) => s[0] * s[1] <= want[0] * want[1] && all.findIndex(x => x[0] === s[0] && x[1] === s[1]) === i);
   const tried: string[] = [];
   for (const [cols, rows] of sizes) {
-    const lots = await callOk('find_free_lots', { width: cols * 110, depth: rows * 110, count: 4, zone: pick.k }, 30);
+    const lots = await callOk('find_free_lots', { width: cols * 110, depth: rows * 110, count: 4, zone: HOUSING.includes(pick.k) ? 'res' : pick.k }, 30);
     phases[`sites${cols}x${rows}`] = now() - t; t = now();
     for (const site of lots.sites ?? []) {
       // Quality floor for housing: never next to industry or on polluted ground (the score only
       // ranks what is free; when everything free is bad, buy land elsewhere instead).
-      if ((pick.k === 'res' || pick.k === 'resmed') && (Number(site.toIndustry) < 250 || Number(site.pollution) > 8000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
+      if (HOUSING.includes(pick.k) && (Number(site.toIndustry) < 250 || Number(site.pollution) > 8000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
       const estimate = Math.round((cols * (rows + 1) + rows * (cols + 1)) * 110 * 5);
       const spend = spendVerdict({ cash, cost: estimate, cls, reserve: o.reserve });
       if (!spend.ok && !o.plan) return { ok: false, reason: spend.reason, cls, cash, estimate, reserve: spend.reserve, zone: pick.k, hint: 'owner policy: bank cash to the reserve before new districts; pass reserve or cls to override for a flagged need' };
@@ -404,6 +407,21 @@ export async function relocate(index: number, version: number, x: number, z: num
     const u = at ? await call('utility_check', { x: at.x, z: at.z, radius: 120 }, 20) : null;
     const served = utilityOutcome(u?.ok ? u.result : undefined);
     return { ok: served.ok || served.reason === 'buildings_unserved', ...(served.ok ? {} : { partial: true, reason: served.reason, missing: served.missing }), prefab: name, at, toHomes: cands[0].toHomes, polluter: lots.polluter, ...quotedCost(done.previewCost, Number(city0.money), money1), phases: { plan: t1 - t, move: now() - t1 } };
+  });
+}
+
+// Development tree: points from milestones buy nodes that unlock buildings (college, bus lines,
+// wider roads). The purchase goes through the game's own system; the node is re-read to confirm.
+export async function devTree(all = false): Promise<Json> { return callOk('dev_tree', { all }, 15); }
+export async function unlockNode(name: string): Promise<Json> {
+  return mutate(async () => {
+    const r = await call('purchase_dev_node', { name }, 15);
+    if (!r.ok) return { ok: false, reason: String(r.error?.message ?? r.error ?? 'refused') };
+    for (let k = 0; k < 10; k++) {
+      await sleep(200); const t = await callOk('dev_tree', { all: true }, 15); const node = (t.nodes ?? []).find((n: Json) => n.name === r.result.name);
+      if (node?.bought) { invalidatePrefabCache(); return { ok: true, name: node.name, service: node.service, cost: node.cost, pointsLeft: t.points }; }
+    }
+    return { ok: false, reason: 'purchase_not_observed', name };
   });
 }
 
