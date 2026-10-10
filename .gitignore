@@ -3,3 +3,7 @@ artifacts/releases/
 rebuilt/
 journals/
 mcp/node_modules/
+artifacts/*.pdb
+artifacts/compile.rsp
+tests/bin/
+tests/obj/
