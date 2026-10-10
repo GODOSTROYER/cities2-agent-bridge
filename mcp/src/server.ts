@@ -326,12 +326,12 @@ server.registerTool('services', {
 
 server.registerTool('fix_services', {
   description: 'Builds city services that are escalated (snapshot needs with action=build), missing, or uncovered by native coverage, plus utilities near capacity, before growth. Escalated needs override the cash floor and upkeep discipline. plan=true lists what it would build.',
-  inputSchema: { maxPlacements: z.number().int().min(1).max(8).default(2), plan: z.boolean().optional() },
+  inputSchema: { maxPlacements: z.number().int().min(1).max(8).default(2), plan: z.boolean().optional(), reserve: z.number().int().min(0).optional().describe('cash to keep (default 200000); critical utilities and very_high factors ignore it') },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await fixServices({ maxPlacements: a.maxPlacements, plan: a.plan }), cleared));
+    return ok(withCleared(await fixServices({ maxPlacements: a.maxPlacements, plan: a.plan, reserve: a.reserve }), cleared));
   } catch (e) { return fail(e); }
 });
 

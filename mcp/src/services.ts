@@ -227,7 +227,7 @@ function parseClusters(res: Json): Cluster[] | undefined {
     .map((c: Json): Cluster => [Number(c[0]), Number(c[1]), Number(c[2])]);
 }
 
-export async function fixServices(opts: { maxPlacements?: number; plan?: boolean } = {}): Promise<Json> {
+export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number } = {}): Promise<Json> {
   const t0 = Date.now();
   const [snap, buildings, homeClusters] = await multi([
     { command: 'get_snapshot' }, { command: 'service_buildings' },
@@ -275,11 +275,22 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   const failed: Json[] = [];
   let cooldownError: string | undefined;
 
-  for (const n of needs.slice(0, maxPlacements)) {
+  // Cash reserve (owner rule: keep about 200k): a need that is neither a critical utility nor a
+  // very_high factor is deferred when its construction cost would take cash below the reserve.
+  const reserve = Number.isFinite(opts.reserve) ? Number(opts.reserve) : 200000;
+  let cash = Number(snap?.city?.money ?? 0); const deferred: Json[] = []; let placedCount = 0;
+  for (const n of needs) {
+    if (placedCount >= maxPlacements) break;
     let settled = false; let lastPrefab = n.prefabs[0]; let lastReason = 'no_prefab_tried';
+    const mustAct = n.critical || snap?.needs?.[n.need]?.priority === 'very_high';
     for (const prefab of n.prefabs) {
       lastPrefab = prefab;
+      if (!mustAct) {
+        const quote = await placeService(prefab, n.x, n.z, 600, undefined, true);
+        if (quote.ok && cash - Number(quote.construction ?? 0) < reserve) { deferred.push({ t: n.t, prefab, construction: quote.construction, why: `would leave ${cash - Number(quote.construction ?? 0)} cash, reserve is ${reserve}` }); settled = true; break; }
+      }
       const r = await placeService(prefab, n.x, n.z, 600);
+      if (r.ok) { cash -= Number(r.cost ?? r.construction ?? 0); placedCount++; }
       if (r.ok) {
         placed.push({ t: n.t, prefab, cost: r.cost, monthlyUpkeep: r.monthlyUpkeep, at: r.at });
         await recordAction({ need: n.need, tool: 'fix_services', detail: `${prefab}@${r.at?.x},${r.at?.z}`, ...(typeof snap?.needs?.[n.need]?.factor === 'number' ? { factor: snap.needs[n.need].factor } : {}) });
@@ -298,7 +309,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
     if (!settled) failed.push({ t: n.t, prefab: lastPrefab, failed: `no_prefab_available: ${lastReason}` });
   }
 
-  const pending = needs.slice(maxPlacements).map(n => ({ t: n.t, why: n.why }));
+  const pending = needs.filter(n => !placed.some(p => p.t === n.t) && !failed.some(f => f.t === n.t) && !deferred.some(d => d.t === n.t)).map(n => ({ t: n.t, why: n.why }));
   return {
     happiness,
     placed,
@@ -307,6 +318,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
     cost: placed.reduce((s, p) => s + Number(p.cost ?? 0), 0),
     monthlyUpkeep: placed.reduce((s, p) => s + Number(p.monthlyUpkeep ?? 0), 0),
     ...(cooldownError ? { cooldownError } : {}),
+    ...(deferred.length ? { deferred } : {}),
     ...(investigate.length ? { investigate } : {}), ...(waiting.length ? { waiting } : {}),
     ms: Date.now() - t0,
   };
