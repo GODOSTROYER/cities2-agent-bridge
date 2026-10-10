@@ -69,6 +69,15 @@ namespace CitiesIIAgentBridge
         {
             var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
             string filter = (string)args["type"]; int top = Math.Max(1, Math.Min(100, (int?)args["top"] ?? 20));
+            if ((bool?)args["catalog"] == true)
+            {
+                var names = new List<string>();
+                using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<NotificationIconData>()))
+                using (var es = q.ToEntityArray(Allocator.Temp))
+                    foreach (var e in es) names.Add(ps.GetPrefabName(e) ?? "?");
+                names.Sort(StringComparer.Ordinal);
+                return new JObject { ["catalog"] = new JObject(names.Distinct().Select(n => new JProperty(n, IsProblemIcon(n) ? ServiceSignals.NeedForIcon(n) : "not_a_problem"))), ["count"] = names.Count, ["unmapped"] = new JArray(names.Distinct().Where(n => IsProblemIcon(n) && ServiceSignals.NeedForIcon(n) == "inspect")) };
+            }
             var owned = OwnedTiles(em);
             var icons = ReadIcons(w).Where(i => owned.Contains(i.X, i.Z)).ToList(); var items = new JArray();
             foreach (var icon in icons.Where(i => filter == null || i.Type.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0).Take(top))
@@ -86,8 +95,16 @@ namespace CitiesIIAgentBridge
             return new JObject
             {
                 ["counts"] = new JObject(icons.GroupBy(i => i.Type).OrderByDescending(g => g.Count()).Select(g => new JProperty(g.Key, g.Count()))),
+                ["clusters"] = new JArray(IconClusters(icons, 16).Select(c => new JArray(c.type, c.n, c.x, c.z, c.need))),
                 ["total"] = icons.Count, ["items"] = items, ["citySession"] = citySession
             };
+        }
+
+        private static List<(string type, int n, double x, double z, string need)> IconClusters(List<IconRow> icons, int top)
+        {
+            return icons.GroupBy(i => i.Type)
+                .SelectMany(g => PointClusters.Densest(g.Select(i => ((double)i.X, (double)i.Z)), 300, 2).Select(c => (type: g.Key, n: c.n, x: Math.Round(c.x), z: Math.Round(c.z), need: ServiceSignals.NeedForIcon(g.Key))))
+                .OrderByDescending(c => c.n).Take(top).ToList();
         }
 
         // Snapshot part: counts of the most frequent problem icons, the traffic-jam points, and a
@@ -97,6 +114,21 @@ namespace CitiesIIAgentBridge
             var ownedLand = OwnedTiles(w.EntityManager);
             var icons = ReadIcons(w).Where(i => ownedLand.Contains(i.X, i.Z)).ToList(); var counts = icons.GroupBy(i => i.Type).ToDictionary(g => g.Key, g => g.Count());
             snapshotOut["icons"] = new JObject(counts.OrderByDescending(p => p.Value).Take(6).Select(p => new JProperty(p.Key, p.Value)));
+            // Rule E: where the icons are. Each row is [type, count, x, z, need]: the densest 300 m
+            // cells per type, largest first, so "No Electricity x65 at (x,z)" is one line the
+            // play loop can act on.
+            snapshotOut["iconClusters"] = new JArray(IconClusters(icons, 8).Select(c => new JArray(c.type, c.n, c.x, c.z, c.need)));
+            var broken = icons.Where(i => ServiceSignals.IsNetworkWarning(i.Type)).ToList();
+            if (broken.Count > 0)
+            {
+                var needs = snapshotOut["needs"] as JObject; if (needs == null) snapshotOut["needs"] = needs = new JObject();
+                needs["network"] = new JObject
+                {
+                    ["icons"] = broken.Count, ["at"] = new JArray(broken.Take(5).Select(i => new JArray(i.Type, Math.Round(i.X), Math.Round(i.Z)))),
+                    ["score"] = (ServiceSignals.Threshold + broken.Count) + "/" + ServiceSignals.Threshold, ["action"] = "connect", ["priority"] = "very_high",
+                    ["say"] = "join or remove the loose end at each position (build_line to the nearest network, or remove_road)"
+                };
+            }
             var jams = icons.Where(i => i.Type.IndexOf("Traffic", StringComparison.OrdinalIgnoreCase) >= 0).Take(3).Select(i => new JArray(Math.Round(i.X), Math.Round(i.Z)));
             if (jams.Any()) snapshotOut["jams"] = new JArray(jams);
             if (iconCountsBefore != null && emit)

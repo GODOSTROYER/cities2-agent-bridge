@@ -260,4 +260,54 @@ namespace CitiesIIAgentBridge
             int idx = (int)Math.Round(p * (sorted.Count - 1)); return sorted[Math.Max(0, Math.Min(sorted.Count - 1, idx))];
         }
     }
+
+    // Pure site rules (rule D): where homes must not go and where polluters must not go.
+    // Thresholds come from the live city: homes showed the noise icon from a noise-map value of
+    // about 6,000 and the air-pollution icon from about 5,200; clean streets read under 1,000.
+    internal static class SiteRules
+    {
+        public const double NoiseMax = 4000, AirMax = 3000, GroundMax = 3000;
+        public const double NoiseSourceClear = 250, PlumeLength = 700, PlumeCos = 0.82, PolluterHomeClear = 300;
+        private static readonly System.Text.RegularExpressions.Regex AirName = new System.Text.RegularExpressions.Regex("PowerPlant|Coal|Gas|Landfill|Incinerat|Sewage|Oil|Ore|Industrial", System.Text.RegularExpressions.RegexOptions.Compiled);
+        private static readonly System.Text.RegularExpressions.Regex NoiseName = new System.Text.RegularExpressions.Regex("WindTurbine|PowerPlant|Incinerat|Landfill|Airport|Harbor|TrainDepot|CargoTrain|TrainYard", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // The prefab's own PollutionData decides when it is known (live values: coal plant 30,000
+        // air and noise, wind turbine 20,000 noise, sewage outlet 5,000 each, petrol station 0):
+        // 5,000 or more is a source. Names are only the fallback for a prefab without data, and
+        // "Gas" must not catch petrol stations.
+        public const double SourceMin = 5000;
+        public static bool IsAirSource(string prefab, bool industrial, double air = -1)
+            => industrial || (air >= 0 ? air >= SourceMin : prefab != null && AirName.IsMatch(prefab) && prefab.IndexOf("WindTurbine", StringComparison.Ordinal) < 0 && prefab.IndexOf("GasStation", StringComparison.Ordinal) < 0);
+        public static bool IsNoiseSource(string prefab, double noise = -1) => noise >= 0 ? noise >= SourceMin : prefab != null && NoiseName.IsMatch(prefab);
+
+        // True when the target lies in the plume the wind (wx, wz) blows from the source: within
+        // `length` metres and inside a cone of about 35 degrees either side of the wind.
+        public static bool Downwind(double sx, double sz, double wx, double wz, double tx, double tz, double length = PlumeLength)
+        {
+            double dx = tx - sx, dz = tz - sz, d = Math.Sqrt(dx * dx + dz * dz), wl = Math.Sqrt(wx * wx + wz * wz);
+            if (d > length) return false;
+            if (d < 60) return true;
+            if (wl < 1e-4) return false;
+            return (dx * wx + dz * wz) / (d * wl) >= PlumeCos;
+        }
+
+        // Why a residential site is refused, or null when it is acceptable.
+        public static string ResidentialReject(double air, double ground, double noise, double toNoiseSource, bool downwindOfAirSource)
+        {
+            if (noise >= NoiseMax) return "noise";
+            if (toNoiseSource < NoiseSourceClear) return "near_noise_source";
+            if (air >= AirMax) return "air";
+            if (ground >= GroundMax) return "ground";
+            if (downwindOfAirSource) return "downwind";
+            return null;
+        }
+
+        // Why a polluting or noisy building is refused at a site, or null.
+        public static string PolluterReject(double toHomes, int homesDownwind, bool airSource)
+        {
+            if (toHomes < PolluterHomeClear) return "near_homes";
+            if (airSource && homesDownwind > 0) return "homes_downwind";
+            return null;
+        }
+    }
 }

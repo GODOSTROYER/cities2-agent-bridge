@@ -139,6 +139,7 @@ namespace CitiesIIAgentBridge
                 if (em.HasComponent<IndustrialProperty>(e) || PolluterName.IsMatch(name)) polluters.Add(p);
             }
             var highway = edges.Where(e => e.Highway).SelectMany(e => new[] { e.Curve.a.xz, e.Curve.d.xz }).ToList();
+            var land = ReadLandUse(w); bool residential = zone == "res" || zone == "resmed"; var siteRejects = new SortedDictionary<string, int>();
             var terrain = w.GetExistingSystemManaged<TerrainSystem>().GetHeightData();
             var water = w.GetExistingSystemManaged<WaterSystem>().GetSurfaceData(out var waterReady); waterReady.Complete();
             var air = w.GetExistingSystemManaged<AirPollutionSystem>().GetMap(true, out var airReady); airReady.Complete();
@@ -148,17 +149,27 @@ namespace CitiesIIAgentBridge
             var rows = new List<JObject>(); int rejectedWet = 0, rejectedRelief = 0;
             foreach (var s in finalists)
             {
-                double lo = double.MaxValue, hi = double.MinValue, pol = 0; int wet = 0;
+                double lo = double.MaxValue, hi = double.MinValue, pol = 0, airMax = 0, groundMax = 0, noiseMax = 0; int wet = 0;
                 foreach (double fx in new[] { 0, 0.5, 1 }) foreach (double fz in new[] { 0, 0.5, 1 })
                 {
                     var pos = new float3((float)(s.X + fx * width), 0, (float)(s.Z + fz * depth));
                     pos.y = TerrainUtils.SampleHeight(ref terrain, pos); lo = Math.Min(lo, pos.y); hi = Math.Max(hi, pos.y);
                     if (waterOk) { var sp = WaterUtils.ToSurfaceSpace(ref water, pos); if (sp.x >= 0 && sp.z >= 0 && sp.x < water.resolution.x && sp.z < water.resolution.z && WaterUtils.SampleDepth(ref water, pos) > 0.1f) wet++; }
-                    pol = Math.Max(pol, Math.Max(AirPollutionSystem.GetPollution(pos, air).m_Pollution, Math.Max(GroundPollutionSystem.GetPollution(pos, ground).m_Pollution, NoisePollutionSystem.GetPollution(pos, noise).m_Pollution)));
+                    airMax = Math.Max(airMax, AirPollutionSystem.GetPollution(pos, air).m_Pollution); groundMax = Math.Max(groundMax, GroundPollutionSystem.GetPollution(pos, ground).m_Pollution); noiseMax = Math.Max(noiseMax, NoisePollutionSystem.GetPollution(pos, noise).m_Pollution);
+                    pol = Math.Max(airMax, Math.Max(groundMax, noiseMax));
                 }
                 double relief = hi - lo; if (wet > 0) { rejectedWet++; continue; } if (relief > 25) { rejectedRelief++; continue; }
                 double cx = s.X + width / 2, cz = s.Z + depth / 2;
                 double dInd = MinDistance(polluters, cx, cz), dJob = MinDistance(jobs, cx, cz), dHome = MinDistance(homes, cx, cz), dHwy = MinDistance(highway, cx, cz);
+                // Site rules: homes stay out of noise (wind turbines, plants), out of polluted
+                // air and ground, and out of the plume the wind carries from plants and industry.
+                double dNoise = MinDistance(land.Noise, cx, cz); bool downwind = false;
+                if (residential)
+                {
+                    foreach (double fx in new[] { 0.0, 0.5, 1 }) foreach (double fz in new[] { 0.0, 0.5, 1 }) { dNoise = Math.Min(dNoise, MinDistance(land.Noise, s.X + fx * width, s.Z + fz * depth)); downwind |= land.DownwindOfAir(s.X + fx * width, s.Z + fz * depth); }
+                    string why = SiteRules.ResidentialReject(airMax, groundMax, noiseMax, dNoise, downwind);
+                    if (why != null) { siteRejects[why] = siteRejects.TryGetValue(why, out int had) ? had + 1 : 1; continue; }
+                }
                 double score = -s.Link / 10 - (s.ClearLink.HasValue ? 0 : 50);
                 if (zone == "res" || zone == "resmed") score += -pol / 2 + Math.Min(dInd, 600) / 20 - (dHwy < 150 ? 25 : 0) - (dJob > 1200 ? (dJob - 1200) / 40 : 0);
                 else if (zone == "com" || zone == "off") score += -(dHome > 500 ? (dHome - 500) / 20 : 0) - pol / 10;
@@ -166,7 +177,7 @@ namespace CitiesIIAgentBridge
                 var row = new JObject
                 {
                     ["x"] = Math.Round(s.X), ["z"] = Math.Round(s.Z), ["link"] = s.Link, ["clearLink"] = s.ClearLink, ["relief"] = Math.Round(relief, 1),
-                    ["pollution"] = Math.Round(pol), ["toIndustry"] = Math.Round(dInd), ["toJobs"] = Math.Round(dJob), ["toHomes"] = Math.Round(dHome), ["toHighway"] = Math.Round(dHwy), ["score"] = Math.Round(score, 1)
+                    ["pollution"] = Math.Round(pol), ["noise"] = Math.Round(noiseMax), ["air"] = Math.Round(airMax), ["toNoise"] = Math.Round(dNoise), ["toIndustry"] = Math.Round(dInd), ["toJobs"] = Math.Round(dJob), ["toHomes"] = Math.Round(dHome), ["toHighway"] = Math.Round(dHwy), ["score"] = Math.Round(score, 1)
                 };
                 if (s.HasLink) row["connector"] = new JObject { ["from"] = new JObject { ["x"] = Math.Round(s.From.X, 1), ["z"] = Math.Round(s.From.Z, 1), ["index"] = s.From.Index, ["version"] = s.From.Version, ["curvePosition"] = s.From.T }, ["to"] = new JObject { ["x"] = Math.Round(s.ToX, 1), ["z"] = Math.Round(s.ToZ, 1) } };
                 rows.Add(row);
@@ -174,7 +185,7 @@ namespace CitiesIIAgentBridge
             return new JObject
             {
                 ["sites"] = new JArray(rows.OrderByDescending(r => (double)r["score"]).Take(count)), ["width"] = width, ["depth"] = depth,
-                ["candidates"] = sites.Count, ["rejected"] = new JObject { ["wet"] = rejectedWet, ["relief"] = rejectedRelief }, ["lots"] = lots, ["roads"] = edges.Count, ["rasterMs"] = Math.Round(rasterMs), ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds),
+                ["candidates"] = sites.Count, ["rejected"] = new JObject { ["wet"] = rejectedWet, ["relief"] = rejectedRelief, ["site"] = JObject.FromObject(siteRejects) }, ["lots"] = lots, ["roads"] = edges.Count, ["rasterMs"] = Math.Round(rasterMs), ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds),
                 ["citySession"] = citySession, ["note"] = "x,z = min corner; geometric + terrain screen only; validate roads with plan/preview before building."
             };
         }
@@ -255,6 +266,12 @@ namespace CitiesIIAgentBridge
             double x = RequiredFloat(args, "x"), z = RequiredFloat(args, "z"), radius = args["radius"] == null ? 400 : RequiredFloat(args, "radius");
             int count = Math.Max(1, Math.Min(16, (int?)args["count"] ?? 16));
             if (radius < 16 || radius > 2000) throw new ArgumentException("radius_must_be_16_to_2000");
+            // Site rules for a polluting or noisy building (power plant, landfill, wind turbine):
+            // "polluter": "air" | "noise". Sites near homes are refused, sites with homes in the
+            // plume are refused for air sources; the remaining ones are ordered by distance.
+            string polluter = (string)args["polluter"];
+            if (polluter == null && prefab != null) { var pp = PrefabPollution(em, PrefabByName(w, prefab)); polluter = SiteRules.IsAirSource(prefab, false, pp.air) ? "air" : SiteRules.IsNoiseSource(prefab, pp.noise) ? "noise" : null; }
+            var land = polluter != null ? ReadLandUse(w) : null; var siteRejects = new SortedDictionary<string, int>();
             var owned = OwnedTiles(em); var edges = RoadEdges(w);
             double pad = radius + hw + hd + 120;
             var occ = BuildOccupancy(w, owned, edges, x - pad, z - pad, x + pad, z + pad, out int lots);
@@ -294,7 +311,20 @@ namespace CitiesIIAgentBridge
                         found.Add((d, new JObject { ["position"] = new JObject { ["x"] = Math.Round(cx, 1), ["z"] = Math.Round(cz, 1) }, ["rotation"] = Math.Round(rot, 2), ["roadEdge"] = NativeBuild.Id(e.Entity) }));
                     }
             }
-            return new JObject { ["candidates"] = new JArray(found.OrderBy(f => f.d).Take(count).Select(f => f.row)), ["found"] = found.Count, ["rejected"] = new JObject { ["wet"] = wet, ["steep"] = steep }, ["halfSize"] = new JArray(hw, hd), ["lots"] = lots, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
+            if (land != null)
+            {
+                var kept = new List<(double d, JObject row)>();
+                foreach (var f in found.OrderBy(f => f.d).Take(400))
+                {
+                    double cx = (double)f.row["position"]["x"], cz = (double)f.row["position"]["z"]; double toHomes = MinDistance(land.Homes, cx, cz);
+                    int downwindHomes = polluter == "air" && toHomes >= SiteRules.PolluterHomeClear ? land.HomesDownwind(cx, cz) : 0;
+                    string why = SiteRules.PolluterReject(toHomes, downwindHomes, polluter == "air");
+                    if (why != null) { siteRejects[why] = siteRejects.TryGetValue(why, out int had) ? had + 1 : 1; continue; }
+                    f.row["toHomes"] = Math.Round(toHomes); kept.Add(f);
+                }
+                found = kept;
+            }
+            return new JObject { ["candidates"] = new JArray(found.OrderBy(f => f.d).Take(count).Select(f => f.row)), ["found"] = found.Count, ["rejected"] = new JObject { ["wet"] = wet, ["steep"] = steep, ["site"] = JObject.FromObject(siteRejects) }, ["polluter"] = polluter, ["halfSize"] = new JArray(hw, hd), ["lots"] = lots, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
         }
 
         private static readonly string[] CoverageNames = Enum.GetNames(typeof(CoverageService));

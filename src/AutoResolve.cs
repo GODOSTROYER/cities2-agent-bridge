@@ -11,12 +11,33 @@ namespace CitiesIIAgentBridge
     {
         private DateTime nextAutoResolve;
         private int autoResolveFailures;
+        private DateTime pauseMenuSince;
 
         private void AutoResolvePopups(uint frame)
         {
             if (!settings.AllowControl || File.Exists(Path.Combine(mailbox.Root, "STOP")) || DateTime.UtcNow < nextAutoResolve) return;
             string blocker = (string)snapshot?["ui"]?["blocker"];
             bool introHeld = (string)snapshot?["milestone"]?["blockedBy"] == "tutorial_intro";
+            // The Esc pause menu (FAILURES #79): the game sat on it after a load and the background
+            // run could not advance. With controls on it is closed after 15 s; the save, load and
+            // options screens are left alone (a person is using them).
+            if (blocker == "menu_screen")
+            {
+                nextAutoResolve = DateTime.UtcNow.AddSeconds(1.5);
+                try
+                {
+                    var screens = Unity.Entities.World.DefaultGameObjectInjectionWorld?.GetExistingSystemManaged<Game.UI.InGame.GameScreenUISystem>();
+                    if (screens == null || screens.activeScreen != Game.UI.InGame.GameScreenUISystem.GameScreen.PauseMenu) { pauseMenuSince = default(DateTime); return; }
+                    if (pauseMenuSince == default(DateTime)) { pauseMenuSince = DateTime.UtcNow; return; }
+                    if ((DateTime.UtcNow - pauseMenuSince).TotalSeconds < 15) return;
+                    typeof(Game.UI.InGame.GameScreenUISystem).GetMethod("SetScreen", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic).Invoke(screens, new object[] { Game.UI.InGame.GameScreenUISystem.GameScreen.Main });
+                    pauseMenuSince = default(DateTime); snapshotUtc = DateTime.MinValue;
+                    EmitEvent("auto_resolved", frame, new JObject { ["action"] = "close_pause_menu", ["name"] = "PauseMenu" });
+                }
+                catch (Exception e) { if (++autoResolveFailures <= 3) EmitEvent("auto_resolve_failed", frame, new JObject { ["action"] = "close_pause_menu", ["error"] = e.GetBaseException().Message }); }
+                return;
+            }
+            pauseMenuSince = default(DateTime);
             if (blocker != "tutorial_phase" && blocker != "milestone_popup" && blocker != "signature_popup" && !introHeld) return;
             nextAutoResolve = DateTime.UtcNow.AddSeconds(autoResolveFailures > 3 ? 30 : 1.5);
             var live = UiState(new JObject { ["chirps"] = 0 });

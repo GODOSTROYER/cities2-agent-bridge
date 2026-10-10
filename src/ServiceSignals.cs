@@ -27,7 +27,47 @@ namespace CitiesIIAgentBridge
             if (t.Contains("sewage")) return "sewage";
             if (t.Contains("water")) return "water";
             if (t.Contains("mail") || t.Contains("post")) return "post";
+            if (t.Contains("pollution")) return "pollution";
             return null;
+        }
+
+        // Network warnings (FAILURES #77): a cable, pipe or road whose end is not joined to
+        // anything ("Powerline Not Connected", "Pipeline Not Connected", "Dead End",
+        // "Road Connection"...). They are always immediate: one icon is a broken network.
+        internal static bool IsNetworkWarning(string type)
+        {
+            if (string.IsNullOrEmpty(type)) return false;
+            string t = type.ToLowerInvariant();
+            return t.Contains("not connected") || t.Contains("dead end") || t.Contains("deadend") || t.Contains("connection") || t.Contains("no outlet") || t.Contains("no inlet");
+        }
+
+        // Persistent icons escalate by duration and count (FAILURES #78): five garbage icons sat
+        // at 0/3 for hours because only a RISING count scored. framesPresent = simulation frames
+        // the need has had at least one icon without a break (262,144 frames = one game day).
+        internal static int PersistencePoints(int icons, long framesPresent)
+        {
+            if (icons <= 0) return 0;
+            if (framesPresent >= 65536) return icons >= 3 ? 3 : 2;
+            if (framesPresent >= 16384) return icons >= 3 ? 1 : 0;
+            return 0;
+        }
+
+        // Every notification icon maps to a need (rule E): the known services first, then the
+        // remaining icon families, and "inspect" for a type nobody has mapped yet, so an icon
+        // cluster is never silently dropped.
+        internal static string NeedForIcon(string type)
+        {
+            if (IsNetworkWarning(type)) return "network";
+            string known = ServiceForText(type); if (known != null) return known;
+            string t = (type ?? "").ToLowerInvariant();
+            if (t.Contains("road") || t.Contains("pedestrian") || t.Contains("dead end") || t.Contains("connection") || t.Contains("track")) return "access";
+            if (t.Contains("ambulance") || t.Contains("medical")) return "health";
+            if (t.Contains("battery") || t.Contains("transformer") || t.Contains("voltage")) return "power";
+            if (t.Contains("pipe") || t.Contains("flood")) return "water";
+            if (t.Contains("rent") || t.Contains("homeless") || t.Contains("condemned")) return "housing";
+            if (t.Contains("customer") || t.Contains("resource") || t.Contains("labor") || t.Contains("worker") || t.Contains("employee") || t.Contains("bankrupt")) return "economy";
+            if (t.Contains("park") || t.Contains("bus") || t.Contains("train") || t.Contains("taxi") || t.Contains("tram") || t.Contains("subway") || t.Contains("ship") || t.Contains("airplane") || t.Contains("route") || t.Contains("vehicle")) return "transport";
+            return "inspect";
         }
 
         // Escalation (owner rule): one chirp is noise. score = chirps among the 10 newest
@@ -75,5 +115,42 @@ namespace CitiesIIAgentBridge
                 default: return null;
             }
         }
+    }
+
+    // Pure utility-shortage rules (A and B), unit-tested offline.
+    internal static class UtilitySignals
+    {
+        internal const double CapacityPct = 95;
+
+        // unserved = buildings without the utility; streak = snapshots in a row with any.
+        // A shortage is never "watch": the first snapshot says "confirm" (a building that has just
+        // appeared may still be hooking up), from the second it is an action. The cause decides
+        // which: not joined to the main network -> "connect"; joined but the city uses 95%+ of
+        // what it makes -> "build" (capacity); joined with spare capacity -> "connect" with
+        // cause "local" (a break or bottleneck near the buildings).
+        internal static (string action, string cause, int score) Need(int unserved, int streak, double usePct, bool linked)
+        {
+            if (unserved <= 0) return ("none", null, 0);
+            string cause = !linked ? "connection" : usePct >= CapacityPct ? "capacity" : "local";
+            string action = streak < 2 ? "confirm" : cause == "capacity" ? "build" : "connect";
+            return (action, cause, ServiceSignals.Threshold + unserved);
+        }
+
+        internal static string Say(string utility, string cause, int unserved, double x, double z)
+        {
+            string where = "(" + x + "," + z + ")";
+            if (cause == "capacity") return "build more " + utility + " capacity: " + unserved + " buildings short, the city uses nearly all it makes";
+            if (cause == "connection") return "connect district at " + where + ": " + unserved + " buildings have no " + utility + " and are not joined to the city network";
+            return "check the " + utility + " network near " + where + ": " + unserved + " buildings short although the district is joined and capacity is spare";
+        }
+
+        // A cable or pipe end is loose when only its own edge arrives there (nothing to carry
+        // the utility on). A road end like that is an ordinary dead end and fine, unless the
+        // road is an island cut off from the main road network.
+        internal static bool LooseEnd(bool road, int edgesAtNode, bool island) => road ? island : edgesAtNode <= 1;
+
+        // utility_check verdict for a new district.
+        internal static string Verdict(bool linked, int buildings, int unserved)
+            => !linked ? "not_connected" : unserved > 0 ? "unserved" : buildings == 0 ? "connected_no_buildings_yet" : "served";
     }
 }

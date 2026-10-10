@@ -3,6 +3,8 @@
 // non-pausing (the simulation keeps running), and the game is paused only inside mutate().
 import { call, callOk, multi, mutate, waitBatch, waitOperation, readSession } from './bridge.ts';
 import type { Json } from './bridge.ts';
+import { spendVerdict, growClass, blockingNeeds, utilityOutcome } from './budget.ts';
+import type { SpendClass } from './budget.ts';
 
 export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
 const ROAD_CAP = 8000;        // per road (a full grid line up to ~900 m); Small Road costs ~4 per metre
@@ -100,6 +102,22 @@ export function gridOutcome(input: { linked: boolean; connectorUsed: boolean; co
 export interface GridOptions { x: number; z: number; cols: number; rows: number; zone: string; plan?: boolean; road?: string }
 
 // Road grid + connector + zoning. Phases are timed so the slow part is always visible.
+// Districts built this session whose buildings have not been seen receiving utilities yet.
+export const pendingDistricts: { x: number; z: number; radius: number; builtAt: number }[] = [];
+
+// Re-check once buildings appear: returns the districts whose buildings lack a utility and
+// forgets the ones that are served.
+export async function recheckDistricts(): Promise<Json[]> {
+  const bad: Json[] = [];
+  for (const d of [...pendingDistricts]) {
+    const u = await call('utility_check', { x: d.x, z: d.z, radius: d.radius }, 20); if (!u.ok) continue;
+    const verdict = u.result.verdict;
+    if (verdict === 'served') pendingDistricts.splice(pendingDistricts.indexOf(d), 1);
+    else if (verdict === 'unserved' || verdict === 'not_connected') bad.push({ x: Math.round(d.x), z: Math.round(d.z), verdict, buildings: u.result.buildings, linked: { road: u.result.road?.linked, power: u.result.power?.linked, water: u.result.water?.linked } });
+  }
+  return bad;
+}
+
 export async function buildGrid(o: GridOptions): Promise<Json> {
   const phases: Record<string, number> = {}; let t = now();
   const zoneName = ZONES[o.zone]; if (!zoneName) return { ok: false, reason: `unknown_zone:${o.zone}` };
@@ -149,6 +167,18 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
     phases.build = now() - t; t = now();
 
     const rect = { x0: plan.bounds[0], z0: plan.bounds[1], x1: plan.bounds[2], z1: plan.bounds[3] };
+    // Postcondition (FAILURES #73): a district is zoned only when the game's own networks say it
+    // is joined to the city by road AND by the edges that carry power and water. A grid that is
+    // not gets no zoning (so no homes appear without utilities) and the call returns partial.
+    const centre = { x: (rect.x0 + rect.x1) / 2, z: (rect.z0 + rect.z1) / 2 };
+    const utilities = await call('utility_check', { ...centre, radius: Math.hypot(rect.x1 - rect.x0, rect.z1 - rect.z0) / 2 + 40 }, 20);
+    const served = utilityOutcome(utilities.ok ? utilities.result : undefined);
+    if (!served.ok && served.reason !== 'buildings_unserved') {
+      const money1 = Number((await callOk('get_city_state', {}, 10)).money);
+      return { ok: false, partial: true, reason: served.reason, missing: served.missing, at: { x: Math.round(centre.x), z: Math.round(centre.z) }, hint: 'roads are built but NOT zoned: join the district to the city network (link / build_line), then zone it',
+        ...quotedCost(built.spentQuoted && built.status === 'complete' ? built.spentTotal + connectorCost : undefined, Number(city0.money), money1), roads: steps.length, zoned: 0, phases };
+    }
+    pendingDistricts.push({ ...centre, radius: Math.hypot(rect.x1 - rect.x0, rect.z1 - rect.z0) / 2 + 40, builtAt: Date.now() });
     // Direct zoning in the mod: every Visible unzoned cell of the area in one frame (the same
     // cell write the game's zone tool applies). The game creates zone blocks a few frames
     // after the roads, so wait until the zonable count settles, zone, re-count and repeat;
@@ -182,7 +212,44 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
   });
 }
 
-export interface GrowOptions { zone?: string; cols?: number; rows?: number; plan?: boolean }
+// Postcondition for every road, cable and pipe build (FAILURES #77): look at the network ends
+// at each given point. A cable or pipe end where only its own edge arrives is loose; a road
+// end is loose when the road is an island cut off from the main road network.
+export async function looseEnds(points: { x: number; z: number }[], radius = 14): Promise<Json[]> {
+  if (!points.length) return [];
+  const answers = await multi(points.map(p => ({ command: 'network_ends', args: { x: p.x, z: p.z, radius } })));
+  const loose: Json[] = [];
+  answers.forEach((a: Json, i: number) => {
+    const ends: Json[] = a?.ends ?? [];
+    if (!ends.length) { loose.push({ x: Math.round(points[i].x), z: Math.round(points[i].z), why: 'no_network_end_here' }); return; }
+    for (const e of ends) if (e.loose) loose.push({ x: e.x, z: e.z, kind: e.kind, prefab: e.prefab, why: e.island ? 'road_not_joined_to_the_main_network' : 'end_not_connected' });
+  });
+  return loose.filter((l, i) => loose.findIndex(o => o.x === l.x && o.z === l.z) === i);
+}
+
+const LINES: Record<string, string> = { power_low: 'Low-voltage Ground Cable', power_high: 'High-voltage Ground Cable', water: 'Small Water Pipe', sewage: 'Small Sewage Pipe', pipe: 'Combined Small Pipe' };
+
+// One cable or pipe between two points (ends snap to the networks and terminals there), with
+// the both-ends-connected postcondition: ok only when neither end is loose afterwards.
+export async function buildLine(kind: string, from: { x: number; z: number }, to: { x: number; z: number }, control?: { x: number; z: number }, plan = false): Promise<Json> {
+  const name = LINES[kind] ?? kind; const net = await prefab(name, 'network');
+  if (!net.found) return { ok: false, reason: 'line_prefab_not_found', similar: net.similar, kinds: Object.keys(LINES) };
+  if (net.locked) return { ok: false, reason: 'line_prefab_locked', prefab: name };
+  const args = { prefabIndex: net.index, prefabVersion: net.version, start: from, end: to, maxCost: 60000, ...(control ? { control, mode: 'curve' } : {}) };
+  return mutate(async () => {
+    const pv = await call('build_network', { ...args, previewOnly: true }, 15);
+    const pvDone = pv.ok ? await waitOperation(pv.result.id, 30) : { status: 'failed', error: pv.error };
+    const reasons = (d: Json) => [...new Set((d.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []))];
+    if (pvDone.status !== 'complete') return { ok: false, reason: 'line_rejected_by_game', error: pvDone.error, reasons: reasons(pvDone), built: 0 };
+    if (plan) return { ok: true, plan: true, prefab: name, previewCost: pvDone.previewCost };
+    const op = await callOk('build_network', args, 15); const done = await waitOperation(op.id, 60);
+    if (done.status !== 'complete') return { ok: false, reason: 'line_build_failed', error: done.error, reasons: reasons(done) };
+    const dangling = await looseEnds([from, to]);
+    return { ok: dangling.length === 0, ...(dangling.length ? { partial: true, reason: 'loose_end', dangling } : {}), prefab: name, cost: Number(done.previewCost ?? 0), costSource: 'quoted', created: (done.createdRoads ?? []).length };
+  });
+}
+
+export interface GrowOptions { zone?: string; cols?: number; rows?: number; plan?: boolean; reserve?: number; cls?: SpendClass }
 
 // Demand-driven growth: zone choice from the non-pausing snapshot, site from find_free_lots.
 export async function grow(o: GrowOptions): Promise<Json> {
@@ -194,6 +261,14 @@ export async function grow(o: GrowOptions): Promise<Json> {
   if (o.zone) choices = choices.filter(c => c.k === o.zone);
   const pick = choices.find(c => c.v >= 20);
   if (!pick) return { ok: false, reason: 'demand_too_low', demand: d, unemp };
+  // Never grow past a broken utility: an unserved district or a loose cable/pipe comes first.
+  const blockers = blockingNeeds(snap.needs);
+  if (blockers.length) return { ok: false, reason: 'fix_utilities_first', blockers };
+  const unservedDistricts = o.plan ? [] : await recheckDistricts();
+  if (unservedDistricts.length) return { ok: false, partial: true, reason: 'previous_district_unserved', districts: unservedDistricts, hint: 'connect it (link / build_line) before building another' };
+  // Owner money policy: a new district is discretionary below the reserve (job zones while
+  // unemployment is above 10% are priority and go ahead when cheap).
+  const cls = o.cls ?? growClass(pick.k, unemp); const cash = Number(snap.city?.money ?? 0);
   const want: [number, number] = [o.cols ?? 3, o.rows ?? 2];
   const sizes = ([want, [2, 2], [2, 1], [1, 1]] as [number, number][]).filter((s, i, all) => s[0] * s[1] <= want[0] * want[1] && all.findIndex(x => x[0] === s[0] && x[1] === s[1]) === i);
   const tried: string[] = [];
@@ -204,13 +279,16 @@ export async function grow(o: GrowOptions): Promise<Json> {
       // Quality floor for housing: never next to industry or on polluted ground (the score only
       // ranks what is free; when everything free is bad, buy land elsewhere instead).
       if ((pick.k === 'res' || pick.k === 'resmed') && (Number(site.toIndustry) < 250 || Number(site.pollution) > 8000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
+      const estimate = Math.round((cols * (rows + 1) + rows * (cols + 1)) * 110 * 5);
+      const spend = spendVerdict({ cash, cost: estimate, cls, reserve: o.reserve });
+      if (!spend.ok && !o.plan) return { ok: false, reason: spend.reason, cls, cash, estimate, reserve: spend.reserve, zone: pick.k, hint: 'owner policy: bank cash to the reserve before new districts; pass reserve or cls to override for a flagged need' };
       const r = await buildGrid({ x: site.x, z: site.z, cols, rows, zone: pick.k, plan: o.plan });
       if (r.ok || r.partial || r.reason === 'build_failed_partial')
-        return { ...r, zone: pick.k, demand: pick.v, unemp, site: { x: site.x, z: site.z, cols, rows, score: site.score, toIndustry: site.toIndustry, pollution: site.pollution }, phases: { ...phases, ...(r.phases ?? {}) }, ...(tried.length ? { tried } : {}) };
+        return { ...r, zone: pick.k, demand: pick.v, unemp, site: { x: site.x, z: site.z, cols, rows, score: site.score, toIndustry: site.toIndustry, pollution: site.pollution, noise: site.noise, air: site.air, toNoise: site.toNoise }, siteRejects: lots.rejected?.site, phases: { ...phases, ...(r.phases ?? {}) }, ...(tried.length ? { tried } : {}) };
       tried.push(`${cols}x${rows}@${site.x},${site.z}:${r.reason}`);
     }
   }
-  return { ok: false, reason: 'no_free_site', zone: pick.k, tried, hint: 'no acceptable free land: buy_tile (x,z away from industry for housing), then grow again', phases };
+  return { ok: false, reason: 'no_free_site', zone: pick.k, tried, siteRules: 'homes are refused in noise (4000+), polluted air or ground (3000+), within 250 m of a noise source and downwind of plants and industry', hint: 'no acceptable free land: buy_tile (x,z away from industry for housing), then grow again', phases };
 }
 
 export async function zoneArea(x: number, z: number, radius: number, zone: string, replace = false): Promise<Json> {
@@ -248,7 +326,8 @@ export async function link(x: number, z: number, roadName = 'Small Road', maxCos
       if (plan) return { ok: true, plan: true, length: Math.round(c.d), previewCost: pvDone.previewCost, from: c.from, phases: { plan: planMs, preview: now() - t1 } };
       const op = await callOk('build_road', args, 15); const done = await waitOperation(op.id, 60);
       const money1 = Number((await callOk('get_city_state', {}, 10)).money);
-      return { ok: done.status === 'complete', ...quotedCost(done.status === 'complete' ? done.previewCost : 0, Number(city0.money), money1), monthlyUpkeep: null, length: Math.round(c.d), error: done.error, ...(tried.length ? { tried } : {}), phases: { plan: planMs, build: now() - t1 } };
+      const dangling = done.status === 'complete' ? await looseEnds([connectorStart(c), { x, z }]) : [];
+      return { ok: done.status === 'complete' && dangling.length === 0, ...(dangling.length ? { partial: true, reason: 'loose_end', dangling } : {}), ...quotedCost(done.status === 'complete' ? done.previewCost : 0, Number(city0.money), money1), monthlyUpkeep: null, length: Math.round(c.d), error: done.error, ...(tried.length ? { tried } : {}), phases: { plan: planMs, build: now() - t1 } };
     }
     return { ok: false, reason: 'every_link_rejected', tried, phases: { plan: planMs, preview: now() - t1 } };
   });
@@ -275,9 +354,36 @@ export async function placeService(name: string, x: number, z: number, radius = 
   });
 }
 
+// Moves a placed building (a noisy wind turbine, a polluting plant) to a roadside site near
+// (x,z). The mod's lot finder applies the site rules for polluters by itself: no homes within
+// 300 m, and for air polluters no homes in the plume. Postcondition: the new place is joined to
+// the road, power and water networks.
+export async function relocate(index: number, version: number, x: number, z: number, radius = 400, plan = false): Promise<Json> {
+  const t = now(); const info = await callOk('inspect_entity', { index, version }, 10);
+  if (!(info.components ?? []).includes('Game.Buildings.Building')) return { ok: false, reason: 'target_is_not_a_building' };
+  const name = String(info.prefab); const pf = await prefab(name, 'building');
+  if (!pf.found) return { ok: false, reason: 'prefab_not_found', prefab: name };
+  const [lots, city0] = await multi([{ command: 'find_roadside_lots', args: { prefab: name, x, z, radius, count: 16 } }, { command: 'get_city_state' }]);
+  const cands: Json[] = lots.candidates ?? [];
+  if (!cands.length) return { ok: false, reason: 'no_roadside_site', prefab: name, rejected: lots.rejected, polluter: lots.polluter, phases: { plan: now() - t } };
+  if (plan) return { ok: true, plan: true, prefab: name, sites: lots.found, nearest: cands[0], polluter: lots.polluter, rejected: lots.rejected, phases: { plan: now() - t } };
+  return mutate(async () => {
+    const t1 = now();
+    const op = await callOk('relocate_building', { moveIndex: index, moveVersion: version, prefabIndex: pf.index, prefabVersion: pf.version, position: cands[0].position, rotation: cands[0].rotation, candidates: cands.map(c => ({ position: c.position, rotation: c.rotation })), maxCost: 150000 }, 20);
+    const done = await waitOperation(op.id, 120);
+    const money1 = Number((await callOk('get_city_state', {}, 10)).money);
+    const at = done.snappedPosition ? { x: Math.round(done.snappedPosition.x), z: Math.round(done.snappedPosition.z) } : undefined;
+    const reasons = [...new Set((done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []))].slice(0, 6);
+    if (done.status !== 'complete') return { ok: false, reason: 'relocation_failed', error: done.error, ...(reasons.length ? { reasons } : {}), prefab: name, phases: { plan: t1 - t, move: now() - t1 } };
+    const u = at ? await call('utility_check', { x: at.x, z: at.z, radius: 120 }, 20) : null;
+    const served = utilityOutcome(u?.ok ? u.result : undefined);
+    return { ok: served.ok || served.reason === 'buildings_unserved', ...(served.ok ? {} : { partial: true, reason: served.reason, missing: served.missing }), prefab: name, at, toHomes: cands[0].toHomes, polluter: lots.polluter, ...quotedCost(done.previewCost, Number(city0.money), money1), phases: { plan: t1 - t, move: now() - t1 } };
+  });
+}
+
 // Tile purchase: adjacency/dryness ranking in the mod, the game's own price for the selection
 // previewed first (so a purchase never fails on funds), then the purchase.
-export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean }): Promise<Json> {
+export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean; reserve?: number; cls?: SpendClass }): Promise<Json> {
   const t = now(); const n = Math.max(1, Math.min(3, o.n ?? 1));
   const [opts, city0] = await multi([{ command: 'tile_options', args: { top: Math.max(3, n), ...(o.x !== undefined && o.z !== undefined ? { x: o.x, z: o.z } : {}) } }, { command: 'get_city_state' }]);
   const picks: Json[] = (opts.tiles ?? []).slice(0, n);
@@ -292,6 +398,8 @@ export async function buyTile(o: { n?: number; max?: number; x?: number; z?: num
     if (o.plan) return { ok: true, plan: true, affordable: cost <= money, ...base };
     if (cost > money) return { ok: false, reason: 'not_enough_money', short: cost - money, ...base };
     if (cost > max) return { ok: false, reason: 'cost_exceeds_max', ...base };
+    const spend = spendVerdict({ cash: money, cost, cls: o.cls ?? 'discretionary', reserve: o.reserve });
+    if (!spend.ok) return { ok: false, reason: spend.reason, reserve: spend.reserve, hint: 'owner policy: tile purchases wait until cash stays above the reserve', ...base };
     const t1 = now(); const op = await callOk('purchase_tiles', { tiles, maxCost: max }, 15); const done = await waitOperation(op.id, 30);
     return { ok: done.status === 'complete', error: done.error, ...base, cost: Number(done.cost ?? cost), phases: { plan: base.phases.plan, buy: now() - t1 } };
   });
@@ -373,7 +481,8 @@ export async function buildCorridor(fromX: number, fromZ: number, toX: number, t
     if (plan) return { ok: true, plan: true, length: route.length, segments: count, curves: roadsPlan.filter(r => r.control).length, waypoints: pts, phases: { plan: planMs, preview: previewMs } };
     const t2 = now(); const built = await runBatch(Array.from({ length: count }, (_, i) => step(i, false)));
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
-    return { ok: built.status === 'complete', ...quotedCost(built.spentQuoted && built.status === 'complete' ? built.spentTotal : undefined, Number(city0.money), money1), monthlyUpkeep: null, length: route.length, segments: count, curves: roadsPlan.filter(r => r.control).length, built: built.completedTotal, error: built.error, reasons: reasonsOf(built), phases: { plan: planMs, preview: previewMs, build: now() - t2 } };
+    const dangling = built.status === 'complete' ? await looseEnds([roadsPlan[0].a, roadsPlan[roadsPlan.length - 1].b]) : [];
+    return { ok: built.status === 'complete' && dangling.length === 0, ...(dangling.length ? { partial: true, reason: 'loose_end', dangling } : {}), ...quotedCost(built.spentQuoted && built.status === 'complete' ? built.spentTotal : undefined, Number(city0.money), money1), monthlyUpkeep: null, length: route.length, segments: count, curves: roadsPlan.filter(r => r.control).length, built: built.completedTotal, error: built.error, reasons: reasonsOf(built), phases: { plan: planMs, preview: previewMs, build: now() - t2 } };
   });
 }
 

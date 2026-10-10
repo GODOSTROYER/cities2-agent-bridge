@@ -7,6 +7,8 @@ import { recordAction } from './happiness.ts';
 
 // Icon prefab name (substring, case-insensitive) -> what to do about it.
 export const ICON_ACTIONS: { match: RegExp; need: string; action: string }[] = [
+  { match: /not connected|dead ?end|connection|no outlet|no inlet/i, need: 'network', action: 'IMMEDIATE: a cable, pipe or road end is loose. build_line (power_low to the nearest road, power_high to a transformer, pipe to the pipe network) or remove it; never wait' },
+  { match: /air pollution|ground pollution/i, need: 'pollution', action: 'pollution_sources (query): find the plant or industry upwind; move it where no homes are downwind, or stop zoning homes in the plume' },
   { match: /traffic|bottleneck/i, need: 'traffic', action: 'fix_traffic: widen that road or junction; add a parallel link (build_arterial)' },
   { match: /burned|collapsed|destroyed/i, need: 'ruins', action: 'clear_ruins: bulldoze the ruin so the lot rebuilds; add fire coverage where fires recur' },
   { match: /abandon/i, need: 'abandoned', action: 'check why (no jobs, no services, pollution, high rent) before clearing' },

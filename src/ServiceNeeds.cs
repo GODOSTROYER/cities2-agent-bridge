@@ -16,6 +16,7 @@ namespace CitiesIIAgentBridge
     {
         private HashSet<string> tutorialNeeds;
         private Dictionary<string, int> needIconsBefore, needIconStreak;
+        private Dictionary<string, long> needIconSince;
         
 
 
@@ -63,6 +64,9 @@ namespace CitiesIIAgentBridge
                     var n = Need(k); n["factor"] = Math.Min((double?)n["factor"] ?? 0, effect);
                 }
             if (needIconsBefore == null) { needIconsBefore = new Dictionary<string, int>(); needIconStreak = new Dictionary<string, int>(); }
+            if (needIconSince == null) needIconSince = new Dictionary<string, long>();
+            long frameNow = w.GetExistingSystemManaged<Game.Simulation.SimulationSystem>()?.frameIndex ?? 0;
+            foreach (var gone in needIconSince.Keys.Where(k => !needs.ContainsKey(k) || ((int?)needs[k]["icons"] ?? 0) == 0).ToList()) needIconSince.Remove(gone);
             var result = new JObject();
             foreach (var pair in needs.OrderBy(p => p.Key))
             {
@@ -72,7 +76,11 @@ namespace CitiesIIAgentBridge
                 streak = iconsNow > before ? streak + 1 : iconsNow < before ? 0 : streak;
                 needIconStreak[pair.Key] = streak; needIconsBefore[pair.Key] = iconsNow;
                 if (streak > 0) n["iconRise"] = streak;
-                int score = ServiceSignals.NeedScore((int?)n["chirps"] ?? 0, (bool?)n["tutorial"] == true, streak, ((int?)n["dead"] ?? 0) + ((int?)n["sick"] ?? 0), iconsNow, (double?)n["factor"] ?? 0);
+                long present = 0;
+                if (iconsNow > 0) { if (!needIconSince.TryGetValue(pair.Key, out long since) || since > frameNow) needIconSince[pair.Key] = since = frameNow; present = frameNow - since; }
+                int persist = ServiceSignals.PersistencePoints(iconsNow, present);
+                if (persist > 0) n["iconDays"] = Math.Round(present / 262144.0, 2);
+                int score = persist + ServiceSignals.NeedScore((int?)n["chirps"] ?? 0, (bool?)n["tutorial"] == true, streak, ((int?)n["dead"] ?? 0) + ((int?)n["sick"] ?? 0), iconsNow, (double?)n["factor"] ?? 0);
                 n["score"] = score + "/" + ServiceSignals.Threshold; n["action"] = score >= ServiceSignals.Threshold ? "build" : "watch";
                 if (n["factor"] != null) { string tag = ServiceSignals.FactorPriority((double)n["factor"]); if (tag != "normal") n["priority"] = tag; }
                 result[pair.Key] = n;

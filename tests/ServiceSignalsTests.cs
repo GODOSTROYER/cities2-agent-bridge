@@ -94,6 +94,47 @@ internal static class ServiceSignalsTests
         Check(ServiceSignals.NeedForFactor("NoisePollution") == "pollution", "factor NoisePollution maps to pollution");
         Check(ServiceSignals.NeedForFactor("NotARealFactor") == null, "unknown factor name maps to null");
 
+        // Rule A: a utility shortage is never "watch"; score grows with the buildings affected.
+        var u = UtilitySignals.Need(65, 1, 62, false);
+        Check(u.action == "confirm" && u.cause == "connection", "first snapshot of a shortage asks to confirm, never watch");
+        u = UtilitySignals.Need(65, 2, 62, false);
+        Check(u.action == "connect" && u.cause == "connection" && u.score == ServiceSignals.Threshold + 65, "second snapshot: connect, scored by the 65 buildings affected");
+        Check(UtilitySignals.Need(1, 2, 10, false).score > ServiceSignals.Threshold, "even one unserved building is above the build threshold");
+        Check(UtilitySignals.Need(200, 5, 20, false).score > UtilitySignals.Need(3, 5, 20, false).score, "more buildings affected scores higher");
+        // Rule B: connection versus capacity.
+        u = UtilitySignals.Need(40, 3, 99, true);
+        Check(u.action == "build" && u.cause == "capacity", "joined to the network and the city at 99% of capacity: build capacity");
+        u = UtilitySignals.Need(40, 3, 99, false);
+        Check(u.action == "connect" && u.cause == "connection", "not joined to the network is a connection problem even at 99% use");
+        u = UtilitySignals.Need(40, 3, 31, true);
+        Check(u.action == "connect" && u.cause == "local", "joined with spare capacity: a local network fault, still an action");
+        Check(UtilitySignals.Need(0, 0, 99, false).action == "none", "no unserved buildings, no need");
+        Check(UtilitySignals.Say("power", "connection", 65, -1512, -175).StartsWith("connect district at (-1512,-175)"), "the connection message names the place to connect");
+        Check(UtilitySignals.Say("water", "capacity", 12, 0, 0).StartsWith("build more water capacity"), "the capacity message asks for capacity");
+        Check(UtilitySignals.Verdict(false, 0, 0) == "not_connected" && UtilitySignals.Verdict(true, 0, 0) == "connected_no_buildings_yet" && UtilitySignals.Verdict(true, 30, 4) == "unserved" && UtilitySignals.Verdict(true, 30, 0) == "served", "utility_check verdicts");
+
+        // Rule E: every icon type maps to a need.
+        Check(ServiceSignals.NeedForIcon("Air Pollution") == "pollution" && ServiceSignals.NeedForIcon("Ground Pollution") == "pollution" && ServiceSignals.NeedForIcon("Noise Pollution") == "pollution", "air, ground and noise pollution icons map to pollution");
+        Check(ServiceSignals.NeedForIcon("Electricity Notification") == "power" && ServiceSignals.NeedForIcon("Water Notification") == "water" && ServiceSignals.NeedForIcon("Sewage Notification") == "sewage", "utility icons map to their utility");
+        Check(ServiceSignals.NeedForIcon("Hearse Notification") == "deathcare" && ServiceSignals.NeedForIcon("Garbage Notification") == "garbage" && ServiceSignals.NeedForIcon("Traffic Bottleneck Notification") == "traffic", "service icons keep their service");
+        Check(ServiceSignals.NeedForIcon("Road Connection Notification") == "network" && ServiceSignals.NeedForIcon("Pedestrian Path Missing") == "access", "a missing road connection is a network warning; other access icons map to access");
+        Check(ServiceSignals.NeedForIcon("Something Nobody Mapped") == "inspect" && ServiceSignals.NeedForIcon(null) == "inspect", "an unknown icon type maps to inspect, never to nothing");
+
+        // Network warnings are their own need and always immediate.
+        Check(ServiceSignals.IsNetworkWarning("Powerline Not Connected") && ServiceSignals.IsNetworkWarning("Powerline Not Connected - Low") && ServiceSignals.IsNetworkWarning("Pipeline Not Connected"), "cable and pipe 'not connected' icons are network warnings");
+        Check(ServiceSignals.IsNetworkWarning("Dead End") && ServiceSignals.IsNetworkWarning("Road Connection Notification"), "dead-end and road-connection icons are network warnings");
+        Check(!ServiceSignals.IsNetworkWarning("Garbage Notification") && !ServiceSignals.IsNetworkWarning("Noise Pollution") && !ServiceSignals.IsNetworkWarning(null), "service icons are not network warnings");
+        Check(ServiceSignals.NeedForIcon("Powerline Not Connected") == "network", "a loose power line maps to the network need, not to power capacity");
+        Check(!UtilitySignals.LooseEnd(true, 1, false) && UtilitySignals.LooseEnd(true, 1, true), "a road dead end is fine, a road island is loose");
+        Check(UtilitySignals.LooseEnd(false, 1, false) && !UtilitySignals.LooseEnd(false, 2, false), "a cable or pipe end with only its own edge is loose");
+
+        // Persistent icons escalate by duration and count.
+        Check(ServiceSignals.PersistencePoints(5, 0) == 0 && ServiceSignals.PersistencePoints(5, 10000) == 0, "fresh icons add nothing");
+        Check(ServiceSignals.PersistencePoints(5, 20000) == 1, "three or more icons for a sixteenth of a day add one point");
+        Check(ServiceSignals.PersistencePoints(5, 70000) == 3, "five garbage icons that last a quarter day reach the build threshold on their own");
+        Check(ServiceSignals.PersistencePoints(1, 70000) == 2, "a single long-lived icon adds two points and still needs another signal");
+        Check(ServiceSignals.PersistencePoints(0, 999999) == 0, "no icons, no points");
+
         return count;
     }
 }

@@ -142,6 +142,29 @@ internal static class PlanningTests
         Check(PointClusters.Percentile(sorted, 2) == 5, "percentile above 1 clamps to the maximum");
         Check(PointClusters.Percentile(new List<double>(), 0.5) == 0, "percentile of an empty list is 0");
 
+        // Rule D: site rules.
+        Check(SiteRules.Downwind(0, 0, 1, 0, 400, 0), "a point 400 m straight downwind is in the plume");
+        Check(!SiteRules.Downwind(0, 0, 1, 0, -400, 0), "a point upwind is not in the plume");
+        Check(!SiteRules.Downwind(0, 0, 1, 0, 0, 400), "a point across the wind is not in the plume");
+        Check(!SiteRules.Downwind(0, 0, 1, 0, 900, 0), "beyond the plume length is clear");
+        Check(SiteRules.Downwind(0, 0, 1, 0, -30, 20), "right next to the source counts whatever the wind");
+        Check(!SiteRules.Downwind(0, 0, 0, 0, 400, 0), "no wind, no plume beyond the source itself");
+        Check(SiteRules.Downwind(-734, 808, 0.4, 0.9, -512, 1317), "the live case: homes north-north-east of the coal plant are in its plume");
+        Check(SiteRules.ResidentialReject(0, 0, 8383, 900, false) == "noise", "homes are refused on the noise the turbines made on Pearl Street (8,383)");
+        Check(SiteRules.ResidentialReject(0, 0, 200, 120, false) == "near_noise_source", "homes are refused within 250 m of a noise source even before the noise map shows it");
+        Check(SiteRules.ResidentialReject(5247, 0, 200, 900, false) == "air", "homes are refused in polluted air (5,247 showed the icon)");
+        Check(SiteRules.ResidentialReject(0, 7084, 200, 900, false) == "ground", "homes are refused on polluted ground");
+        Check(SiteRules.ResidentialReject(0, 0, 200, 900, true) == "downwind", "homes are refused downwind of a plant or industry");
+        Check(SiteRules.ResidentialReject(700, 10, 700, 900, false) == null, "an ordinary clean street is accepted");
+        Check(SiteRules.IsNoiseSource("WindTurbine01") && !SiteRules.IsAirSource("WindTurbine01", false), "a wind turbine is a noise source, not an air source");
+        Check(SiteRules.IsAirSource("SmallCoalPowerPlant01", false) && SiteRules.IsNoiseSource("SmallCoalPowerPlant01"), "a coal plant is both");
+        Check(SiteRules.IsAirSource("IndustrialManufacturing_x", true) && !SiteRules.IsAirSource("ElementarySchool01", false), "industry pollutes the air, a school does not");
+        Check(!SiteRules.IsAirSource("NA_CommercialGasStation01_L2_4x6", false, 0) && !SiteRules.IsAirSource("NA_CommercialGasStation01_L2_4x6", false), "a petrol station is not an air source (prefab data 0; the name 'Gas' no longer matches)");
+        Check(SiteRules.IsAirSource("SewageOutlet01", false, 5000) && SiteRules.IsNoiseSource("WindTurbine01", 20000) && !SiteRules.IsNoiseSource("NA_CommercialGasStation01", 240), "prefab pollution data decides when known: 5,000 or more is a source");
+        Check(SiteRules.PolluterReject(120, 0, false) == "near_homes", "a noisy building is refused within 300 m of homes");
+        Check(SiteRules.PolluterReject(500, 14, true) == "homes_downwind", "an air polluter is refused with homes in its plume");
+        Check(SiteRules.PolluterReject(500, 14, false) == null && SiteRules.PolluterReject(500, 0, true) == null, "clear sites are accepted");
+
         return count;
     }
 }

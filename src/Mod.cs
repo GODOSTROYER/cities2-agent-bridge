@@ -153,7 +153,7 @@ namespace CitiesIIAgentBridge
                 throw new InvalidOperationException("control_disabled: enable it in Options > Cities II Agent Bridge");
         }
 
-        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "service_buildings", "home_clusters", "crime_map", "notifications", "transit_status", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
+        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "utility_check", "network_ends", "pollution_sources", "service_buildings", "home_clusters", "crime_map", "notifications", "transit_status", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
 
         // multi {commands:[{command,args}]}: up to 16 non-pausing reads in one mailbox round trip.
         private JObject Multi(JObject args)
@@ -263,6 +263,9 @@ namespace CitiesIIAgentBridge
                 case "zone_area": return ZoneArea(args, false);
                 case "zone_area_count": return ZoneArea(args, true);
                 case "connected": return RoadsConnected(args);
+                case "utility_check": return UtilityCheck(args);
+                case "network_ends": return NetworkEnds(args);
+                case "pollution_sources": return PollutionSources(args);
                 case "service_buildings": return ServiceBuildings();
                 case "tile_options": return TileOptions(args);
                 case "home_clusters": return HomeClusters(args);

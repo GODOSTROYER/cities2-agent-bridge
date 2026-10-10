@@ -1,6 +1,7 @@
 // Native city-services planner: the TypeScript port of services.ps1 (same intent, same rules).
 // decideServices() is pure and fed with snapshot/building/gap data; fixServices() is the only
 // part that talks to the game (non-pausing reads, then placeService() for the chosen needs).
+import { RESERVE } from './budget.ts';
 import { recordFactors, recordAction, assess, readJsonl, HISTORY_PATH, ACTIONS_PATH } from './happiness.ts';
 import { promises as fs } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -275,9 +276,9 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   const failed: Json[] = [];
   let cooldownError: string | undefined;
 
-  // Cash reserve (owner rule: keep about 200k): a need that is neither a critical utility nor a
+  // Cash reserve (owner rule: bank about 1,000,000 before discretionary spending): a need that is neither a critical utility nor a
   // very_high factor is deferred when its construction cost would take cash below the reserve.
-  const reserve = Number.isFinite(opts.reserve) ? Number(opts.reserve) : 200000;
+  const reserve = Number.isFinite(opts.reserve) ? Number(opts.reserve) : RESERVE;
   let cash = Number(snap?.city?.money ?? 0); const deferred: Json[] = []; let placedCount = 0;
   for (const n of needs) {
     if (placedCount >= maxPlacements) break;

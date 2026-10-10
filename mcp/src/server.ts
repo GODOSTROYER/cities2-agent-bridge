@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
@@ -79,9 +79,9 @@ server.registerTool('snapshot', {
     const milestone = Number(d.milestone?.achieved ?? NaN);
     if (Number.isFinite(milestone)) { if (lastMilestone !== null && milestone !== lastMilestone) invalidatePrefabCache(); lastMilestone = milestone; }
     if (!a.brief) return ok(d);
-    const needs = Object.fromEntries(Object.entries(d.needs ?? {}).filter(([k]) => k !== 'iconsTop').map(([k, v]: [string, any]) => [k, `${v.score} ${v.action}`]));
+    const needs = Object.fromEntries(Object.entries(d.needs ?? {}).filter(([k]) => k !== 'iconsTop').map(([k, v]: [string, any]) => [k, `${v.score} ${v.action}${v.say ? ': ' + v.say : ''}${v.at && !v.say ? ' at ' + JSON.stringify(v.at) : ''}`]));
     return ok({ money: d.city?.money, net: d.city?.net, pop: d.city?.pop, moveIn: d.city?.moveIn, happy: d.happy, health: d.health, demand: d.demand, unemp: d.jobs?.unemp, vacant: d.jobs?.vacantByEdu,
-      why: d.demandWhy, happiness: Object.fromEntries(Object.entries(d.happiness ?? d.worstHappy ?? {}).filter(([, v]) => Number(v) < 0)), util: [d.util?.power?.pct, d.util?.water?.pct, d.util?.sewage?.pct], needs, xp: `${d.milestone?.xp}/${d.milestone?.nextXp}`, ms: d.milestone?.achieved, blocker: d.ui?.blocker, speed: d.liveSpeed, frame: d.liveFrame, capturedFrame: d.frame, ageSec: d.ageSec, fire: d.buildings?.onFire, priority: d.happinessPriority, icons: d.icons, jams: d.jams, errors: d.errors });
+      why: d.demandWhy, happiness: Object.fromEntries(Object.entries(d.happiness ?? d.worstHappy ?? {}).filter(([, v]) => Number(v) < 0)), util: [d.util?.power?.pct, d.util?.water?.pct, d.util?.sewage?.pct], needs, xp: `${d.milestone?.xp}/${d.milestone?.nextXp}`, ms: d.milestone?.achieved, blocker: d.ui?.blocker, speed: d.liveSpeed, frame: d.liveFrame, capturedFrame: d.frame, ageSec: d.ageSec, fire: d.buildings?.onFire, priority: d.happinessPriority, icons: d.icons, clusters: (d.iconClusters ?? []).map((c: any[]) => `${c[0]} x${c[1]} at (${c[2]},${c[3]}) -> ${c[4]}`), shortages: d.shortages, jams: d.jams, errors: d.errors });
   } catch (e) { return fail(e); }
 });
 
@@ -178,6 +178,7 @@ server.registerTool('grow', {
     zone: growZoneEnum.optional(),
     cols: z.number().int().min(1).max(6).optional(), rows: z.number().int().min(1).max(6).optional(),
     plan: z.boolean().optional(),
+    reserve: z.number().int().min(0).optional().describe('cash to keep (default 1,000,000: new districts are discretionary below it)'),
     legacy: z.boolean().optional().describe('use the old PowerShell path (for timing comparison only)'),
   },
 }, async (a) => {
@@ -189,7 +190,7 @@ server.registerTool('grow', {
       const r = await runPwsh('play.ps1', ['grow', ...(a.zone ? ['-Zone', a.zone] : []), ...(a.cols ? ['-Cols', String(a.cols)] : []), ...(a.rows ? ['-Rows', String(a.rows)] : []), ...(a.plan ? ['-Plan'] : [])]);
       return ok(withCleared({ legacy: true, cost: m0 - (await money()), exit: r.code, lines: tail(r.lines, 15) }, cleared));
     }
-    return ok(withCleared(await grow({ zone: a.zone, cols: a.cols, rows: a.rows, plan: a.plan }), cleared));
+    return ok(withCleared(await grow({ zone: a.zone, cols: a.cols, rows: a.rows, plan: a.plan, reserve: a.reserve }), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -326,7 +327,7 @@ server.registerTool('services', {
 
 server.registerTool('fix_services', {
   description: 'Builds city services that are escalated (snapshot needs with action=build), missing, or uncovered by native coverage, plus utilities near capacity, before growth. Escalated needs override the cash floor and upkeep discipline. plan=true lists what it would build.',
-  inputSchema: { maxPlacements: z.number().int().min(1).max(8).default(2), plan: z.boolean().optional(), reserve: z.number().int().min(0).optional().describe('cash to keep (default 200000); critical utilities and very_high factors ignore it') },
+  inputSchema: { maxPlacements: z.number().int().min(1).max(8).default(2), plan: z.boolean().optional(), reserve: z.number().int().min(0).optional().describe('cash to keep (default 1,000,000); critical utilities and very_high factors ignore it') },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
@@ -340,12 +341,13 @@ server.registerTool('buy_tile', {
   inputSchema: {
     n: z.number().int().min(1).max(3).default(1), max: z.number().int().default(300000),
     x: z.number().optional(), z: z.number().optional(), plan: z.boolean().optional(),
+    reserve: z.number().int().min(0).optional().describe('cash to keep (default 1,000,000)'),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan }), cleared));
+    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan, reserve: a.reserve }), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -420,6 +422,32 @@ server.registerTool('build_arterial', {
   } catch (e) { return fail(e); }
 });
 
+server.registerTool('relocate_building', {
+  description: 'Moves a placed building by id (index/version from notifications or the pollution_sources query) to a roadside site near (x,z). For a noisy or polluting building the site rules apply automatically: no homes within 300 m and, for air polluters, no homes downwind. Use it for noise or air-pollution icon clusters whose source is a turbine or plant, instead of rezoning the homes. plan=true only reports the site.',
+  inputSchema: { index: z.number().int(), version: z.number().int(), x: z.number(), z: z.number(), radius: z.number().min(50).max(2000).optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const r = await relocate(a.index, a.version, a.x, a.z, a.radius ?? 400, !!a.plan);
+    if (r.ok && !a.plan) await recordAction({ need: 'pollution', tool: 'relocate_building', detail: `${r.prefab} -> ${r.at?.x},${r.at?.z}` });
+    return ok(withCleared(r, cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('build_line', {
+  description: 'Builds one cable or pipe between two points (kind: power_low, power_high, water, sewage, pipe, or a network prefab name); the ends snap to the road, pipe, cable or building terminal there. Previewed by the game first. Postcondition: both ends must be connected; a loose end returns partial with its position. Use it for the network need in the snapshot (loose cable/pipe icons) and to join a district the snapshot reports as not connected.',
+  inputSchema: { kind: z.string(), fromX: z.number(), fromZ: z.number(), toX: z.number(), toZ: z.number(), viaX: z.number().optional(), viaZ: z.number().optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const r = await buildLine(a.kind, { x: a.fromX, z: a.fromZ }, { x: a.toX, z: a.toZ }, a.viaX !== undefined && a.viaZ !== undefined ? { x: a.viaX, z: a.viaZ } : undefined, !!a.plan);
+    if (r.ok && !a.plan) await recordAction({ need: 'network', tool: 'build_line', detail: `${r.prefab} (${a.fromX},${a.fromZ})->(${a.toX},${a.toZ})` });
+    return ok(withCleared(r, cleared));
+  } catch (e) { return fail(e); }
+});
+
 server.registerTool('notifications', {
   description: 'On-map notification icons (traffic bottleneck, burned down, noise pollution, hearse, garbage, no power...): counts by type with the action each asks for, and the positions/owners for one type. Non-pausing. Check every play cycle.',
   inputSchema: { type: z.string().optional(), top: z.number().int().min(1).max(100).optional() },
@@ -484,7 +512,7 @@ server.registerTool('query', {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'utility_check', 'network_ends', 'pollution_sources', 'find_free_lots', 'find_roadside_lots',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),

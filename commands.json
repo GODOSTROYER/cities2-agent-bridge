@@ -329,6 +329,13 @@
     "undocumented": true
   },
   {
+    "name": "network_ends",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "notifications",
     "description": "",
     "pausing": false,
@@ -367,6 +374,13 @@
     "name": "plan_neighborhood",
     "description": "",
     "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "pollution_sources",
+    "description": "",
+    "pausing": false,
     "control": false,
     "undocumented": true
   },
@@ -508,6 +522,13 @@
     "description": "",
     "pausing": true,
     "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "utility_check",
+    "description": "",
+    "pausing": false,
+    "control": false,
     "undocumented": true
   },
   {

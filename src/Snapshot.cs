@@ -231,10 +231,10 @@ namespace CitiesIIAgentBridge
                 util["water"] = new JObject { ["cap"] = e.freshCapacity, ["use"] = e.freshConsumption, ["pct"] = Pct(e.freshConsumption, e.freshCapacity) };
                 util["sewage"] = new JObject { ["cap"] = e.sewageCapacity, ["use"] = e.sewageConsumption, ["pct"] = Pct(e.sewageConsumption, e.sewageCapacity) };
             });
-            var fires = new HashSet<Entity>(); var firePlaces = new Dictionary<Entity, JObject>();
+            var fires = new HashSet<Entity>(); var firePlaces = new Dictionary<Entity, JObject>(); Dictionary<string, List<Unity.Mathematics.float2>> shortagePoints = null;
             Timed(errors, perf, "buildings", () =>
             {
-                var shortages = new SortedDictionary<string, int>(); var penalties = new SortedDictionary<string, int>();
+                var shortages = new SortedDictionary<string, int>(); var penalties = new SortedDictionary<string, int>(); shortagePoints = new Dictionary<string, List<Unity.Mathematics.float2>>();
                 int buildings = 0, abandoned = 0, condemned = 0, construction = 0, penalised = 0; long powerCapacity = 0;
                 var prefabs = w.GetExistingSystemManaged<PrefabSystem>();
                 foreach (var e in NativeBuild.Buildings(em))
@@ -251,7 +251,12 @@ namespace CitiesIIAgentBridge
                         firePlaces[e] = new JObject { ["prefab"] = em.HasComponent<PrefabRef>(e) ? prefabs.GetPrefabName(em.GetComponentData<PrefabRef>(e).m_Prefab) : null, ["x"] = Math.Round(pos.x), ["z"] = Math.Round(pos.z) };
                     }
                     if (em.HasComponent<ElectricityProducer>(e)) powerCapacity += em.GetComponentData<ElectricityProducer>(e).m_Capacity;
-                    foreach (var row in Shortages(em, e)) { string type = (string)row["type"]; shortages[type] = shortages.TryGetValue(type, out var n) ? n + 1 : 1; }
+                    foreach (var row in Shortages(em, e))
+                    {
+                        string type = (string)row["type"]; shortages[type] = shortages.TryGetValue(type, out var n) ? n + 1 : 1;
+                        if (!shortagePoints.TryGetValue(type, out var where)) shortagePoints[type] = where = new List<Unity.Mathematics.float2>();
+                        where.Add(em.GetComponentData<Game.Objects.Transform>(e).m_Position.xz);
+                    }
                     if (!em.HasBuffer<Efficiency>(e) || !em.HasComponent<PrefabRef>(e) || !em.HasComponent<ServiceObjectData>(em.GetComponentData<PrefabRef>(e).m_Prefab)) continue;
                     bool hit = false;
                     foreach (var f in em.GetBuffer<Efficiency>(e, true))
@@ -290,6 +295,7 @@ namespace CitiesIIAgentBridge
                 if (ui["errors"] is JArray uiErrors) foreach (var x in uiErrors.Take(3)) errors.Add("ui." + (string)x);
             });
             Timed(errors, perf, "needs", () => s["needs"] = ServiceNeeds(w, recentChirps, activePhase, s["happiness"] as JObject));
+            Timed(errors, perf, "utilityNeeds", () => ApplyUtilityNeeds(w, s, shortagePoints));
             Timed(errors, perf, "icons", () => SnapshotIcons(w, s, sim.frameIndex, prev != null));
             if (errors.Count > 0) s["errors"] = errors;
             perf["total"] = Math.Round(total.Elapsed.TotalMilliseconds, 1);
