@@ -14,6 +14,7 @@ for (const f of await fs.readdir(inDir)) await fs.unlink(join(inDir, f));
 const client = new Client({ name: 'cs2-session', version: '0.1.0' });
 await client.connect(new StdioClientTransport({ command: process.execPath, args: ['src/server.ts'], cwd: here, stderr: 'ignore' }));
 console.log('session ready');
+await fs.writeFile(join(root, 'started'), String(Date.now())); // lets a waiting client notice a restart (its request is gone)
 const beat = setInterval(() => { fs.writeFile(join(root, 'alive'), new Date().toISOString()).catch(() => {}); }, 1000);
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 while (!existsSync(join(inDir, 'STOP'))) {

@@ -359,6 +359,23 @@ export async function placeService(name: string, x: number, z: number, radius = 
     const done = await waitOperation(op.id, 120);
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
     const reasons = [...new Set((done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []))].slice(0, 6);
+    // Postcondition (FAILURES #86): the game accepts a building that touches no road (a park was
+    // left without road, power and water). Check the road edge; move it along the other
+    // candidates, and bulldoze it when none gives it a road.
+    if (done.status === 'complete' && done.snappedPosition) {
+      const roadOf = async (p: Json) => { const b = (await callOk('get_buildings', { x: p.x, z: p.z, radius: 6, limit: 3 }, 15)).buildings ?? []; const me = b.find((q: Json) => String(q.prefab) === name) ?? b[0]; return me ? { id: { index: me.index, version: me.version }, road: Number(me.roadEdge?.index ?? 0) > 0 || !(me.issues ?? []).includes('no_road_connection') } : null; };
+      let me = await roadOf(done.snappedPosition); let moved = 0;
+      for (const c of cands.slice(1, 6)) {
+        if (!me || me.road) break;
+        const mv = await call('relocate_building', { moveIndex: me.id.index, moveVersion: me.id.version, prefabIndex: info.index, prefabVersion: info.version, position: c.position, rotation: c.rotation, maxCost: cap }, 20);
+        const mvDone = mv.ok ? await waitOperation(mv.result.id, 60) : null; moved++;
+        if (mvDone?.status === 'complete' && mvDone.snappedPosition) { done.snappedPosition = mvDone.snappedPosition; me = await roadOf(mvDone.snappedPosition); }
+      }
+      if (me && !me.road) {
+        const rm = await call('demolish', me.id, 15); if (rm.ok) await waitOperation(rm.result.id, 30);
+        return { ok: false, reason: 'no_road_connection', hint: 'placed, found without a road at every candidate tried, removed again', ...costs, tried: moved + 1, phases: { plan: planMs, place: now() - t1 } };
+      }
+    }
     return { ok: done.status === 'complete', ...quotedCost(done.status === 'complete' ? done.previewCost : 0, Number(city0.money), money1), ...costs, at: done.snappedPosition ? { x: Math.round(done.snappedPosition.x), z: Math.round(done.snappedPosition.z) } : undefined, error: done.error, ...(reasons.length ? { reasons } : {}), attempts: (done.attempts ?? []).length, phases: { plan: planMs, place: now() - t1 } };
   });
 }
