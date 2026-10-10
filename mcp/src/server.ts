@@ -3,7 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money } from './bridge.ts';
+import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear } from './bridge.ts';
 
 const server = new McpServer({ name: 'cs2', version: '0.1.0' });
 
@@ -19,6 +19,13 @@ function fail(e: any): ToolResult {
 
 function tail(lines: string[], n = 12): string[] {
   return lines.slice(-n);
+}
+
+// Adds the popups cleared by the guard to an object result; other shapes pass through unchanged.
+function withCleared(v: any, cleared: string[]): any {
+  if (!cleared.length) return v;
+  if (v && typeof v === 'object' && !Array.isArray(v)) return { ...v, cleared };
+  return v;
 }
 
 // Compact projection of get_ui_state for the agent (non-pausing read).
@@ -118,6 +125,7 @@ server.registerTool('build_grid', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const m0 = await money();
     const r = await runPwsh('play.ps1', [
@@ -125,13 +133,13 @@ server.registerTool('build_grid', {
       '-Zone', a.zone, ...(a.plan ? ['-Plan'] : []),
     ]);
     const m1 = await money();
-    return ok({
+    return ok(withCleared({
       cost: m0 - m1,
       monthlyUpkeep: null,
       upkeepNote: 'road upkeep shows in snapshot expense after the next budget period',
       exit: r.code,
       lines: tail(r.lines),
-    });
+    }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -146,6 +154,7 @@ server.registerTool('grow', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const m0 = await money();
     const r = await runPwsh('play.ps1', [
@@ -157,13 +166,13 @@ server.registerTool('grow', {
       ...(a.buyTiles ? ['-BuyTiles'] : []),
     ]);
     const m1 = await money();
-    return ok({
+    return ok(withCleared({
       cost: m0 - m1,
       monthlyUpkeep: null,
       upkeepNote: 'road upkeep shows in snapshot expense after the next budget period',
       exit: r.code,
       lines: tail(r.lines, 15),
-    });
+    }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -172,11 +181,12 @@ server.registerTool('link', {
   inputSchema: { x: z.number(), z: z.number(), road: z.string().optional(), max: z.number().int().optional(), plan: z.boolean().optional() },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const m0 = await money();
     const r = await runPwsh('play.ps1', ['link', '-X', String(a.x), '-Z', String(a.z), '-Road', a.road ?? 'Small Road', '-Max', String(a.max ?? 60000), ...(a.plan ? ['-Plan'] : [])]);
     const m1 = await money();
-    return ok({ cost: m0 - m1, monthlyUpkeep: null, exit: r.code, lines: tail(r.lines, 6) });
+    return ok(withCleared({ cost: m0 - m1, monthlyUpkeep: null, exit: r.code, lines: tail(r.lines, 6) }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -185,9 +195,10 @@ server.registerTool('zone', {
   inputSchema: { x: z.number(), z: z.number(), radius: z.number().min(20).max(500).optional(), zone: zoneEnum },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const r = await runPwsh('play.ps1', ['zone', '-X', String(a.x), '-Z', String(a.z), '-R', String(a.radius ?? 300), '-Zone', a.zone]);
-    return ok({ cost: 0, monthlyUpkeep: 0, exit: r.code, lines: tail(r.lines, 4) });
+    return ok(withCleared({ cost: 0, monthlyUpkeep: 0, exit: r.code, lines: tail(r.lines, 4) }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -198,35 +209,36 @@ server.registerTool('place_service', {
     x: z.number(),
     z: z.number(),
     radius: z.number().default(300),
-    maxCost: z.number().int().default(150000),
+    maxCost: z.number().int().optional(),
     plan: z.boolean().default(false),
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const info = await prefabInfo(a.prefab, 'building');
-    if (!info.found) return ok({ found: false, similar: info.similar });
+    if (!info.found) return ok(withCleared({ found: false, similar: info.similar }, cleared));
     if (info.locked) return fail('prefab_locked: ' + a.prefab);
     if (a.plan) {
-      return ok({
+      return ok(withCleared({
         plan: true,
         construction: info.construction,
         monthlyUpkeep: info.monthlyUpkeep,
         consumptionUpkeep: info.consumptionUpkeep,
-      });
+      }, cleared));
     }
     const m0 = await money();
     const r = await runPwsh('play.ps1', [
-      'place', a.prefab, '-X', String(a.x), '-Z', String(a.z), '-R', String(a.radius), '-Max', String(a.maxCost),
+      'place', a.prefab, '-X', String(a.x), '-Z', String(a.z), '-R', String(a.radius), '-Max', String(a.maxCost ?? Math.max(150000, Math.ceil(Number(info.construction ?? 0) * 1.2))),
     ]);
     const m1 = await money();
-    return ok({
+    return ok(withCleared({
       cost: m0 - m1,
       construction: info.construction,
       monthlyUpkeep: info.monthlyUpkeep ?? info.consumptionUpkeep ?? null,
       exit: r.code,
       lines: tail(r.lines, 8),
-    });
+    }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -240,6 +252,7 @@ server.registerTool('prefabs', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const page = await callOk('get_build_prefabs', { kind: a.kind, filter: a.filter, limit: 400 }, 20);
     const list: any[] = page.prefabs ?? [];
@@ -254,10 +267,10 @@ server.registerTool('prefabs', {
         } catch { /* per-entry failure: leave costs off this entry */ }
       }
     }
-    return ok({
+    return ok(withCleared({
       total: page.total ?? list.length,
       prefabs: top.map(p => ({ name: p.name, locked: p.locked, ...(p.costs ?? {}) })),
-    });
+    }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -269,9 +282,10 @@ server.registerTool('set_tax', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const r = await callOk('set_tax', { area: a.area, rate: a.rate });
-    return ok({ area: a.area, before: r.before, after: r.after, cost: 0, monthlyUpkeep: 0 });
+    return ok(withCleared({ area: a.area, before: r.before, after: r.after, cost: 0, monthlyUpkeep: 0 }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -283,6 +297,7 @@ server.registerTool('set_service_budget', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const list: any[] = (await callOk('get_services', {}, 20)).services ?? [];
     const label = (x: any) => `${x.name}(${x.budget}%)`;
@@ -295,7 +310,7 @@ server.registerTool('set_service_budget', {
     }
     const s = matches[0];
     const r = await callOk('set_service_budget', { prefabIndex: s.index, prefabVersion: s.version, budget: a.budget });
-    return ok({ service: s.name, before: r.before, after: r.after, workers: s.workers, workplaces: s.workplaces, cost: 0 });
+    return ok(withCleared({ service: s.name, before: r.before, after: r.after, workers: s.workers, workplaces: s.workplaces, cost: 0 }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -304,6 +319,7 @@ server.registerTool('services', {
   inputSchema: {},
 }, async () => {
   try {
+    await ensureClear(); // result is an array; popups cleared here are not reported
     assertIdle();
     const list: any[] = (await callOk('get_services', {}, 20)).services ?? [];
     return ok(list.map(s => ({
@@ -316,26 +332,47 @@ server.registerTool('services', {
   } catch (e) { return fail(e); }
 });
 
-server.registerTool('buy_tile', {
-  description: 'Buys one to three map tiles within a cost cap; pauses the game. Use plan=true to preview.',
+server.registerTool('fix_services', {
+  description: 'Builds city services that are missing or escalated (snapshot needs with action=build, native coverage gaps, utility capacity) before growth; places large lots with the mod\'s roadside finder. Pauses the game.',
   inputSchema: {
-    n: z.number().int().min(1).max(3).default(1),
-    max: z.number().int().default(300000),
+    maxPlacements: z.number().int().min(1).max(4).default(2),
     plan: z.boolean().optional(),
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const m0 = await money();
-    const r = await runPwsh('play.ps1', ['buy', '-N', String(a.n), '-Max', String(a.max), ...(a.plan ? ['-Plan'] : [])]);
+    const r = await runPwsh('services.ps1', ['-MaxPlacements', String(a.maxPlacements), ...(a.plan ? ['-Plan'] : [])], 900000);
     const m1 = await money();
-    return ok({
+    return ok(withCleared({ cost: m0 - m1, exit: r.code, lines: tail(r.lines, 10) }, cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('buy_tile', {
+  description: 'Buys one to three adjacent map tiles (dry, flat; nearest the city or the given x,z) within a cost cap; pauses the game. Use plan=true to preview.',
+  inputSchema: {
+    n: z.number().int().min(1).max(3).default(1),
+    max: z.number().int().default(300000),
+    x: z.number().optional(),
+    z: z.number().optional(),
+    plan: z.boolean().optional(),
+  },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const m0 = await money();
+    const near = a.x !== undefined && a.z !== undefined ? ['-X', String(a.x), '-Z', String(a.z)] : [];
+    const r = await runPwsh('play.ps1', ['buy', '-N', String(a.n), '-Max', String(a.max), ...near, ...(a.plan ? ['-Plan'] : [])]);
+    const m1 = await money();
+    return ok(withCleared({
       cost: m0 - m1,
       monthlyUpkeep: null,
       upkeepNote: 'tile upkeep appears in snapshot expense',
       exit: r.code,
       lines: tail(r.lines),
-    });
+    }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -344,9 +381,10 @@ server.registerTool('save', {
   inputSchema: {},
 }, async () => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const r = await runPwsh('play.ps1', ['save']);
-    return ok({ exit: r.code, lines: tail(r.lines, 4) });
+    return ok(withCleared({ exit: r.code, lines: tail(r.lines, 4) }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -358,10 +396,11 @@ server.registerTool('restart', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
     const args = a.build ? ['-Build'] : (a.noInstall ? ['-NoInstall'] : []);
     const r = await runPwsh('upgrade.ps1', args, 1800000);
-    return ok({ exit: r.code, lines: tail(r.lines, 12) });
+    return ok(withCleared({ exit: r.code, lines: tail(r.lines, 12) }, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -379,6 +418,7 @@ server.registerTool('query', {
   },
 }, async (a) => {
   try {
+    await ensureClear(); // text result: popups cleared here are not reported
     assertIdle();
     const res = await callOk(a.command, a.args ?? {}, 30);
     const text = JSON.stringify(res) ?? 'null';
@@ -410,11 +450,31 @@ server.registerTool('free_lots', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
-    return ok(await callOk('find_free_lots', pick({
+    return ok(withCleared(await callOk('find_free_lots', pick({
       width: a.width, depth: a.depth, count: a.count, zone: a.zone, x: a.x, z: a.z,
       radius: a.radius, step: a.step, margin: a.margin, maxLink: a.maxLink,
-    }), 60));
+    }), 60), cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('roadside_lots', {
+  description: 'Rotated roadside positions for a building\'s lot, clear of lots, roads and unowned land.',
+  inputSchema: {
+    prefab: z.string(),
+    x: z.number(),
+    z: z.number(),
+    radius: z.number().optional(),
+    count: z.number().int().min(1).max(16).optional(),
+  },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    return ok(withCleared(await callOk('find_roadside_lots', pick({
+      prefab: a.prefab, x: a.x, z: a.z, radius: a.radius, count: a.count,
+    }), 60), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -429,12 +489,13 @@ server.registerTool('corridor', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
-    return ok(await callOk('corridor', pick({
+    return ok(withCleared(await callOk('corridor', pick({
       from: { x: a.fromX, z: a.fromZ },
       to: { x: a.toX, z: a.toZ },
       halfWidth: a.halfWidth,
-    }), 60));
+    }), 60), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -448,10 +509,11 @@ server.registerTool('coverage_gaps', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
-    return ok(await callOk('coverage_gaps', pick({
+    return ok(withCleared(await callOk('coverage_gaps', pick({
       service: a.service, threshold: a.threshold, cell: a.cell, top: a.top,
-    }), 60));
+    }), 60), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -463,8 +525,9 @@ server.registerTool('traffic_hotspots', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
-    return ok(await callOk('traffic_hotspots', pick({ top: a.top, minLength: a.minLength }), 60));
+    return ok(withCleared(await callOk('traffic_hotspots', pick({ top: a.top, minLength: a.minLength }), 60), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -480,8 +543,9 @@ server.registerTool('project', {
   },
 }, async (a) => {
   try {
+    const cleared = await ensureClear();
     assertIdle();
-    return ok(await callOk('project', { actions: a.actions }, 60));
+    return ok(withCleared(await callOk('project', { actions: a.actions }, 60), cleared));
   } catch (e) { return fail(e); }
 });
 

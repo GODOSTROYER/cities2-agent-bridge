@@ -14,7 +14,7 @@ param(
     [ValidateRange(64,200)][double]$BlockWidth = 110, [ValidateRange(64,200)][double]$BlockDepth = 110,
     [int]$RoadPrefabIndex = -1, [int]$RoadPrefabVersion = 1,
     [int]$ZonePrefabIndex = -1, [int]$ZonePrefabVersion = 1,
-    [long]$MaxCostPerRoad = 8000, [long]$MaxTotalCost = 200000, [long]$Reserve = 100000,
+    [long]$MaxCostPerRoad = 3000, [long]$MaxTotalCost = 200000, [long]$Reserve = 30000,
     [ValidateRange(0,2000)][double]$MaxConnectorLength = 400,
     [ValidateRange(0,60)][double]$Clearance = 20,
     [switch]$NoConnector, [switch]$NoZoning, [switch]$NoStubs, [switch]$AllowDemolition, [switch]$SkipNativePreview, [switch]$PlanOnly

@@ -74,6 +74,19 @@ namespace CitiesIIAgentBridge
             return true;
         }
 
+        // Rotated lot test (Unity Y rotation, local +Z = lot front): any non-free cell blocks.
+        public bool BoxFree(double cx, double cz, double halfW, double halfD, double rotationDeg)
+        {
+            double r = rotationDeg * Math.PI / 180, cos = Math.Cos(r), sin = Math.Sin(r), step = Cell / 2;
+            for (double u = -halfW; u <= halfW + 1e-6; u += step)
+                for (double v = -halfD; v <= halfD + 1e-6; v += step)
+                {
+                    int i = I(cx + u * cos + v * sin), j = J(cz - u * sin + v * cos);
+                    if (!InBounds(i, j) || this[i, j] != Free) return false;
+                }
+            return true;
+        }
+
         // A link road may start on a road and cross roads; lots and unowned land block it.
         public bool SegmentFree(double ax, double az, double bx, double bz, double halfWidth = 6)
         {
@@ -149,6 +162,10 @@ namespace CitiesIIAgentBridge
             bool Blocked(int ci, int cj)
             {
                 int i0 = ci * stride, j0 = cj * stride;
+                // Existing road cells stay passable: the route may run along or across roads
+                // even where lot fronts sit within halfWidth of them.
+                for (int i = i0; i < i0 + stride; i++) for (int j = j0; j < j0 + stride; j++)
+                    if (occ.InBounds(i, j) && occ[i, j] == OccupancyGrid.Road) return false;
                 for (int i = i0 - r; i < i0 + stride + r; i++) for (int j = j0 - r; j < j0 + stride + r; j++)
                 {
                     if (!occ.InBounds(i, j)) return true;
@@ -192,12 +209,24 @@ namespace CitiesIIAgentBridge
             }
             path.Reverse(); path[0] = new[] { ax, az }; path[path.Count - 1] = new[] { bx, bz };
             // String pulling: keep only waypoints needed for line of sight.
+            // Line of sight uses the same passability as the search (roads passable, lots dilated).
+            bool LineClear(double[] p, double[] q)
+            {
+                double len = SiteSearch.Dist(p[0], p[1], q[0], q[1]); int n = Math.Max(1, (int)(len / (occ.Cell / 2)));
+                for (int k2 = 0; k2 <= n; k2++)
+                {
+                    int ci = (int)((p[0] + (q[0] - p[0]) * k2 / n - occ.MinX) / cell), cj = (int)((p[1] + (q[1] - p[1]) * k2 / n - occ.MinZ) / cell);
+                    int id = cj * W + ci; if (id == start || id == goal) continue;
+                    if (ci < 0 || cj < 0 || ci >= W || cj >= H || Blocked(ci, cj)) return false;
+                }
+                return true;
+            }
             var simple = new List<double[]> { path[0] }; int k = 0;
             while (k < path.Count - 1)
             {
                 int far = k + 1;
                 for (int m = path.Count - 1; m > k + 1; m--)
-                    if (occ.SegmentFree(path[k][0], path[k][1], path[m][0], path[m][1], halfWidth)) { far = m; break; }
+                    if (LineClear(path[k], path[m])) { far = m; break; }
                 simple.Add(path[far]); k = far;
             }
             return simple;

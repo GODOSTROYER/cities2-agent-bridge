@@ -101,7 +101,16 @@ namespace CitiesIIAgentBridge
                 var intro = typeof(TutorialsUISystem).GetMethod("CompleteIntro", AnyInstanceMember, null, new[] { typeof(bool) }, null)
                     ?? throw new MissingMethodException("TutorialsUISystem", "CompleteIntro");
                 intro.Invoke(tutorialsUi, new object[] { (bool)ReadMember(tutorials, "tutorialEnabled") });
-                return new JObject { ["action"] = action, ["introUnfinishedAfter"] = (bool)ReadMember(tutorials, "tutorialIntroUnfinished") };
+                // tutorialIntroUnfinished = "the active tutorial list is the intro list"; CompleteIntro only
+                // changes the mode, so also skip that list exactly as the tutorial panel's skip does.
+                bool skipped = false;
+                if ((bool)ReadMember(tutorials, "tutorialIntroUnfinished"))
+                {
+                    var skip = typeof(TutorialSystem).GetMethod("SkipActiveList", AnyInstanceMember | BindingFlags.Public, null, Type.EmptyTypes, null)
+                        ?? throw new MissingMethodException("TutorialSystem", "SkipActiveList");
+                    skip.Invoke(tutorials, null); skipped = true;
+                }
+                return new JObject { ["action"] = action, ["skippedIntroList"] = skipped, ["introUnfinishedAfter"] = (bool)ReadMember(tutorials, "tutorialIntroUnfinished") };
             }
             if (action != "complete_tutorial_phase") throw new ArgumentException("unsupported_action: complete_tutorial_phase, dismiss_milestone, dismiss_signature or complete_tutorial_intro");
             var before = PauseState();

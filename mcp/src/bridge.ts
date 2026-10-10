@@ -127,14 +127,17 @@ export async function fixPopups(max = 10): Promise<string[]> {
   for (let n = 0; n < max; n++) {
     const ui = await callOk('get_ui_state', { chirps: 0 }, 10);
     if (ui.milestone?.blockedBy === 'tutorial_intro' && !ui.resolvableByBridge) {
-      const r = await callOk('resolve_pause_blocker', { action: 'complete_tutorial_intro' }, 10);
-      done.push(`complete_tutorial_intro (released=${!r.introUnfinishedAfter})`); await sleep(1200); continue;
+      const ri = await call('resolve_pause_blocker', { action: 'complete_tutorial_intro' }, 10);
+      done.push(ri.ok ? `complete_tutorial_intro (released=${!ri.result.introUnfinishedAfter})` : `retry:${String(ri.error).slice(0, 60)}`); await sleep(1200); continue;
     }
     if (!ui.resolvableByBridge) { done.push(`blocker=${ui.likelyBlocker}`); break; }
     const req = ui.likelyBlocker === 'milestone_popup' ? { action: 'dismiss_milestone', expectedMilestone: String(ui.milestone.pending) }
-      : ui.likelyBlocker === 'signature_popup' ? { action: 'dismiss_signature', expectedSignature: String(ui.signatures.pending[0].name) }
+      : ui.likelyBlocker === 'signature_popup' ? { action: 'dismiss_signature', expectedSignature: String(ui.signatures?.pending?.[0]?.name ?? '') }
       : { action: 'complete_tutorial_phase', expectedPhase: String(ui.tutorial.activeTutorialPhase) };
-    const r = await callOk('resolve_pause_blocker', req, 10);
+    // The phase/popup can change between the read and the resolve (*_changed): re-read and retry.
+    const res = await call('resolve_pause_blocker', req, 10);
+    if (!res.ok) { done.push(`retry:${String(res.error).slice(0, 60)}`); await sleep(500); continue; }
+    const r = res.result;
     done.push(`${req.action}:${r.completedPhase ?? r.dismissed}`);
     await sleep(1500); // the UI releases its pause barrier on later frames
   }
@@ -167,6 +170,9 @@ export async function run(totalSeconds: number, speed = 4, cashFloor = 0): Promi
       steps++; used += Number(res.elapsedSeconds ?? 0); frames += Number(res.advancedFrames ?? 0);
       const reason = String(res.reason);
       if (!res.paused) { stop = 'pause_not_confirmed'; break; }
+      // Milestones are withheld while the tutorial intro is unfinished (FAILURES #24) without
+      // any pause, so check the non-pausing snapshot after every step and release them.
+      try { const snap = await callOk('get_snapshot', {}, 5); if (snap.milestone?.blockedBy === 'tutorial_intro') notes.push(...(await fixPopups(3)).filter(f => !f.startsWith('blocker='))); } catch { /* best effort */ }
       if (reason === 'frame_limit' || reason === 'wall_deadline') { shortageStreak = 0; continue; }
       if (reason === 'new_utility_shortage') { if (++shortageStreak >= 3) { stop = 'new_shortages_3_steps'; break; } continue; }
       if (reason === 'game_paused' && resolutions < 10) {
@@ -193,3 +199,14 @@ export async function prefabInfo(name: string, kind = 'all'): Promise<Json> {
 }
 
 export const money = async (): Promise<number> => Number((await callOk('get_city_state', {}, 10)).money);
+
+// Called at the start of every tool (FAILURES #37): if the non-pausing snapshot shows a
+// resolvable popup or an intro-held milestone, clear it (race-tolerant) before acting.
+export async function ensureClear(): Promise<string[]> {
+  if (state.running) return []; // run() resolves popups itself; never race its step loop
+  try {
+    const s = await callOk('get_snapshot', {}, 5);
+    if (s.ui?.fixable || s.milestone?.blockedBy === 'tutorial_intro') return (await fixPopups(10)).filter(f => !f.startsWith('blocker='));
+  } catch { /* the tool itself will report a dead bridge */ }
+  return [];
+}

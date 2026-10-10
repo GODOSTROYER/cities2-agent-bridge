@@ -58,3 +58,4 @@ Console.WriteLine($"{ObjectPlacementTests.Run()} object placement safety checks 
 Console.WriteLine($"{RecoveryTests.Run()} mailbox recovery checks passed.");
 Console.WriteLine($"{MailboxClientTests.Run()} real PowerShell mailbox client checks passed.");
 Console.WriteLine($"{PlanningTests.Run()} planning core checks passed.");
+Console.WriteLine($"{ServiceSignalsTests.Run()} service signal checks passed.");

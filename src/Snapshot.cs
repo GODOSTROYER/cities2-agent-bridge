@@ -60,8 +60,8 @@ namespace CitiesIIAgentBridge
                 }
                 uint frame = World.DefaultGameObjectInjectionWorld.GetExistingSystemManaged<SimulationSystem>()?.frameIndex ?? 0;
                 bool due = snapshot == null || snapshotCity != citySession || frame < snapshotFrame
-                    || frame - snapshotFrame >= SnapshotFrames || (DateTime.UtcNow - snapshotUtc).TotalSeconds >= 5;
-                if (due) RefreshSnapshot();
+                    || frame - snapshotFrame >= SnapshotFrames || (DateTime.UtcNow - snapshotUtc).TotalSeconds >= 2;
+                if (due) { RefreshSnapshot(); AutoResolvePopups(frame); }
                 snapshotTickError = null;
             }
             catch (Exception e) { snapshotTickError = e.GetBaseException().Message; }
@@ -252,9 +252,11 @@ namespace CitiesIIAgentBridge
                 s["buildings"] = new JObject { ["total"] = buildings, ["building"] = construction, ["abandoned"] = abandoned, ["condemned"] = condemned, ["onFire"] = fires.Count };
                 if (util["power"] is JObject power) power["plantCap"] = powerCapacity;
             });
+            JArray recentChirps = null; string activePhase = null;
             Timed(errors, perf, "ui", () =>
             {
-                var ui = UiState(new JObject { ["chirps"] = 3 });
+                var ui = UiState(new JObject { ["chirps"] = 10 });
+                recentChirps = ui["chirps"] as JArray; activePhase = (string)ui["tutorial"]?["activeTutorialPhase"];
                 var u = new JObject { ["blocker"] = ui["likelyBlocker"], ["fixable"] = ui["resolvableByBridge"] };
                 var phase = ui["tutorial"]?["activeTutorialPhase"];
                 if (phase != null && phase.Type != JTokenType.Null) u["tutorial"] = phase;
@@ -273,9 +275,10 @@ namespace CitiesIIAgentBridge
                     s["milestone"] = ms;
                 }
                 if (ui["chirps"] is JArray chirps)
-                    s["chirps"] = new JArray(chirps.Select(c => { string t = (string)c["text"] ?? ""; return (JToken)(t.Length > 90 ? t.Substring(0, 90) + "\u2026" : t); }));
+                    s["chirps"] = new JArray(chirps.Take(3).Select(c => { string t = (string)c["text"] ?? ""; return (JToken)(t.Length > 90 ? t.Substring(0, 90) + "\u2026" : t); }));
                 if (ui["errors"] is JArray uiErrors) foreach (var x in uiErrors.Take(3)) errors.Add("ui." + (string)x);
             });
+            Timed(errors, perf, "needs", () => s["needs"] = ServiceNeeds(w, recentChirps, activePhase));
             if (errors.Count > 0) s["errors"] = errors;
             perf["total"] = Math.Round(total.Elapsed.TotalMilliseconds, 1);
             s["perfMs"] = perf;

@@ -26,8 +26,12 @@ try {
       await new Promise(r => setTimeout(r, 5000));
     }
     console.log('RUN:', text(await pending));
+  } else if (mode === 'brief') {
+    const d = JSON.parse(text(await callTool('snapshot')));
+    const j = d.jobs ?? {};
+    console.log(JSON.stringify({ city: d.city, happy: d.happy, health: d.health, demand: d.demand, unemp: j.unemp, workers: `${j.workers}/${j.eligible}`, vacantByEdu: j.vacantByEdu, why: d.demandWhy, worst: d.worstHappy, power: d.util?.power?.pct, water: d.util?.water?.pct, sewage: d.util?.sewage?.pct, short: d.shortages, pen: d.servicePenalties?.byFactor, bld: d.buildings, ms: d.milestone, ui: d.ui?.blocker, exp: d.expense, inc: d.income }));
   } else if (mode === 'call') {
     const r = await callTool(a1, a2 ? JSON.parse(a2) : {});
     console.log((r.isError ? 'ERROR ' : '') + text(r));
-  } else console.log('usage: concurrency [seconds] | call <tool> [json]');
+  } else console.log('usage: concurrency [seconds] | brief | call <tool> [json]');
 } finally { await client.close(); }

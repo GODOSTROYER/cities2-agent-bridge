@@ -32,10 +32,20 @@ $rules = @(
 $skip = 'Ruins|Upgrade|Extension|Wing|Sub0'
 
 $m = Invoke-Bridge get_city_management
+# Escalated needs from the non-pausing snapshot (chirps, icons, dead/sick, tutorial cards;
+# score >= 3 -> action build). They go first and override cash floor and upkeep discipline.
+$snap = try { Invoke-Bridge get_snapshot } catch { $null }
+$escalated = @(if ($snap.needs) { $snap.needs.PSObject.Properties | Where-Object { $_.Value.action -eq 'build' } | ForEach-Object Name })
+$needKey = @{ health = 'health'; hospital = 'health'; deathcare = 'deathcare'; fire = 'fire'; police = 'police'; school = 'education'; highschool = 'education'; post = 'post'; garbage = 'garbage' }
+# Cooldown: an escalation-driven build of a service is not repeated within 10 min (signals lag).
+$coolFile = Join-Path $PSScriptRoot 'journals\services-escalation.json'
+$cool = try { Get-Content $coolFile -Raw | ConvertFrom-Json -AsHashtable } catch { @{} }; if (!$cool) { $cool = @{} }
+$escalated = @($escalated | Where-Object { $k = $_; !$cool[$k] -or ([DateTime]::UtcNow - [DateTime]::Parse($cool[$k], [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()).TotalMinutes -ge 10 })
+if ($escalated) { "services: escalated needs -> " + (($escalated | ForEach-Object { "$_ $($snap.needs.$_.score)" }) -join ', ') }
 $pop = [int]$m.city.population; $money = [double]$m.city.money
 # Below MinCash only critical utilities (power/water/sewage) may still be built.
 $utilitiesOnly = $money -lt $MinCash -and !$Plan
-if ($utilitiesOnly -and $money -lt 60000) { "services: skipped (cash $([int]$money) too low even for utilities)"; return }
+if ($utilitiesOnly -and $money -lt 60000 -and !$escalated) { "services: skipped (cash $([int]$money) too low even for utilities)"; return }
 # Upkeep discipline: every building adds permanent upkeep. While the city loses money,
 # only services citizens are actively complaining about may be added (and power/water).
 $net = [double]$m.budget.balanceRaw
@@ -48,7 +58,8 @@ $complaints = @((Invoke-Bridge get_ui_state @{ chirps = 10 }).chirps | ForEach-O
 function Test-Near($a, $b, $r) { [Math]::Pow($a.x - $b.x, 2) + [Math]::Pow($a.z - $b.z, 2) -le $r * $r }
 
 $needs = foreach ($rule in $rules) {
-    if ($pop -lt $rule.minPop) { continue }
+    $isEscalated = $escalated -contains $needKey[$rule.t]
+    if ($pop -lt $rule.minPop -and !$isEscalated) { continue }
     $have = @($all | Where-Object { $_.p -match $rule.rx })
     # Phase 2: the game's own per-road coverage (coverage_gaps) when the mod has it;
     # distance-to-building only as a fallback.
@@ -60,13 +71,13 @@ $needs = foreach ($rule in $rules) {
         $uncovered = @($homes | Where-Object { $h = $_; -not @($have | Where-Object { Test-Near $_ $h $rule.r }).Count })
         $share = if ($homes.Count) { $uncovered.Count / $homes.Count } else { 0 }
     }
-    $missing = !$have.Count -or ($rule.r -lt 99999 -and $share -gt $UncoveredShare)
+    $missing = $isEscalated -or !$have.Count -or ($rule.r -lt 99999 -and $share -gt $UncoveredShare)
     if (!$missing) { continue }
-    $complained = $complaints -match $rule.chirp
+    $complained = $isEscalated -or ($complaints -match $rule.chirp)
     if (!$affordable -and !$complained) { continue }   # cannot afford new upkeep yet
     $target = if ($rule.t -eq 'garbage' -and $industry) { $industry } elseif ($uncovered) { $uncovered } else { $homes }
     $cx = ($target.x | Measure-Object -Average).Average; $cz = ($target.z | Measure-Object -Average).Average
-    [pscustomobject]@{ t = $rule.t; prefab = $rule.prefab; x = [Math]::Round($cx); z = [Math]::Round($cz); have = $have.Count; uncovered = [Math]::Round($share * 100); complained = [bool]$complained }
+    [pscustomobject]@{ t = $rule.t; prefab = $rule.prefab; x = [Math]::Round($cx); z = [Math]::Round($cz); have = $have.Count; uncovered = [Math]::Round($share * 100); complained = [bool]$complained; escalated = $isEscalated }
 }
 # Utilities: capacity triggers (supply above 70% of capacity, power imports, or
 # widespread shortfall reports), placed near the existing facilities of that kind.
@@ -78,7 +89,6 @@ $problems = @(Get-BridgePaged diagnose_connections @{ limit = 4096 })
 $powerShort = @($problems | Where-Object { $_.issues -contains 'electricity_shortfall' }).Count
 $importing = [double]$m.budget.expenseBySourceRaw.ImportElectricity -gt 0
 # City use vs production from the non-pausing snapshot (plants run flat out when exporting; FAILURES #33).
-$snap = try { Invoke-Bridge get_snapshot } catch { $null }
 $powerLoad = if ($snap.util.power) { [double]$snap.util.power.pct } else { 0 }
 if ($snap.util.power.import -gt 0) { $importing = $true }
 if ($powerLoad -gt 85) { $importing = $true }   # build before blackouts, not after
@@ -87,8 +97,8 @@ $anchor = { param($set) if ($set) { [pscustomobject]@{ x = [Math]::Round(($set.x
 if ($importing -or ($homes.Count -and $powerShort / [double]$all.Count -gt 0.05)) { $a = & $anchor $powerSites; $needs = @($needs) + [pscustomobject]@{ t = 'power'; prefab = 'WindTurbine01,SmallCoalPowerPlant01,SolarPowerStation01'; x = $a.x; z = $a.z; have = $powerSites.Count; uncovered = 0; complained = $true; note = "importing=$importing shortfall=$powerShort" } }
 if ($wUse -gt 0.7) { $a = & $anchor $pumps.position; $needs = @($needs) + [pscustomobject]@{ t = 'water'; prefab = 'GroundwaterPumpingStation01,WaterTower01,WaterPumpingStation01'; x = $a.x; z = $a.z; have = $pumps.Count; uncovered = 0; complained = $true; note = "water at $([Math]::Round($wUse * 100))%" } }
 if ($sUse -gt 0.7) { $a = & $anchor $outlets.position; $needs = @($needs) + [pscustomobject]@{ t = 'sewage'; prefab = 'SewageOutlet01'; x = $a.x; z = $a.z; have = $outlets.Count; uncovered = 0; complained = $true; note = "sewage at $([Math]::Round($sUse * 100))%" } }
-if ($utilitiesOnly) { $needs = @($needs | Where-Object { $_.t -in 'power', 'water', 'sewage' }); if (!$needs) { "services: cash $([int]$money) below $MinCash; no critical utility needed"; return } }
-$needs = @($needs | Sort-Object @{ e = { if ($_.complained) { 0 } else { 1 } } }, @{ e = { if ($_.have) { 1 } else { 0 } } }, @{ e = 'uncovered'; Descending = $true })
+if ($utilitiesOnly) { $needs = @($needs | Where-Object { $_.t -in 'power', 'water', 'sewage' -or $_.escalated }); if (!$needs) { "services: cash $([int]$money) below $MinCash; no critical utility needed"; return } }
+$needs = @($needs | Sort-Object @{ e = { if ($_.escalated) { 0 } else { 1 } } }, @{ e = { if ($_.complained) { 0 } else { 1 } } }, @{ e = { if ($_.have) { 1 } else { 0 } } }, @{ e = 'uncovered'; Descending = $true })
 if (!$needs) { "services: all adequate (pop $pop)"; return }
 $placed = 0
 foreach ($n in $needs) {
@@ -98,9 +108,9 @@ foreach ($n in $needs) {
     if ($n.note) { $why = $n.note }
     $results = @()
     foreach ($prefab in ($n.prefab -split ',')) {
-        $out = @(& $play place $prefab -X $n.x -Z $n.z -R 450 -Max 300000 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -like 'place:*' -and $_ -notlike 'place: lot*' -or $_ -match 'locked|not found|not placeable' })
+        $out = @(& $play place $prefab -X $n.x -Z $n.z -R 600 -Max 400000 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -like 'place:*' -and $_ -notlike 'place: lot*' -or $_ -match 'locked|not found|not placeable' })
         $results += ($out -join '; ')
-        if ($out -match 'cost') { $placed++; break }   # placed
+        if ($out -match 'cost') { $placed++; if ($n.escalated) { $cool[$needKey[$n.t]] = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture); New-Item -ItemType Directory -Force (Split-Path $coolFile) | Out-Null; $cool | ConvertTo-Json -Compress | Set-Content $coolFile }; break }   # placed
         if (!($out -match 'locked|not found|not placeable')) { break }   # a real placement failure: report, do not try other types
     }
     "services: $($n.t) ($why) -> " + ($results -join ' | ')

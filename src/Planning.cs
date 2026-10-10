@@ -144,7 +144,7 @@ namespace CitiesIIAgentBridge
             var ground = w.GetExistingSystemManaged<GroundPollutionSystem>().GetMap(true, out var groundReady); groundReady.Complete();
             var noise = w.GetExistingSystemManaged<NoisePollutionSystem>().GetMap(true, out var noiseReady); noiseReady.Complete();
             bool waterOk = water.isCreated && water.hasDepths && water.resolution.x > 1;
-            var rows = new List<JObject>();
+            var rows = new List<JObject>(); int rejectedWet = 0, rejectedRelief = 0;
             foreach (var s in finalists)
             {
                 double lo = double.MaxValue, hi = double.MinValue, pol = 0; int wet = 0;
@@ -155,7 +155,7 @@ namespace CitiesIIAgentBridge
                     if (waterOk) { var sp = WaterUtils.ToSurfaceSpace(ref water, pos); if (sp.x >= 0 && sp.z >= 0 && sp.x < water.resolution.x && sp.z < water.resolution.z && WaterUtils.SampleDepth(ref water, pos) > 0.1f) wet++; }
                     pol = Math.Max(pol, Math.Max(AirPollutionSystem.GetPollution(pos, air).m_Pollution, Math.Max(GroundPollutionSystem.GetPollution(pos, ground).m_Pollution, NoisePollutionSystem.GetPollution(pos, noise).m_Pollution)));
                 }
-                double relief = hi - lo; if (wet > 0 || relief > 25) continue;
+                double relief = hi - lo; if (wet > 0) { rejectedWet++; continue; } if (relief > 25) { rejectedRelief++; continue; }
                 double cx = s.X + width / 2, cz = s.Z + depth / 2;
                 double dInd = MinDistance(polluters, cx, cz), dJob = MinDistance(jobs, cx, cz), dHome = MinDistance(homes, cx, cz), dHwy = MinDistance(highway, cx, cz);
                 double score = -s.Link / 10 - (s.ClearLink.HasValue ? 0 : 50);
@@ -173,7 +173,7 @@ namespace CitiesIIAgentBridge
             return new JObject
             {
                 ["sites"] = new JArray(rows.OrderByDescending(r => (double)r["score"]).Take(count)), ["width"] = width, ["depth"] = depth,
-                ["candidates"] = sites.Count, ["lots"] = lots, ["roads"] = edges.Count, ["rasterMs"] = Math.Round(rasterMs), ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds),
+                ["candidates"] = sites.Count, ["rejected"] = new JObject { ["wet"] = rejectedWet, ["relief"] = rejectedRelief }, ["lots"] = lots, ["roads"] = edges.Count, ["rasterMs"] = Math.Round(rasterMs), ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds),
                 ["citySession"] = citySession, ["note"] = "x,z = min corner; geometric + terrain screen only; validate roads with plan/preview before building."
             };
         }
@@ -229,6 +229,52 @@ namespace CitiesIIAgentBridge
                     }
                 }
             return new JObject { ["links"] = new JArray(found.OrderBy(f => f.d).Take(top).Select(f => f.row)), ["tested"] = tested, ["lots"] = lots, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
+        }
+
+        private static Entity PrefabByName(World w, string name)
+        {
+            var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es) if (ps.GetPrefabName(e) == name) return e;
+            return Entity.Null;
+        }
+
+        // find_roadside_lots {prefab | width+depth, x, z, radius?, count?}: rotated lot positions
+        // facing a road, clear of lots, roads and unowned land; pass them to place_building as candidates.
+        private JObject FindRoadsideLots(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var clock = Stopwatch.StartNew();
+            double hw, hd; string prefab = (string)args["prefab"];
+            if (prefab != null)
+            {
+                var pe = PrefabByName(w, prefab); if (pe == Entity.Null || !em.HasComponent<BuildingData>(pe)) throw new ArgumentException("building_prefab_not_found: " + prefab);
+                var lot = em.GetComponentData<BuildingData>(pe).m_LotSize; hw = lot.x * 4; hd = lot.y * 4;
+            }
+            else { hw = RequiredFloat(args, "width") / 2; hd = RequiredFloat(args, "depth") / 2; }
+            double x = RequiredFloat(args, "x"), z = RequiredFloat(args, "z"), radius = args["radius"] == null ? 400 : RequiredFloat(args, "radius");
+            int count = Math.Max(1, Math.Min(16, (int?)args["count"] ?? 16));
+            if (radius < 16 || radius > 2000) throw new ArgumentException("radius_must_be_16_to_2000");
+            var owned = OwnedTiles(em); var edges = RoadEdges(w);
+            double pad = radius + hw + hd + 120;
+            var occ = BuildOccupancy(w, owned, edges, x - pad, z - pad, x + pad, z + pad, out int lots);
+            var found = new List<(double d, JObject row)>();
+            foreach (var e in edges.Where(e => !e.Highway))
+            {
+                var a = e.Curve.a; var b = e.Curve.d; double len = math.distance(a.xz, b.xz);
+                if (len < 2 * hw || math.distance(BezierAt(e.Curve, 0.5f).xz, new float2((float)x, (float)z)) > radius + len) continue;
+                double tx = (b.x - a.x) / len, tz = (b.z - a.z) / len;
+                for (double sAlong = hw + 4; sAlong <= len - hw - 4; sAlong += 8)
+                    foreach (int side in new[] { -1, 1 })
+                    {
+                        double ox = -tz * side, oz = tx * side;
+                        double cx = a.x + tx * sAlong + ox * (e.HalfWidth + 1 + hd), cz = a.z + tz * sAlong + oz * (e.HalfWidth + 1 + hd);
+                        double d = SiteSearch.Dist(cx, cz, x, z); if (d > radius) continue;
+                        double rot = Math.Atan2(-ox, -oz) * 180 / Math.PI;
+                        if (!occ.BoxFree(cx, cz, hw, hd, rot)) continue;
+                        found.Add((d, new JObject { ["position"] = new JObject { ["x"] = Math.Round(cx, 1), ["z"] = Math.Round(cz, 1) }, ["rotation"] = Math.Round(rot, 2), ["roadEdge"] = NativeBuild.Id(e.Entity) }));
+                    }
+            }
+            return new JObject { ["candidates"] = new JArray(found.OrderBy(f => f.d).Take(count).Select(f => f.row)), ["found"] = found.Count, ["halfSize"] = new JArray(hw, hd), ["lots"] = lots, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
         }
 
         private static readonly string[] CoverageNames = Enum.GetNames(typeof(CoverageService));
