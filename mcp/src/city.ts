@@ -5,6 +5,7 @@ import { call, callOk, multi, mutate, waitBatch, waitOperation, readSession } fr
 import type { Json } from './bridge.ts';
 import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater } from './budget.ts';
 import type { SpendClass } from './budget.ts';
+import { diagnoseJobs } from './pilot.ts';
 
 export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', resmid: 'NA Residential Medium', reshigh: 'NA Residential High', mixed: 'NA Residential Mixed', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
 const HOUSING = ['res', 'resmed', 'resmid', 'reshigh', 'mixed'];
@@ -124,12 +125,15 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
   const zoneName = ZONES[o.zone]; if (!zoneName) return { ok: false, reason: `unknown_zone:${o.zone}` };
   // A locked zone must be refused BEFORE any road is built (zoning would fail afterwards).
   const zonePrefab = await prefab(zoneName, 'zone'); if (!zonePrefab.found || zonePrefab.locked) return { ok: false, reason: 'zone_prefab_locked', zone: o.zone };
-  const [plan, city0] = await multi([{ command: 'plan_grid', args: { x: o.x, z: o.z, cols: o.cols, rows: o.rows, road: o.road ?? 'Small Road' } }, { command: 'get_city_state' }]);
+  const [plan, city0] = await multi([{ command: 'plan_grid', args: { x: o.x, z: o.z, cols: o.cols, rows: o.rows, road: o.road ?? 'Small Road', maxConnector: 950 } }, { command: 'get_city_state' }]);
   phases.plan = now() - t; t = now();
   if (plan.blocked) return { ok: false, reason: 'grid_blocked', lotCells: plan.lotCells, outsideCells: plan.outsideCells, phases };
   const roads: Json[] = plan.roads.map((r: number[]) => [{ x: r[0], z: r[1] }, { x: r[2], z: r[3] }]);
   if (!roads.length) return { ok: false, reason: 'no_new_roads', phases };
-  const connectors: Json[] = plan.connectors ?? [];
+  // Long connectors reach land that has no road yet; one that would cross water deeper than
+  // 2 m is dropped (FAILURES #84: check before any network crosses water).
+  const connectors: Json[] = [];
+  for (const c of (plan.connectors ?? []).slice(0, 6)) { const wet = await waterUnder(connectorStart(c), c.to); if (!(wet.wet && wet.deepest > 2)) connectors.push(c); }
   if (!plan.shared && !connectors.length) return { ok: false, reason: 'no_lot_free_connector', phases };
   const metres = roads.reduce((sum, r) => sum + Math.hypot(r[1].x - r[0].x, r[1].z - r[0].z), 0) + (connectors[0]?.d ?? 0);
   const est = Math.round(metres * 5);
@@ -262,12 +266,19 @@ export async function buildLine(kind: string, from: { x: number; z: number }, to
 export interface GrowOptions { zone?: string; cols?: number; rows?: number; plan?: boolean; reserve?: number; cls?: SpendClass }
 
 // Demand-driven growth: zone choice from the non-pausing snapshot, site from find_free_lots.
-export async function grow(o: GrowOptions): Promise<Json> {
+// The site search and the build run inside ONE goal (FAILURES #95): two growth calls planned at
+// the same time picked overlapping land and one grid was left half built.
+export async function grow(o: GrowOptions): Promise<Json> { return o.plan ? growInner(o) : mutate(() => growInner(o)); }
+async function growInner(o: GrowOptions): Promise<Json> {
   const phases: Record<string, number> = {}; let t = now();
   const snap = await callOk('get_snapshot', {}, 10); const d = snap.demand ?? {}; const unemp = Number(snap.jobs?.unemp ?? 0);
   let choices = [{ k: 'res', v: d.rL }, { k: 'resmed', v: d.rM }, { k: 'resmid', v: d.rM }, { k: 'mixed', v: d.rM }, { k: 'reshigh', v: d.rH }, { k: 'com', v: d.c }, { k: 'ind', v: d.i }, { k: 'off', v: d.o }].map(c => ({ k: c.k, v: Number(c.v ?? 0) })).sort((a, b) => b.v - a.v);
   const jobs = ['com', 'ind', 'off'];
-  if (unemp > 10) choices = [...choices.filter(c => jobs.includes(c.k)), ...choices.filter(c => !jobs.includes(c.k))];
+  // No unemployment gate (FAILURES #91): the demand bars decide. Unemployment with open vacancies is
+  // an education mismatch; holding housing back then starves the workplaces. Only when jobs are
+  // truly missing (few vacancies for the people out of work) do job zones go first.
+  const noJobs = diagnoseJobs(snap.jobs, snap.servicePenalties).state === 'no_jobs';
+  if (noJobs) choices = [...choices.filter(c => jobs.includes(c.k)), ...choices.filter(c => !jobs.includes(c.k))];
   if (o.zone) choices = choices.filter(c => c.k === o.zone);
   const pick = choices.find(c => c.v >= 20);
   if (!pick) return { ok: false, reason: 'demand_too_low', demand: d, unemp };
@@ -278,12 +289,12 @@ export async function grow(o: GrowOptions): Promise<Json> {
   if (unservedDistricts.length) return { ok: false, partial: true, reason: 'previous_district_unserved', districts: unservedDistricts, hint: 'connect it (link / build_line) before building another' };
   // Owner money policy: a new district is discretionary below the reserve (job zones while
   // unemployment is above 10% are priority and go ahead when cheap).
-  const cls = o.cls ?? growClass(pick.k, unemp); const cash = Number(snap.city?.money ?? 0);
+  const cls = o.cls ?? growClass(pick.k, unemp, pick.v); const cash = Number(snap.city?.money ?? 0);
   const want: [number, number] = [o.cols ?? 3, o.rows ?? 2];
   const sizes = ([want, [2, 2], [2, 1], [1, 1]] as [number, number][]).filter((s, i, all) => s[0] * s[1] <= want[0] * want[1] && all.findIndex(x => x[0] === s[0] && x[1] === s[1]) === i);
   const tried: string[] = [];
   for (const [cols, rows] of sizes) {
-    const lots = await callOk('find_free_lots', { width: cols * 110, depth: rows * 110, count: 4, zone: HOUSING.includes(pick.k) ? 'res' : pick.k }, 30);
+    const lots = await callOk('find_free_lots', { width: cols * 110, depth: rows * 110, count: 4, zone: HOUSING.includes(pick.k) ? 'res' : pick.k, maxLink: 900 }, 30);
     phases[`sites${cols}x${rows}`] = now() - t; t = now();
     for (const site of lots.sites ?? []) {
       // Quality floor for housing: never next to industry or on polluted ground (the score only

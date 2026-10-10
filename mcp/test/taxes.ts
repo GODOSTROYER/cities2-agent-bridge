@@ -33,6 +33,10 @@ d = decideTax({ rates: { R: 15, C: 10, I: 10, O: 10 }, pins: owner, demand: { c:
 check(d.action === 'raise' && d.area === 'Industrial' && d.to === 11, 'strong demand and low unemployment raise the strongest zone one point');
 d = decideTax({ rates: { R: 15, C: 10, I: 10, O: 10 }, pins: owner, demand: { c: 80, i: 90, o: 70 }, unemployment: 22 });
 check(d.action === 'hold', 'no raise while unemployment is 10% or more');
+d = decideTax({ rates: { R: 15, C: 10, I: 10, O: 10 }, pins: owner, demand: { c: 80, i: 90, o: 70 }, unemployment: 22, jobsState: 'mismatch' });
+check(d.action === 'raise', 'with the diagnosis: 22% unemployment that is an education mismatch does not hold a raise that demand supports');
+d = decideTax({ rates: { R: 15, C: 10, I: 10, O: 10 }, pins: owner, demand: { c: 80, i: 90, o: 70 }, unemployment: 22, jobsState: 'no_jobs' });
+check(d.action === 'hold', 'a real jobs shortage still holds it');
 d = decideTax({ rates: { R: 15, C: 11, I: 11, O: 11 }, pins: owner, demand: { c: 80, i: 90, o: 70 }, unemployment: 5 });
 check(d.action === 'hold', 'no raise above the top of the range');
 d = decideTax({ rates: { R: 15, C: 11, I: 10, O: 11 }, pins: owner, demand: { rL: 0, rM: 0, rH: 0, c: 50, i: 50, o: 50 }, unemployment: 5, taxFactor: -9 });

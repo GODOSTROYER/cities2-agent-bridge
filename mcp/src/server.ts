@@ -3,18 +3,30 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
+import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state, REPO } from './bridge.ts';
 import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate, devTree, unlockNode } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
 import { notifications, clearRuins, fixJams } from './notifications.ts';
 import { fit } from './project.ts';
+import { runCycle } from './pilot-cycle.ts';
 import { registerTaxTool, readPins, pinViolation } from './taxes.ts';
 import { invalidatePrefabCache } from './city.ts';
 
 const server = new McpServer({ name: 'cs2', version: '0.1.0' });
 instrument(server);          // every tool: wall-clock ms in the result and in journals/mcp-timings.jsonl
+// Registry of the tool handlers, so `autoplay_cycle` can run a whole rule cycle through the same
+// tools (and therefore the same guards) an agent would call one by one.
+const handlers = new Map<string, (a: any) => Promise<any>>();
+{ const register = server.registerTool.bind(server) as any; (server as any).registerTool = (name: string, def: any, fn: any) => { handlers.set(name, fn); return register(name, def, fn); }; }
+const innerTool = async (name: string, args: Record<string, any> = {}): Promise<Record<string, any>> => {
+  const fn = handlers.get(name); if (!fn) throw new Error(`unknown_tool:${name}`);
+  const r = await fn(args); const text = String(r?.content?.[0]?.text ?? '');
+  let body: Record<string, any>; try { body = JSON.parse(text); } catch { body = { text: text.slice(0, 300) }; }
+  if (r?.isError && body.error === undefined) body.error = text.slice(0, 300);
+  return body;
+};
 registerTimingsTool(server, z);
 registerHappinessTool(server, z);
 registerTaxTool(server, z);
@@ -419,6 +431,16 @@ server.registerTool('build_arterial', {
     const cleared = await ensureClear();
     assertIdle();
     return ok(withCleared(await buildCorridor(a.fromX, a.fromZ, a.toX, a.toZ, a.road ?? 'Medium Road', !!a.plan), cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('autoplay_cycle', {
+  description: 'ONE full rule-driven play cycle, returning one line. Keeps the background run alive, reads the snapshot, runs the self-check, then acts by the standing rules through the other tools: ruins, services by escalation, traffic, owner tax pins, growth by the demand bars (all densities, jobs and housing; a tile is bought when no site is free), development points, rolling save every 30 minutes and at each milestone. Writes journals/progress.md (every 15 minutes), journals/pilot/status.json and log.jsonl. The line ends with ATTENTION items that need an agent: unserved districts, loose network ends, factors worse than -5, blocked demand, cash under the reserve. Call it about once a minute and sleep in between.',
+  inputSchema: {},
+}, async () => {
+  try {
+    const r = await runCycle(innerTool, REPO);
+    return { content: [{ type: 'text', text: r.line }] };
   } catch (e) { return fail(e); }
 });
 

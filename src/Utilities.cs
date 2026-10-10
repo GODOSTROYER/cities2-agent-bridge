@@ -208,7 +208,8 @@ namespace CitiesIIAgentBridge
                 if (SiteRules.IsTurbine(name)) land.Turbines.Add(p);
                 else if (!zoned && em.HasComponent<BuildingData>(pe)) { var lot = em.GetComponentData<BuildingData>(pe).m_LotSize; if (lot.x * lot.y >= 100) land.Large.Add(p); }
                 var pol = PrefabPollution(em, pe);
-                if (SiteRules.IsAirSource(name, em.HasComponent<IndustrialProperty>(e), pol.air)) { land.Air.Add(p); land.AirWind.Add(land.WindAt(p)); }
+                // Offices carry IndustrialProperty too, but they do not pollute (FAILURES #93).
+                if (SiteRules.IsAirSource(name, em.HasComponent<IndustrialProperty>(e) && !em.HasComponent<OfficeProperty>(e), pol.air)) { land.Air.Add(p); land.AirWind.Add(land.WindAt(p)); }
                 if (!zoned && SiteRules.IsNoiseSource(name, pol.noise)) land.Noise.Add(p);
             }
             return land;
@@ -225,7 +226,7 @@ namespace CitiesIIAgentBridge
             {
                 if (!em.HasComponent<Game.Objects.Transform>(e) || !em.HasComponent<PrefabRef>(e) || em.HasComponent<PrefabData>(e) || em.HasComponent<ResidentialProperty>(e)) continue;
                 var pe = em.GetComponentData<PrefabRef>(e).m_Prefab; string name = ps.GetPrefabName(pe) ?? ""; var p = em.GetComponentData<Game.Objects.Transform>(e).m_Position.xz;
-                bool industrial = em.HasComponent<IndustrialProperty>(e); var pp = PrefabPollution(em, pe); bool zonedHere = industrial || em.HasComponent<CommercialProperty>(e) || em.HasComponent<OfficeProperty>(e);
+                bool industrial = em.HasComponent<IndustrialProperty>(e) && !em.HasComponent<OfficeProperty>(e); var pp = PrefabPollution(em, pe); bool zonedHere = industrial || em.HasComponent<CommercialProperty>(e) || em.HasComponent<OfficeProperty>(e);
                 bool air = SiteRules.IsAirSource(name, industrial, pp.air), noise = !zonedHere && SiteRules.IsNoiseSource(name, pp.noise);
                 if (!air && !noise) continue;
                 if (industrial) { groups.TryGetValue("industry", out var g); groups["industry"] = (g.n + 1, g.x + p.x, g.z + p.y); continue; }

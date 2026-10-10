@@ -12,7 +12,8 @@ check(spendVerdict({ cash: 865_000, cost: 8_000, cls: 'discretionary' }).reason 
 check(spendVerdict({ cash: 1_050_000, cost: 60_000, cls: 'discretionary' }).reason === 'below_reserve', 'discretionary spending may not dip into the reserve');
 check(spendVerdict({ cash: 1_100_000, cost: 60_000, cls: 'discretionary' }).ok, 'discretionary spending is fine with the reserve intact');
 check(spendVerdict({ cash: 300_000, cost: 60_000, cls: 'discretionary', reserve: 200_000 }).ok, 'an explicit reserve overrides the default');
-check(growClass('ind', 14) === 'priority' && growClass('ind', 8) === 'discretionary' && growClass('res', 30) === 'discretionary', 'job zones are priority only while unemployment is above 10%; housing is always discretionary');
+check(growClass('ind', 14) === 'priority' && growClass('ind', 8) === 'discretionary' && growClass('res', 30) === 'discretionary', 'with weak demand: job zones are priority only above 10% unemployment, housing is discretionary');
+check(growClass('res', 16, 100) === 'priority' && growClass('reshigh', 3, 60) === 'priority' && growClass('res', 16, 40) === 'discretionary', 'strong demand (60+) makes any zone type priority, whatever unemployment says');
 
 check(blockingNeeds({ power: { unserved: 65, action: 'connect', say: 'connect district at (-1512,-175)', at: [-1512, -175] } }).length === 1, 'an unserved district blocks growth');
 check(blockingNeeds({ power: { unserved: 3, action: 'confirm' } }).length === 0, 'a first-snapshot shortage (confirm) does not block yet');

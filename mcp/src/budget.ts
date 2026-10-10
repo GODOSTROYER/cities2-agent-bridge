@@ -23,9 +23,11 @@ export function spendVerdict(i: SpendInput): SpendVerdict {
   return { ok: false, reason: 'below_reserve', reserve, after };
 }
 
-// A new district is discretionary, except job zones while unemployment is above 10%
-// (they pay back through tax income and cut the Unemployment factor).
-export function growClass(zone: string, unemployment: number): SpendClass {
+// A new district is discretionary (it waits for the reserve), except a cheap one for a zone
+// type whose demand is strong: demand of 60+ is the game asking for it, and zoning pays back
+// through tax income, so it is `priority` (allowed under the reserve when it costs 25,000 or less).
+export function growClass(zone: string, unemployment: number, demand = 0): SpendClass {
+  if (demand >= 60) return 'priority';
   return (zone === 'com' || zone === 'ind' || zone === 'off') && unemployment > 10 ? 'priority' : 'discretionary';
 }
 

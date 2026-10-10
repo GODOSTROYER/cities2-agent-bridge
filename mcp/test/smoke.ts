@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const mcpDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED = [
   'snapshot', 'events', 'ui', 'fix_popup', 'run', 'build_grid', 'grow', 'link', 'zone', 'place_service',
-  'prefabs', 'set_tax', 'set_service_budget', 'services', 'buy_tile', 'save', 'restart', 'quit', 'upgrade_road', 'run_status', 'timings', 'fix_traffic', 'build_arterial', 'happiness', 'notifications', 'clear_ruins', 'tax_autopilot', 'add_connections', 'remove_road', 'build_line', 'relocate_building', 'dev_tree', 'query',
+  'prefabs', 'set_tax', 'set_service_budget', 'services', 'buy_tile', 'save', 'restart', 'quit', 'upgrade_road', 'run_status', 'timings', 'fix_traffic', 'build_arterial', 'happiness', 'notifications', 'clear_ruins', 'tax_autopilot', 'add_connections', 'remove_road', 'build_line', 'relocate_building', 'dev_tree', 'autoplay_cycle', 'query',
   'free_lots', 'corridor', 'coverage_gaps', 'traffic_hotspots', 'project', 'fix_services', 'roadside_lots',
 ];
 
@@ -32,8 +32,8 @@ async function main(): Promise<number> {
     } else {
       console.log(`PASS: ${EXPECTED.length} tools`);
     }
-    if (EXPECTED.length !== 40) {
-      console.log(`FAIL: expected list has ${EXPECTED.length} names, want 40`);
+    if (EXPECTED.length !== 41) {
+      console.log(`FAIL: expected list has ${EXPECTED.length} names, want 41`);
       code = 1;
     }
 
