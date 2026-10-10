@@ -497,6 +497,13 @@
     "undocumented": true
   },
   {
+    "name": "transit_status",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "upgrade_network",
     "description": "",
     "pausing": true,

@@ -7,7 +7,8 @@ import { promises as fs } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { callOk, mutate, REPO } from './bridge.ts';
 import type { Json } from './bridge.ts';
-import { recordAction } from './happiness.ts';
+import { recordAction, readJsonl, ACTIONS_PATH } from './happiness.ts';
+const SETTLE_MS = 10 * 60 * 1000;
 
 export const PINS_PATH: string = process.env.CS2_TAX_PINS ?? join(REPO, 'journals', 'tax-pins.json');
 export const AREAS = ['Residential', 'Commercial', 'Industrial', 'Office'] as const;
@@ -76,9 +77,21 @@ export function decideTax(input: TaxInput): Json {
 export async function taxAutopilot(apply = false): Promise<Json> {
   const snap = await callOk('get_snapshot', {}, 10);
   const pins = await readPins();
-  const decision = decideTax({ rates: snap.tax, pins, demand: snap.demand, unemployment: Number(snap.jobs?.unemp ?? 0), taxFactor: Number(snap.happiness?.Tax ?? 0) });
-  let income: Record<string, number> = {};
-  try { const b = (await callOk('get_city_management', {}, 15)).budget.incomeBySourceRaw; income = { Residential: b.TaxResidential, Commercial: b.TaxCommercial, Industrial: b.TaxIndustrial, Office: b.TaxOffice }; } catch { /* report without income */ }
+  // Rates and income come from the live budget query: the snapshot is a cache up to ~2 s old,
+  // and a step taken a moment ago must be visible to the next decision.
+  let income: Record<string, number> = {}; let liveRates: Json = snap.tax;
+  try {
+    const m = await callOk('get_city_management', {}, 15); const b = m.budget.incomeBySourceRaw;
+    income = { Residential: b.TaxResidential, Commercial: b.TaxCommercial, Industrial: b.TaxIndustrial, Office: b.TaxOffice };
+    if (m.taxes && typeof m.taxes === 'object') liveRates = m.taxes;
+  } catch { /* report without income; fall back to the snapshot rates */ }
+  const decision = decideTax({ rates: liveRates, pins, demand: snap.demand, unemployment: Number(snap.jobs?.unemp ?? 0), taxFactor: Number(snap.happiness?.Tax ?? 0) });
+  // Settle time: after any tax change to an area, wait 10 minutes before adjusting it again
+  // inside its range (demand needs time to react). Restoring a pin is never delayed.
+  if (decision.action === 'lower' || decision.action === 'raise') {
+    const recent = (await readJsonl(ACTIONS_PATH)).filter((a: Json) => a.need === 'tax' && String(a.detail ?? '').startsWith(decision.area + ' ') && Date.now() - Date.parse(a.utc) < SETTLE_MS);
+    if (recent.length) { decision.wouldBe = `${decision.action} ${decision.area} ${decision.from}->${decision.to}`; decision.action = 'hold'; decision.reason = `waiting ${Math.ceil((SETTLE_MS - (Date.now() - Date.parse(recent[recent.length - 1].utc))) / 60000)} min for the last ${decision.area} change to show in demand`; delete decision.to; delete decision.from; }
+  }
   let applied = false; let error: string | undefined;
   if (apply && decision.action !== 'hold') {
     try {

@@ -4,11 +4,13 @@ Agents: read before building. Update the "Built" and "Next" sections when you fi
 Coordinates are world metres (x east, z north). The core sits at roughly x -935..-85, z -495..935.
 
 ## 2026-10-10 state
-- Population about 6,070. Milestone 6.
-- Taxes R15 C13 I15 O13: owner floor, revenue-first. The Tax factor is exempt from the priority rules.
+- Population about 7,100. Milestone 6 (XP ~27,200 / 32,100).
+- Taxes R15 C10 I10 O10: owner pins (`journals/tax-pins.json`; Residential 15, business rates 10-11). The Tax factor is exempt from the priority rules.
+- Unemployment ~12% (8.2% before the latest housing).
+- New today: second highway connection at (-1303,-100) via a curved Medium Road from the west grid; bus depot at (-1246,-141); north tile bought with a 3x2 medium-density grid; housing in the far-west tile.
 - Services added today: cemetery, 2 clinics, 3 police stations, fire house, coal plant, wind turbine, 6 parks, radio mast.
 - Tiles bought: south, north, west, far-west.
-- Known problems: unemployment about 31%; job-zone demand 0 from the taxes (FAILURES #61); highway junction jam at (-800, 17) (FAILURES #63, open); about 60 noise pollution icons.
+- Known problems: traffic -3.7 (local jams in dense blocks, single spur junction); job-zone demand 0 (industry limited by uneducated workforce, offices by empty buildings); highway junction jam at (-800, 17) (FAILURES #63, open); about 60 noise pollution icons.
 - The "Built" and "Next" sections below predate this block; this block is current.
 
 ## Principles

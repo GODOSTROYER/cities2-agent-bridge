@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
@@ -277,7 +277,7 @@ server.registerTool('set_tax', {
     const violation = a.ownerSaid ? null : pinViolation(a.area, a.rate, await readPins());
     if (violation) return fail(violation);
     const r = await callOk('set_tax', { area: a.area, rate: a.rate });
-    if (Number(r.after) < Number(r.before)) await recordAction({ need: 'tax', tool: 'set_tax', detail: `${a.area} ${r.before}->${r.after}` });
+    if (Number(r.after) !== Number(r.before)) await recordAction({ need: 'tax', tool: 'set_tax', detail: `${a.area} ${r.before}->${r.after}` });
     return ok(withCleared({ area: a.area, before: r.before, after: r.after, cost: 0, monthlyUpkeep: 0 }, cleared));
   } catch (e) { return fail(e); }
 });
@@ -438,6 +438,35 @@ server.registerTool('clear_ruins', {
   } catch (e) { return fail(e); }
 });
 
+server.registerTool('add_connections', {
+  description: "Adds extra road links between an existing grid rectangle (min corner x0,z0 to max corner x1,z1) and the surrounding network on other sides, lot-free and previewed by the game. Use when a block's single connector is the local traffic bottleneck. plan=true previews only.",
+  inputSchema: { x0: z.number(), z0: z.number(), x1: z.number(), z1: z.number(), count: z.number().int().min(1).max(4).optional(), road: z.string().optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const r = await addConnections(a.x0, a.z0, a.x1, a.z1, a.count ?? 2, a.road ?? 'Small Road', !!a.plan);
+    if (r.ok && !a.plan) await recordAction({ need: 'traffic', tool: 'add_connections', detail: `${(r.added ?? []).length} extra links for grid ${a.x0},${a.z0}` });
+    return ok(withCleared(r, cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('remove_road', {
+  description: "Bulldozes one road edge by id (index/version from traffic_hotspots, notifications or a network query). Use only to undo a road that turned out to be harmful; it never removes buildings.",
+  inputSchema: { index: z.number().int(), version: z.number().int(), why: z.string().min(5) },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const info = await callOk('inspect_entity', { index: a.index, version: a.version }, 10);
+    if (!(info.components ?? []).includes('Game.Net.Edge') || (info.components ?? []).includes('Game.Buildings.Building')) return fail('target_is_not_a_road_edge');
+    if (/Highway/i.test(String(info.prefab))) return fail('refusing_to_remove_a_highway');
+    const r = await removeRoad(a.index, a.version);
+    if (r.ok) await recordAction({ need: 'traffic', tool: 'remove_road', detail: `${info.prefab} ${a.index}: ${a.why}` });
+    return ok(withCleared({ ...r, prefab: info.prefab }, cleared));
+  } catch (e) { return fail(e); }
+});
+
 server.registerTool('quit', {
   description: 'Verified rolling save, then a clean quit through the mod (never force-kills). Use it instead of leaving the game idle during long offline work.',
   inputSchema: {},
@@ -455,7 +484,7 @@ server.registerTool('query', {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),

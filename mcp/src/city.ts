@@ -376,3 +376,41 @@ export async function buildCorridor(fromX: number, fromZ: number, toX: number, t
     return { ok: built.status === 'complete', ...quotedCost(built.spentQuoted && built.status === 'complete' ? built.spentTotal : undefined, Number(city0.money), money1), monthlyUpkeep: null, length: route.length, segments: count, curves: roadsPlan.filter(r => r.control).length, built: built.completedTotal, error: built.error, reasons: reasonsOf(built), phases: { plan: planMs, preview: previewMs, build: now() - t2 } };
   });
 }
+
+// A grid built by buildGrid hangs off the network by one connector, which becomes the local
+// bottleneck once the block fills. This adds further lot-free links from other sides of the
+// rectangle (previewed by the game, then built), at least `spacing` metres apart.
+export async function addConnections(x0: number, z0: number, x1: number, z1: number, count = 2, roadName = 'Small Road', plan = false): Promise<Json> {
+  const t = now(); const road = await prefab(roadName, 'network');
+  if (!road.found || road.locked) return { ok: false, reason: 'road_unavailable' };
+  const r = await callOk('grid_connectors', { x0, z0, x1, z1, maxLength: 300, top: 40 }, 20);
+  const links: Json[] = (r.links ?? []).filter((l: Json) => Number(l.d) >= 12);
+  const spacing = Math.max(100, Math.min(x1 - x0, z1 - z0) * 0.6);
+  const picks: Json[] = [];
+  for (const l of links) { if (picks.length >= count * 3) break; if (picks.every(p => Math.hypot(p.to.x - l.to.x, p.to.z - l.to.z) >= spacing)) picks.push(l); }
+  if (!picks.length) return { ok: false, reason: 'no_lot_free_link', tested: r.tested, phases: { plan: now() - t } };
+  return mutate(async () => {
+    const t1 = now(); const built: Json[] = []; const tried: string[] = [];
+    for (const l of picks) {
+      if (built.length >= count) break;
+      const args = { prefabIndex: road.index, prefabVersion: road.version, start: connectorStart(l), end: l.to, maxCost: ROAD_CAP };
+      const pv = await call('build_road', { ...args, previewOnly: true }, 15);
+      const pvDone = pv.ok ? await waitOperation(pv.result.id, 30) : { status: 'failed', error: pv.error };
+      if (pvDone.status !== 'complete') { tried.push(`${Math.round(l.to.x)},${Math.round(l.to.z)}:${pvDone.error ?? 'rejected'}`); continue; }
+      if (plan) { built.push({ to: l.to, length: Math.round(l.d), previewCost: pvDone.previewCost }); continue; }
+      const op = await call('build_road', args, 15); const done = op.ok ? await waitOperation(op.result.id, 60) : { status: 'failed', error: op.error };
+      if (done.status === 'complete') built.push({ to: l.to, length: Math.round(l.d), cost: Number(done.previewCost ?? 0) }); else tried.push(`${Math.round(l.to.x)},${Math.round(l.to.z)}:${done.error}`);
+    }
+    return { ok: built.length > 0, ...(plan ? { plan: true } : {}), added: built, cost: built.reduce((s, b) => s + Number(b.cost ?? 0), 0), costSource: 'quoted', ...(tried.length ? { tried } : {}), phases: { plan: t1 - t, build: now() - t1 } };
+  });
+}
+
+// Removes one road edge by id (for undoing a road this session built). Buildings are never
+// touched: the target must be a road edge reported by traffic_hotspots / notifications / edges.
+export async function removeRoad(index: number, version: number): Promise<Json> {
+  return mutate(async () => {
+    const op = await call('demolish', { index, version }, 15);
+    const done = op.ok ? (op.result.id ? await waitOperation(op.result.id, 30) : op.result) : { status: 'failed', error: op.error };
+    return { ok: done.status === 'complete', status: done.status, error: done.error };
+  });
+}

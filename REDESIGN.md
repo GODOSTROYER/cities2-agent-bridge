@@ -3,7 +3,7 @@
 Status: Phases 1 and 2 implemented and verified live (2026-10-10); harness overhead work and the fork-audit fixes B1-B16 landed; Phase 3 (strategist/operator) not started.
 
 ## Why
-The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (63 entries):
+The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (69 entries):
 - **The agent is blind while the game runs.** Every bridge read except a few status calls runs `PauseAnalysis()` (Mod.cs Dispatch). So the agent either watches or plays, and problems (24% unemployment, a -₡113k/period budget) surfaced late.
 - **Decisions are hard-coded thresholds in scripts**, so the agent patches rules instead of reasoning about the city.
 - **It's slow.** Spatial work happens in PowerShell: the occupancy raster, site search and connector search take 1–4 minutes per cycle.
@@ -114,12 +114,24 @@ What exists now:
 - The operator (Haiku) handles events: popups, power at 90%, deficits, fires. It escalates anything unusual.
 - Retire autoplay.ps1's hard-coded rules; keep play.ps1 for manual debugging.
 
+## Transit (next step)
+Status: `transit_status` (`src/Transit.cs`) reads what the city can build: the line, stop and depot prefabs with lock state, placed depots and stops, and existing lines. A depot can be placed with `place_service`. The line itself is not yet created (FAILURES #69).
+
+Plan, from reflection on the game assembly (not yet verified in code):
+1. A line is a `Game.Routes.Route` + `TransportLine` entity, made by `Game.Tools.RouteToolSystem` (kToolID "Route Tool").
+2. The tool only emits definitions (`CreationDefinition`, `ColorDefinition`, a `WaypointDefinition` buffer). `GenerateWaypointsSystem`, `GenerateRoutesSystem` and `ApplyRoutesSystem` turn those into entities.
+3. Control points come from `GetControlPoints(out JobHandle)`. Each must have `m_OriginalEntity` = a stop entity whose prefab has `TransportStopData` of the line's TransportType (checked by `SnapJob.ValidateStop`).
+4. Drive the private `SnapControlPoints(JobHandle, Entity)`, `UpdateDefinitions(JobHandle, Entity)` and `Apply(JobHandle, bool)` by reflection, the way `BridgeRoadTool` drives `NetToolSystem` (`src/Construction.cs`, via `ConstructionAccess`; snap masks per FAILURES #55).
+5. Success = a new non-Temp entity with `Route` + `TransportLine`, then `Route.m_Flags` Complete after pathfinding.
+6. The tool does not check money or the Locked tag itself, so the bridge must check both before it starts a line.
+7. Stops are objects placed on road edges (`ObjectToolSystem`). A depot (`TransportDepotData` of that type) must exist first.
 ## What is left
-- Arterial smoothing: minimum segment length and a turn-angle limit for `build_arterial` (FAILURES #63).
 - Highway junction at (-800, 17): the single ramp is the traffic bottleneck; wider prefabs are locked.
-- Tax autopilot: wire `mcp\src\taxes.ts` into the server after its tests are verified (test file write needs owner approval).
-- Cost from `previewCost`: mutating tools report a money delta, which is wrong when income or a reward lands in the same step.
-- Transit lines (P1 in HARNESS.md section 9).
+- Local jams inside dense blocks whose only connector is the bottleneck: `add_connections` found no accepted link for the block at -55,-245 (FAILURES open issues).
+- Second highway connection at (-1303,-100): an at-grade junction on the mainline; watch it.
+- Transit lines: see Transit (next step) above (P1 in HARNESS.md section 9).
+- `upgrade_road` and the `legacy` paths still return a money delta as `cost`, with no `costSource`.
+- `tax_autopilot` with `apply=true` is not guarded by `run_in_progress` or popup clearing.
 - `commands.json` descriptions: 75 of 75 are empty (`undocumented: true`).
 - Phase 3 (strategist and operator), not started.
 

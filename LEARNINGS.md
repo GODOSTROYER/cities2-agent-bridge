@@ -57,6 +57,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - `game_rejected_placement` lists `placementErrors`. Entries whose prefab differs from your road are blockers; run `inspect_entity` on them. Example: `PowerLinePylon47m01`. Fix by shifting the road (roads may pass under power lines, not through pylons).
 - Actual cost is about **₡4 per metre** for Small Road (₡896 per 220 m). Use `maxCost` of about ₡8k per road. `maxCost` must be at least 1 at execution, although `plan_neighborhood` accepts 0.
 - The city's single highway ramp is the traffic bottleneck: edge flow is 1-5% around it (`traffic_hotspots`).
+- A normal road can join a highway mainline at grade. The game splits the highway edge into a node there. The second highway connection at (-1303,-100) is such a junction; watch it.
 
 ### Zoning: the main time sink
 - Each road side creates **zone blocks** of up to 8 × 6 cells (8 m). Where blocks from perpendicular roads overlap, the game keeps one and flags the other's cells `Blocked`. **Blocked cells can never be zoned**, and `zone_rectangle` on them returns `no_zone_cells_in_rectangle`. That is a correct no-op, not a failure.
@@ -76,6 +77,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - A game tool operation (road, zone rectangle) costs about 10 frames. Merge operations: one road per grid line, not per block side (FAILURES #49).
 - `simulate_step` allows at most 60 s of wall time. Chain steps; overhead is about 1 s per step. Speed 4 is the maximum and gives about 11.7k frames per 50 s.
 - Stop reasons: `wall_deadline` and `frame_limit` are normal. `cash_floor`, `new_utility_shortage`, `population_changed`, `demand_changed`, `simulation_stalled`, `game_paused`, `control_stopped` and `city_changed` need a look.
+- A background run stops with `lastStop` `cash_floor` when the floor is above cash. Check the floor against cash before starting.
 - To stop a run safely: kill the client loop first so no new step starts, then `cancel_simulation_step`. It returns `paused:true`; confirm with `get_city_state` (`selectedSpeed` 0).
 - Growth follows **zoned capacity**. With residential demand at 100, population went 127 → 201 → 281 → 316 and then flattened (+1, +3 per 50 s) once the zoned lots filled. When `delta.population` stalls while demand is high, zone more land; don't just simulate longer.
 - `analysisPausesGame: true`: **any** read command (even `get_build_prefabs`) pauses the game, ending the active step with `game_paused`. Never query while `run-session.ps1` is running; wait for it to finish.
@@ -83,6 +85,9 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 ### Service budgets
 - The budget slider scales wages, not just prefab upkeep. Health & Deathcare cost about 2,800 per budget point (65 -> 100 = +97k); Fire & Rescue about 260 per point. Real running cost of a service building was about 2.7x its prefab `monthlyUpkeep`.
 - Change one budget at a time and read `ServiceUpkeep` before and after (FAILURES #47).
+
+### Transit (2026-10-10)
+- Building a bus depot unlocks the bus stop prefabs but not the Bus Line prefab. A line stays locked after the depot (FAILURES #69). Read `transit_status` before spending on transit.
 
 ## Pauses, popups and UI (mod 0.5.1-local)
 - CS2's `TimeUISystem` forces speed 0 every frame while the window lacks focus (`m_HasFocus`) or any UI panel subscribes to the simulation-paused barrier (tutorial cards, milestone popup, menus). Symptom: `simulate_step` ends after under 1 s with reason `game_paused`.
@@ -110,13 +115,15 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 
 ## Happiness factors, icons and taxes (2026-10-10)
 - **Owner thresholds** (`ServiceSignals.FactorPriority`; `mcp\src\happiness.ts`): a factor worse than -5 is `very_high` (act now, every cycle until it improves); worse than -3 is `priority` (act this cycle, ahead of growth); -3 or better is `normal`.
-- **Tax factor is exempt.** Report it (flag below -5); never lower rates or add buildings because of it. Owner rates are R15 C13 I15 O13 (`journals\tax-pins.json`).
+- **Tax factor is exempt.** Report it (flag below -5); never lower rates or add buildings because of it. Owner pins (`journals\tax-pins.json`, as ranges): Residential 15, Industrial/Commercial/Office 10-11.
 - **Factors seen moving after an action:**
   - Entertainment -4 -> 0 after six small parks (35k).
   - Telecom -2 -> 0 after one radio mast (25k).
   - Healthcare -1.4 -> 0 after the health budget went to 100%.
   - Crime -7.5 -> -4.7 after two more police stations and the budget at 100%. It took about 20 minutes to show, so judge only after the settle window.
 - **Tax floor and job-zone demand** (FAILURES #61). At R15 C13 I15 O13 the native Taxes factor is -450 (industry), -240 (commercial), -60 (office). Unemployment went 12% -> 31% and job-zone demand fell to 0 while housing kept adding workers. Read `demandWhy` and unemployment with every tax decision.
+- **Tax at 10%.** At business tax 10% the Taxes term drops out of commercial and office demand (it was -80 at 11%, -240 at 13%; industry -450 at 15%).
+- **Verdicts seen live.** Traffic went to `investigate` after two widenings without improvement, then -3.2 -> -2.6 after the second highway connection.
 - **Icon types seen on the map:** Noise Pollution, Air Pollution, Traffic Bottleneck Notification, Garbage Notification, Burned Down, Hearse Notification, MissingUneducatedWorkers, No Customers, Powerline Not Connected. Burned-down ruins: `clear_ruins`. Jams: `fix_traffic`.
 
 ## Harness bugs fixed in this copy (see `git log`)
