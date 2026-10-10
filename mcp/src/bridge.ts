@@ -134,7 +134,10 @@ export async function readEvents(since?: string | number, limit = 20, types?: st
 
 // Runs a harness PowerShell script (pwsh 7) from the repo root; returns its output lines.
 export function runPwsh(script: string, args: string[], timeoutMs = 600000): Promise<{ code: number | null; lines: string[] }> {
-  return new Promise((done) => {
+  // Scripts mutate (and pause) the game: hold the background run while one is active.
+  state.mutating++; let released = false; const release = () => { if (!released) { released = true; state.mutating--; } };
+  return new Promise((done0) => {
+    const done = (v: { code: number | null; lines: string[] }) => { release(); done0(v); };
     const child = spawn('pwsh', ['-NoProfile', '-NonInteractive', '-File', join(REPO, script), ...args], { cwd: REPO, windowsHide: true });
     let out = '';
     child.stdout.on('data', d => { out += d; });

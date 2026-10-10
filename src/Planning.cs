@@ -259,23 +259,42 @@ namespace CitiesIIAgentBridge
             double pad = radius + hw + hd + 120;
             var occ = BuildOccupancy(w, owned, edges, x - pad, z - pad, x + pad, z + pad, out int lots);
             var found = new List<(double d, JObject row)>();
+            var terrain = w.GetExistingSystemManaged<TerrainSystem>().GetHeightData();
+            var water = w.GetExistingSystemManaged<WaterSystem>().GetSurfaceData(out var waterReady); waterReady.Complete();
+            bool waterOk = water.isCreated && water.hasDepths && water.resolution.x > 1; int wet = 0, steep = 0;
+            bool DryAndFlat(double cx, double cz, double ux, double uz, double vx, double vz)
+            {
+                double lo = double.MaxValue, hi = double.MinValue;
+                foreach (double fu in new[] { -1.0, 0, 1 }) foreach (double fv in new[] { -1.0, 0, 1 })
+                {
+                    var pos = new float3((float)(cx + fu * hw * ux + fv * hd * vx), 0, (float)(cz + fu * hw * uz + fv * hd * vz));
+                    pos.y = TerrainUtils.SampleHeight(ref terrain, pos); lo = Math.Min(lo, pos.y); hi = Math.Max(hi, pos.y);
+                    if (waterOk) { var sp = WaterUtils.ToSurfaceSpace(ref water, pos); if (sp.x >= 0 && sp.z >= 0 && sp.x < water.resolution.x && sp.z < water.resolution.z && WaterUtils.SampleDepth(ref water, pos) > 0.1f) { wet++; return false; } }
+                }
+                if (hi - lo > 20) { steep++; return false; }
+                return true;
+            }
             foreach (var e in edges.Where(e => !e.Highway))
             {
                 var a = e.Curve.a; var b = e.Curve.d; double len = math.distance(a.xz, b.xz);
-                if (len < 2 * hw || math.distance(BezierAt(e.Curve, 0.5f).xz, new float2((float)x, (float)z)) > radius + len) continue;
+                if (len < 8 || math.distance(BezierAt(e.Curve, 0.5f).xz, new float2((float)x, (float)z)) > radius + len) continue;
                 double tx = (b.x - a.x) / len, tz = (b.z - a.z) / len;
-                for (double sAlong = hw + 4; sAlong <= len - hw - 4; sAlong += 8)
+                // Slide the lot centre along the whole edge: a lot wider than one edge (a 128 m
+                // cemetery on 110 m grid streets) may overhang past the ends; the raster test
+                // rejects it wherever a cross street or another lot is in the way.
+                for (double sAlong = 4; sAlong <= len - 4; sAlong += 8)
                     foreach (int side in new[] { -1, 1 })
                     {
                         double ox = -tz * side, oz = tx * side;
                         double cx = a.x + tx * sAlong + ox * (e.HalfWidth + 1 + hd), cz = a.z + tz * sAlong + oz * (e.HalfWidth + 1 + hd);
                         double d = SiteSearch.Dist(cx, cz, x, z); if (d > radius) continue;
                         double rot = Math.Atan2(-ox, -oz) * 180 / Math.PI;
-                        if (!occ.BoxFree(cx, cz, hw, hd, rot)) continue;
+                        if (!occ.BoxFree(cx, cz, hw, hd, rot, 8)) continue;
+                        if (!DryAndFlat(cx, cz, tx, tz, ox, oz)) continue;
                         found.Add((d, new JObject { ["position"] = new JObject { ["x"] = Math.Round(cx, 1), ["z"] = Math.Round(cz, 1) }, ["rotation"] = Math.Round(rot, 2), ["roadEdge"] = NativeBuild.Id(e.Entity) }));
                     }
             }
-            return new JObject { ["candidates"] = new JArray(found.OrderBy(f => f.d).Take(count).Select(f => f.row)), ["found"] = found.Count, ["halfSize"] = new JArray(hw, hd), ["lots"] = lots, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
+            return new JObject { ["candidates"] = new JArray(found.OrderBy(f => f.d).Take(count).Select(f => f.row)), ["found"] = found.Count, ["rejected"] = new JObject { ["wet"] = wet, ["steep"] = steep }, ["halfSize"] = new JArray(hw, hd), ["lots"] = lots, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
         }
 
         private static readonly string[] CoverageNames = Enum.GetNames(typeof(CoverageService));

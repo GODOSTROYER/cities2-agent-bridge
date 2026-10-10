@@ -46,13 +46,29 @@ namespace CitiesIIAgentBridge
             var occ = BuildOccupancy(w, owned, edges, x0 - maxConnector - 50, z0 - maxConnector - 50, x1 + maxConnector + 50, z1 + maxConnector + 50, out int lots);
             bool OnRoad(double px, double pz) => edges.Any(e => SegmentDistance(px, pz, e.Curve.a, e.Curve.d) <= 8);
             var roads = new JArray(); int shared = 0;
-            void Add(double ax, double az, double bx, double bz)
+            bool Shared(double ax, double az, double bx, double bz) => OnRoad(ax, az) && OnRoad(bx, bz) && OnRoad((ax + bx) / 2, (az + bz) / 2);
+            // One road per straight run of a grid line (crossing roads split each other), instead of
+            // one per block side: a 3x2 grid is 7 tool operations, not 17. Runs break where a block
+            // side already lies on an existing street, and at 900 m.
+            void Line(Func<int, double[]> point, int segments)
             {
-                if (OnRoad(ax, az) && OnRoad(bx, bz) && OnRoad((ax + bx) / 2, (az + bz) / 2)) { shared++; return; }
-                roads.Add(new JArray(Math.Round(ax, 1), Math.Round(az, 1), Math.Round(bx, 1), Math.Round(bz, 1)));
+                int start = -1;
+                for (int k = 0; k <= segments; k++)
+                {
+                    bool usable = k < segments && !Shared(point(k)[0], point(k)[1], point(k + 1)[0], point(k + 1)[1]);
+                    if (k < segments && !usable) shared++;
+                    if (usable && start < 0) start = k;
+                    bool tooLong = start >= 0 && usable && SiteSearch.Dist(point(start)[0], point(start)[1], point(k + 1)[0], point(k + 1)[1]) > 900;
+                    if (start >= 0 && (!usable || tooLong))
+                    {
+                        var a = point(start); var b = point(k);
+                        roads.Add(new JArray(Math.Round(a[0], 1), Math.Round(a[1], 1), Math.Round(b[0], 1), Math.Round(b[1], 1)));
+                        start = usable ? k : -1;
+                    }
+                }
             }
-            for (int i = 0; i <= cols; i++) for (int j = 0; j < rows; j++) Add(x0 + i * bw, z0 + j * bd, x0 + i * bw, z0 + (j + 1) * bd);
-            for (int j = 0; j <= rows; j++) for (int i = 0; i < cols; i++) Add(x0 + i * bw, z0 + j * bd, x0 + (i + 1) * bw, z0 + j * bd);
+            for (int i = 0; i <= cols; i++) { int line = i; Line(k => new[] { x0 + line * bw, z0 + k * bd }, rows); }
+            for (int j = 0; j <= rows; j++) { int line = j; Line(k => new[] { x0 + k * bw, z0 + line * bd }, cols); }
             // What sits inside the grid: lot cells or unowned land make it unbuildable.
             int lotCells = 0, outside = 0;
             for (int j = occ.J(z0 - 6); j <= occ.J(z1 + 6); j++) for (int i = occ.I(x0 - 6); i <= occ.I(x1 + 6); i++)
@@ -92,6 +108,14 @@ namespace CitiesIIAgentBridge
                 if (zone == Entity.Null || !em.HasComponent<ZoneData>(zone)) throw new ArgumentException("zone_prefab_not_found: " + zoneName);
                 if (IsPrefabLocked(em, zone)) throw new ArgumentException("zone_prefab_locked: " + zoneName);
             }
+            // direct (default): apply the zone to the cells themselves and tag the block Updated,
+            // exactly what the game's ApplyZonesSystem does after a zone-tool drag. Only Visible,
+            // unzoned cells are touched, so existing zoning can never be overwritten, and the
+            // whole area costs one frame instead of ~10 frames per block. tool=true keeps the
+            // native zone-tool path (one rectangle per block, batched).
+            bool direct = !countOnly && (bool?)args["tool"] != true;
+            var zoneType = direct ? em.GetComponentData<ZoneData>(zone).m_ZoneType : default;
+            var changedBlocks = new List<Entity>(); int applied = 0;
             var steps = new JArray(); int zonable = 0, zoned = 0, blocks = 0;
             using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Block>(), ComponentType.ReadOnly<Cell>() }, None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() } }))
             using (var es = q.ToEntityArray(Allocator.Temp))
@@ -99,18 +123,20 @@ namespace CitiesIIAgentBridge
                 {
                     var block = em.GetComponentData<Block>(e);
                     if (block.m_Position.x < x0 - 100 || block.m_Position.x > x1 + 100 || block.m_Position.z < z0 - 100 || block.m_Position.z > z1 + 100) continue;
-                    var cells = em.GetBuffer<Cell>(e, true); int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+                    var cells = em.GetBuffer<Cell>(e, !direct); int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
                     for (int y = 0; y < block.m_Size.y; y++) for (int x = 0; x < block.m_Size.x; x++)
                     {
                         var p = ZoneUtils.GetCellPosition(block, new int2(x, y));
                         if (p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1) continue;
-                        var cell = cells[y * block.m_Size.x + x];
+                        int index = y * block.m_Size.x + x; var cell = cells[index];
                         if (cell.m_Zone.m_Index != 0) { zoned++; continue; }
                         if ((cell.m_State & CellFlags.Visible) == 0) continue;
                         zonable++; minX = Math.Min(minX, x); minY = Math.Min(minY, y); maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
+                        if (direct) { cell.m_Zone = zoneType; cells[index] = cell; applied++; }
                     }
                     if (maxX < 0) continue;
                     blocks++; if (countOnly) continue;
+                    if (direct) { changedBlocks.Add(e); continue; }
                     var a = ZoneUtils.GetCellPosition(block, new int2(minX, minY)); var b = ZoneUtils.GetCellPosition(block, new int2(maxX, maxY));
                     steps.Add(new JObject
                     {
@@ -124,7 +150,32 @@ namespace CitiesIIAgentBridge
                     });
                 }
             var result = new JObject { ["zonable"] = zonable, ["zonedCells"] = zoned, ["blocks"] = blocks, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
+            if (direct)
+            {
+                foreach (var e in changedBlocks) if (!em.HasComponent<Updated>(e)) em.AddComponent<Updated>(e);
+                result["mode"] = "direct"; result["applied"] = applied; result["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds);
+                return result;
+            }
             if (countOnly || steps.Count == 0) return result;
+            // Fresh land (no zoned cell inside the area): one rectangle over everything, attached
+            // to one block for its axes, instead of one tool operation per block (~0.4 s each).
+            // The caller re-counts and calls again; any leftover cells then take the per-block path.
+            if (zoned == 0 && (bool?)args["perBlock"] != true && SiteSearch.Dist(x0, z0, x1, z1) <= 480)
+            {
+                var first = (JObject)steps[0]["args"];
+                steps = new JArray(new JObject
+                {
+                    ["command"] = "zone_rectangle",
+                    ["args"] = new JObject
+                    {
+                        ["prefabIndex"] = zone.Index, ["prefabVersion"] = zone.Version,
+                        ["start"] = new JObject { ["x"] = x0, ["z"] = z0, ["index"] = first["start"]["index"], ["version"] = first["start"]["version"] },
+                        ["end"] = new JObject { ["x"] = x1, ["z"] = z1 }
+                    }
+                });
+                result["mode"] = "single_rectangle";
+            }
+            else result["mode"] = "per_block";
             var started = StartBatch(new JObject { ["steps"] = steps, ["internal"] = true, ["compact"] = true, ["continueOnBenign"] = true });
             result["batch"] = started["id"]; result["steps"] = steps.Count;
             return result;

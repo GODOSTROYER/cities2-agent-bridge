@@ -75,14 +75,19 @@ namespace CitiesIIAgentBridge
         }
 
         // Rotated lot test (Unity Y rotation, local +Z = lot front): any non-free cell blocks.
-        public bool BoxFree(double cx, double cz, double halfW, double halfD, double rotationDeg)
+        // frontRoadOk: depth (m) at the lot front where road cells do not block, because the
+        // frontage road's strip is rasterised a cell or two wider than the road itself.
+        public bool BoxFree(double cx, double cz, double halfW, double halfD, double rotationDeg, double frontRoadOk = 0)
         {
             double r = rotationDeg * Math.PI / 180, cos = Math.Cos(r), sin = Math.Sin(r), step = Cell / 2;
             for (double u = -halfW; u <= halfW + 1e-6; u += step)
                 for (double v = -halfD; v <= halfD + 1e-6; v += step)
                 {
                     int i = I(cx + u * cos + v * sin), j = J(cz - u * sin + v * cos);
-                    if (!InBounds(i, j) || this[i, j] != Free) return false;
+                    if (!InBounds(i, j)) return false;
+                    byte cell = this[i, j]; if (cell == Free) continue;
+                    if (cell == Road && v > halfD - frontRoadOk) continue;
+                    return false;
                 }
             return true;
         }

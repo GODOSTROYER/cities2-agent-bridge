@@ -5,7 +5,7 @@ import { call, callOk, multi, mutate, waitBatch, waitOperation, readSession } fr
 import type { Json } from './bridge.ts';
 
 export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
-const ROAD_CAP = 3000;        // per 110 m street; Small Road costs ~450
+const ROAD_CAP = 8000;        // per road (a full grid line up to ~900 m); Small Road costs ~4 per metre
 const now = () => Date.now();
 
 // Prefab index/version/costs by exact name, cached per city session.
@@ -53,7 +53,8 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
   if (!roads.length) return { ok: false, reason: 'no_new_roads', phases };
   const connectors: Json[] = plan.connectors ?? [];
   if (!plan.shared && !connectors.length) return { ok: false, reason: 'no_lot_free_connector', phases };
-  const est = roads.length * 500 + (connectors[0] ? Math.round(connectors[0].d * 5) : 0);
+  const metres = roads.reduce((sum, r) => sum + Math.hypot(r[1].x - r[0].x, r[1].z - r[0].z), 0) + (connectors[0]?.d ?? 0);
+  const est = Math.round(metres * 5);
   if (Number(city0.money) < est + 5000) return { ok: false, reason: 'not_enough_money', money: city0.money, estimate: est, phases };
 
   return mutate(async () => {
@@ -89,9 +90,17 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
     }
     phases.build = now() - t; t = now();
 
-    const z = await callOk('zone_area', { x0: plan.bounds[0], z0: plan.bounds[1], x1: plan.bounds[2], z1: plan.bounds[3], zone: zoneName }, 30);
-    let zoneStatus = 'nothing_to_zone';
-    if (z.batch) zoneStatus = (await waitBatch(z.batch, 300)).status;
+    const rect = { x0: plan.bounds[0], z0: plan.bounds[1], x1: plan.bounds[2], z1: plan.bounds[3] };
+    // Direct zoning in the mod: every Visible unzoned cell of the area in one frame (the same
+    // cell write the game's zone tool applies). Verified below; leftovers fall back to the
+    // native zone tool, one rectangle per block.
+    const z = await callOk('zone_area', { ...rect, zone: zoneName }, 30);
+    let zoneStatus = z.mode === 'direct' ? 'complete' : 'nothing_to_zone'; let zoneMode = z.mode ?? 'none'; let zoneOps = 0;
+    if (z.batch) { zoneStatus = (await waitBatch(z.batch, 300)).status; zoneOps = Number(z.steps ?? 0); }
+    if (Number(z.zonable ?? 0) > 0 && (await callOk('zone_area_count', rect, 10)).zonable > 0) {
+      const z2 = await callOk('zone_area', { ...rect, zone: zoneName, tool: true, perBlock: true }, 30);
+      if (z2.batch) { zoneStatus = (await waitBatch(z2.batch, 300)).status; zoneMode += '+tool'; zoneOps += Number(z2.steps ?? 0); }
+    }
     phases.zone = now() - t; t = now();
 
     const checks = await multi([
@@ -102,7 +111,7 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
     phases.verify = now() - t;
     return {
       ok: linked, cost: Number(city0.money) - Number(checks[1].money), monthlyUpkeep: null,
-      roads: steps.length, shared: plan.shared, zoned: z.zonable - checks[0].zonable, leftZonable: checks[0].zonable, zone: zoneStatus,
+      roads: steps.length, shared: plan.shared, zoned: z.zonable - checks[0].zonable, leftZonable: checks[0].zonable, zone: zoneStatus, zoneMode, zoneOps,
       connected: connector ? checks[2].connected : true, ...(notes.length ? { notes } : {}), ...(linked ? {} : { reason: 'grid_built_but_not_connected' }), phases,
     };
   });
@@ -127,13 +136,16 @@ export async function grow(o: GrowOptions): Promise<Json> {
     const lots = await callOk('find_free_lots', { width: cols * 110, depth: rows * 110, count: 4, zone: pick.k }, 30);
     phases[`sites${cols}x${rows}`] = now() - t; t = now();
     for (const site of lots.sites ?? []) {
+      // Quality floor for housing: never next to industry or on polluted ground (the score only
+      // ranks what is free; when everything free is bad, buy land elsewhere instead).
+      if ((pick.k === 'res' || pick.k === 'resmed') && (Number(site.toIndustry) < 250 || Number(site.pollution) > 3000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
       const r = await buildGrid({ x: site.x, z: site.z, cols, rows, zone: pick.k, plan: o.plan });
       if (r.ok || r.reason === 'build_failed_partial' || r.reason === 'grid_built_but_not_connected')
         return { ...r, zone: pick.k, demand: pick.v, unemp, site: { x: site.x, z: site.z, cols, rows, score: site.score, toIndustry: site.toIndustry, pollution: site.pollution }, phases: { ...phases, ...(r.phases ?? {}) }, ...(tried.length ? { tried } : {}) };
       tried.push(`${cols}x${rows}@${site.x},${site.z}:${r.reason}`);
     }
   }
-  return { ok: false, reason: 'no_free_site', zone: pick.k, tried, hint: 'land is full: buy_tile, then grow again', phases };
+  return { ok: false, reason: 'no_free_site', zone: pick.k, tried, hint: 'no acceptable free land: buy_tile (x,z away from industry for housing), then grow again', phases };
 }
 
 export async function zoneArea(x: number, z: number, radius: number, zone: string): Promise<Json> {
@@ -141,8 +153,13 @@ export async function zoneArea(x: number, z: number, radius: number, zone: strin
   const rect = { x0: x - radius, z0: z - radius, x1: x + radius, z1: z + radius, margin: 0 };
   return mutate(async () => {
     const t = now(); const r = await callOk('zone_area', { ...rect, zone: zoneName }, 30);
-    const status = r.batch ? (await waitBatch(r.batch, 300)).status : 'nothing_to_zone';
-    const left = await callOk('zone_area_count', rect, 10);
+    let status = r.batch ? (await waitBatch(r.batch, 300)).status : (r.mode === 'direct' ? 'complete' : 'nothing_to_zone');
+    let left = await callOk('zone_area_count', rect, 10);
+    if (left.zonable > 0 && Number(r.zonable ?? 0) > 0) {
+      const r2 = await callOk('zone_area', { ...rect, zone: zoneName, tool: true, perBlock: true }, 30);
+      if (r2.batch) status = (await waitBatch(r2.batch, 300)).status;
+      left = await callOk('zone_area_count', rect, 10);
+    }
     return { ok: status !== 'failed', cost: 0, monthlyUpkeep: 0, status, zoned: r.zonable - left.zonable, leftZonable: left.zonable, blocks: r.blocks, phases: { zone: now() - t } };
   });
 }

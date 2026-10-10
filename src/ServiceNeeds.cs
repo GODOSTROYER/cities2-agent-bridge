@@ -65,11 +65,11 @@ namespace CitiesIIAgentBridge
                 streak = iconsNow > before ? streak + 1 : iconsNow < before ? 0 : streak;
                 needIconStreak[pair.Key] = streak; needIconsBefore[pair.Key] = iconsNow;
                 if (streak > 0) n["iconRise"] = streak;
-                int score = ServiceSignals.NeedScore((int?)n["chirps"] ?? 0, (bool?)n["tutorial"] == true, streak, ((int?)n["dead"] ?? 0) + ((int?)n["sick"] ?? 0));
+                int score = ServiceSignals.NeedScore((int?)n["chirps"] ?? 0, (bool?)n["tutorial"] == true, streak, ((int?)n["dead"] ?? 0) + ((int?)n["sick"] ?? 0), iconsNow);
                 n["score"] = score + "/" + ServiceSignals.Threshold; n["action"] = score >= ServiceSignals.Threshold ? "build" : "watch";
                 result[pair.Key] = n;
             }
-            result["iconsTop"] = new JObject(icons.OrderByDescending(p => p.Value).Take(4).Select(p => new JProperty(p.Key, p.Value)));
+            result["iconsTop"] = new JObject(icons.Where(p => ServiceSignals.ServiceForText(p.Key) != null || p.Key.Contains("Traffic")).OrderByDescending(p => p.Value).Take(3).Select(p => new JProperty(p.Key, p.Value)));
             return result;
         }
     }

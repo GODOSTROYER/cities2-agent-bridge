@@ -64,8 +64,11 @@ export function decideServices(input: ServicesInput): Need[] {
   const net = Number(snap?.city?.net ?? 0);
 
   // Escalated = the mod says "build" for this need and it was not built in the last 10 minutes.
+  // Escalated: the mod's score reached the threshold, or a standing signal is strong on its own
+  // (>= 10 notification icons, or >= 20 dead/sick citizens) even without chirps (FAILURES #45).
+  const strong = (v: Json) => Number(v?.icons ?? 0) >= 10 || Number(v?.dead ?? 0) + Number(v?.sick ?? 0) >= 20;
   const escalated = Object.keys(needs).filter(k =>
-    k !== 'iconsTop' && needs[k]?.action === 'build' && !inCooldown(cooldown?.[k], nowMs));
+    k !== 'iconsTop' && (needs[k]?.action === 'build' || strong(needs[k])) && !inCooldown(cooldown?.[k], nowMs));
 
   const out: Need[] = [];
   for (const rule of RULES) {
@@ -178,7 +181,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
       }
       lastReason = String(r.reason ?? r.error ?? 'unknown');
       // Prefab missing or locked: try the next type. Any other failure: report it and stop for this need.
-      if (r.reason === 'prefab_not_found' || r.reason === 'prefab_locked') continue;
+      if (r.reason === 'prefab_not_found' || r.reason === 'prefab_locked' || r.reason === 'not_enough_money' || r.reason === 'no_roadside_site') continue; // a cheaper alternative may follow
       failed.push({ t: n.t, prefab, failed: lastReason });
       settled = true; break;
     }

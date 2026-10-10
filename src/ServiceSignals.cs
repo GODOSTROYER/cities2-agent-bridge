@@ -28,9 +28,9 @@ namespace CitiesIIAgentBridge
 
         // Escalation (owner rule): one chirp is noise. score = chirps among the 10 newest
         // + 1 for a tutorial card asking for it + icon-rise streak across snapshots (max 3)
-        // + 1 if any dead/sick citizens (2 if >= 10). score >= 3 -> "build": ahead of growth,
+        // + 1 if any dead/sick citizens (2 if >= 10) + 1 for a standing 10+ notification icons. score >= 3 -> "build": ahead of growth,
         // overriding upkeep discipline.
-        internal static int NeedScore(int chirps, bool tutorial, int iconStreak, int people)
-            => chirps + (tutorial ? 1 : 0) + Math.Min(3, iconStreak) + (people >= 10 ? 2 : people > 0 ? 1 : 0);
+        internal static int NeedScore(int chirps, bool tutorial, int iconStreak, int people, int icons = 0)
+            => chirps + (tutorial ? 1 : 0) + Math.Min(3, iconStreak) + (people >= 10 ? 2 : people > 0 ? 1 : 0) + (icons >= 10 ? 1 : 0);
     }
 }
