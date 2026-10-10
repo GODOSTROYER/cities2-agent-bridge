@@ -1,54 +1,527 @@
 [
-  "batch_execute",
-  "build_network",
-  "build_road",
-  "cancel_batch",
-  "cancel_simulation_step",
-  "clear_zoning",
-  "create_district",
-  "demolish",
-  "diagnose_connections",
-  "edit_district",
-  "execute_neighborhood",
-  "find_building_sites",
-  "get_batch",
-  "get_build_prefabs",
-  "get_buildings",
-  "get_camera",
-  "get_capabilities",
-  "get_city_diagnostics",
-  "get_city_management",
-  "get_city_map",
-  "get_city_state",
-  "get_district_atlas",
-  "get_neighborhood_plan",
-  "get_network",
-  "get_network_edges",
-  "get_operation",
-  "get_prefab_details",
-  "get_selected",
-  "get_services",
-  "get_simulation_step",
-  "get_tiles",
-  "get_water_facilities",
-  "get_zone_cells",
-  "inspect_entity",
-  "pause_for_analysis",
-  "ping",
-  "place_building",
-  "plan_neighborhood",
-  "preview_building",
-  "purchase_tiles",
-  "relocate_building",
-  "sample_terrain",
-  "save_checkpoint",
-  "set_camera",
-  "set_service_budget",
-  "set_service_districts",
-  "set_simulation_speed",
-  "set_tax",
-  "simulate_step",
-  "trace_network",
-  "upgrade_network",
-  "zone_rectangle"
+  {
+    "name": "batch_execute",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "build_network",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "build_road",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "cancel_batch",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "cancel_simulation_step",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "clear_zoning",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "connected",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "corridor",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "coverage_gaps",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "create_district",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "crime_map",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "demolish",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "diagnose_connections",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "edit_district",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "execute_neighborhood",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "find_building_sites",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "find_free_lots",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "find_roadside_lots",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_batch",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_build_prefabs",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_buildings",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_camera",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_capabilities",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_city_diagnostics",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_city_management",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_city_map",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_city_state",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_district_atlas",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_neighborhood_plan",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_network",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_network_edges",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_operation",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_pause_state",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_prefab_details",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_selected",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_services",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_simulation_step",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_snapshot",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_tiles",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_ui_state",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_water_facilities",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "get_zone_cells",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "grid_connectors",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "home_clusters",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "inspect_entity",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "load_save",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "multi",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "notifications",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "pause_for_analysis",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "ping",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "place_building",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "plan_grid",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "plan_neighborhood",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "preview_building",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "project",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "purchase_tiles",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "quit_game",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "relocate_building",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "resolve_pause_blocker",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "sample_terrain",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "save_checkpoint",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "service_buildings",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "set_camera",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "set_service_budget",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "set_service_districts",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "set_simulation_speed",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "set_tax",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "simulate_step",
+    "description": "",
+    "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "tile_options",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "trace_network",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "traffic_hotspots",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "upgrade_network",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "zone_area",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "zone_area_count",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "zone_rectangle",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  }
 ]

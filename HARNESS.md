@@ -14,7 +14,7 @@
    |                                        |
    |  cs2 MCP server (mcp\src\server.ts)    |  play.ps1 / autoplay.ps1 / grid.ps1 / services.ps1 / run-session.ps1 / upgrade.ps1
    |  city logic (city.ts, services.ts)     |  (manual debugging; MCP runs
-   |  mailbox client (mcp\src\bridge.ts)    |   buy_tile, save, restart, quit here)
+   |  mailbox client (mcp\src\bridge.ts)    |   save, restart, quit here)
    |  calls the mod directly                v
    |                                  lib\BridgeClient.psm1   (Invoke-Bridge, paging, batching, occupancy raster, rolling saves)
    |                                        |
@@ -29,7 +29,7 @@
  CitiesIIAgentBridge.dll (in game)  ->  ECS systems, tools, UI state, game settings
 ```
 
-- **Two entry paths.** The cs2 MCP server (section 4b) calls the mod directly through `mcp\src\bridge.ts`, with the city logic in `city.ts` and `services.ts`. Only `buy_tile`, `save`, `restart` and `quit` still run `play.ps1` or `upgrade.ps1` as child processes; `build_grid` and `grow` do so only with `legacy: true` (timing comparison). Both paths use the same protocol and files.
+- **Two entry paths.** The cs2 MCP server (section 4b) calls the mod directly through `mcp\src\bridge.ts`, with the city logic in `city.ts` and `services.ts`. Only `save`, `restart` and `quit` still run `play.ps1` or `upgrade.ps1` as child processes; `build_grid` and `grow` do so only with `legacy: true` (timing comparison). `buy_tile` is native (`tile_options`, price preview). Both paths use the same protocol and files.
 
 - **Request/response.** The client writes one compact JSON request and waits for a response with the same id. Every response is `{ok, result | error}`; always check `ok`.
 - **Async work.** Construction, batches and simulation return `status: queued`. Poll `get_operation`, `get_batch` or `get_simulation_step`. `queued` only means accepted.
@@ -43,7 +43,7 @@
 
 | file | role | key behaviours |
 |---|---|---|
-| `play.ps1` | manual front end (MCP calls it only for `legacy: true` and `buy_tile`, `save`, `restart`, `quit`) | Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `buy`, `grow`, `zone`, `run`, `link`, `place`, `save`, `prefab`, `raw`, `help`. Terse output; `raw` strips noisy fields unless `-Full`. `grow` picks the zone by demand (res, resmed, com, ind, off (office); needs demand >= 20 and an unlocked prefab; `-Zone` overrides; reads unemployment from `get_snapshot`) and steps the grid down 3x2 -> 2x2 -> 2x1 -> 1x1 when land is short. `Find-Sites` calls the mod's `find_free_lots` (PowerShell raster only on mods without it); `place` calls `find_roadside_lots`, then `find_building_sites` if that finds nothing. Grow plan takes ~20 s instead of minutes. |
+| `play.ps1` | manual front end (MCP calls it only for `legacy: true` and `save`, `restart`, `quit`) | Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `buy`, `grow`, `zone`, `run`, `link`, `place`, `save`, `prefab`, `raw`, `help`. Terse output; `raw` strips noisy fields unless `-Full`. `grow` picks the zone by demand (res, resmed, com, ind, off (office); needs demand >= 20 and an unlocked prefab; `-Zone` overrides; reads unemployment from `get_snapshot`) and steps the grid down 3x2 -> 2x2 -> 2x1 -> 1x1 when land is short. `Find-Sites` calls the mod's `find_free_lots` (PowerShell raster only on mods without it); `place` calls `find_roadside_lots`, then `find_building_sites` if that finds nothing. Grow plan takes ~20 s instead of minutes. |
 | `autoplay.ps1` | growth loop | Per cycle: wait for the road tool to clear, `grow -BuyTiles` if residential/commercial demand >= 50 and cash > floor + 150k, `services.ps1` every 3rd cycle, `run` for 120 s, budget autopilot. Stops on `STOPPED` from `run`, or on a milestone with `-UntilMilestone`. Ends with `save`. |
 | `grid.ps1` | road grid builder | World-aligned grid (110 m blocks, max 62 roads). Adds four 64 m outward stubs (`-NoStubs` disables). Connector from the nearest existing road node, up to 400 m, found by the mod's `grid_connectors` (PowerShell raster fallback on older mods) and validated with `plan_neighborhood`. Native pre-flight of each road (`build_road previewOnly`) when capability `roadPreview` exists; rejected stubs are dropped, a lost connector is rebuilt from another candidate. Executes with `execute_neighborhood` (before/after saves), then zones and checks connectivity by graph search. `-PlanOnly` changes nothing. `-AllowDemolition` may remove one house to open a street. Connector fallback drops stale edge ids (`stale_point_entity`) and retries with native snapping. |
 | `zone-fill.ps1` | zoning | Zones only `Visible`, unzoned cells, one block-attached rectangle per block. Blocked duplicate cells are skipped. Verifies with a re-read of cells, not operation claims. `-WhatIf` is read-only. |
@@ -53,6 +53,7 @@
 | `lib\BridgeClient.psm1` | client library | `Invoke-Bridge` (throws on `ok:false`), `Get-BridgePaged` (follows `nextOffset`), `Wait-BridgeOperation`, `Wait-BridgeBatch`, `Invoke-BridgeSteps` (chunks to 15000 bytes and 64 steps; resumes past proven no-op zoning errors only), `Invoke-BridgeRoad` (on rejection, inspects the blocker and retries perpendicular offsets), `Get-BridgeRoadGraph` / `Find-BridgeNearestNode` / `Test-BridgeNodesConnected` (local connectivity), `Resolve-BridgePrefab` (name to index, cached per city session in `journals\prefab-cache.json`), `Get-BridgeOccupancy` plus the `Test-Occupancy*` functions (4 m raster from real lot rectangles and road chords), `Clear-BridgeRollingSaves` (keeps newest; never touches `keep-*` or the owner's own saves; recycles to the Recycle Bin). |
 | `grid.ps1` header | builder contract | Documents the plan-then-execute order and the `-PlanOnly` guarantee. Read it before changing the grid flow. |
 | `bridge.ps1` | raw client | Single-command client: `bridge.ps1 <command> -ArgsJson '{...}'`; also `stop`. Reads responses with shared delete access and retries on sharing violations. Journals events when `journals\active.json` exists. |
+| `gen-commands.mjs` | generator | Writes `commands.json` and the `bridge.ps1` ValidateSet (line 2) from the `switch (command)` in `DispatchCore` (src/Mod.cs), 75 commands. `--check` prints differences and exits 1 if either file is stale. A harness test checks it. |
 | `journal.ps1`, `advance.ps1`, `export-*.ps1`, `view-map.html` | optional | Visible progress journal, bounded advance helper, map and atlas exports. Not needed to play. |
 
 Selected helpers used by `play.ps1`:
@@ -75,6 +76,19 @@ Commands added by this fork (upstream commands are documented in COMMANDS.md).
 - **`connected`** `{a: {x, z}, b: {x, z}}`: local reachability of two road nodes (returns `connected`, `reachable`, node distances).
 - **`service_buildings`**: placed service buildings (non-pausing).
 - **Batch options** `compact` and `continueOnBenign`: with `continueOnBenign`, a `no_zone_cells_in_rectangle` step is counted as `noop` and does not stop the batch (`Workflow.cs`).
+
+Added 2026-10-10 (mod side):
+- **`notifications`** `{type?, top?}` (`src/Notifications.cs`, non-pausing): on-map icon counts by type, each with the action it asks for; positions and owners for one type. The owner is walked up from the lane to the road or building. Icons outside owned tiles are ignored. `notification` events fire when a type appears or grows.
+- **Snapshot `icons`, `jams`, `happiness`, `happinessPriority`.** `icons` counts notification icons; `jams` lists traffic bottleneck icons; `happiness` holds the factor values; `happinessPriority` holds the tag per factor.
+- **Needs carry `factor` and `priority`.** `factor` is the happiness factor value. `priority` uses the owner thresholds in `ServiceSignals.cs` (`FactorPriority`): worse than -5 `very_high`, worse than -3 `priority`, otherwise `normal`. The Tax factor is exempt.
+- **Non-pausing reads** added to `NonPausingReads`: `home_clusters`, `crime_map`, `tile_options`, `notifications`.
+- **`purchase_tiles` `previewOnly`**: returns the price and upkeep without buying.
+- **`zone_area` `replace`**: zones over existing zoning when set (`FastBuild.cs`).
+- **Dispatch rollback** (`Mod.cs`): a command that throws after claiming the operation slot finishes as `setup_failed` and the default tool is restored (FAILURES #56).
+- **`CheckedEntity`** (`Mod.CheckedEntity`): every caller-supplied entity id is range-checked before EntityManager (FAILURES #57).
+- **Snap masks** (`Construction.cs`): the bridge road tool initialises `m_SnapOnMask` and `m_SnapOffMask` from `GetAvailableSnapMask` before `SnapControlPoints` (FAILURES #55).
+- **`cancel_simulation_step`** takes the operation `id`. If an id is sent, the mod refuses it unless it matches the running step (`SimulationControl.cs`). An id-less cancel is not checked. The MCP client always sends the id (FAILURES #54).
+- **`get_network`** pages with `total` and `nextOffset`; no silent cap (FAILURES #58).
 
 - **`get_ui_state`** (args: `chirps` 0-10, default 3). Returns `selectedSpeed`, `hasFocus`, `pausedBarrierObservers`, `screen`, `menuActive`, `activePanel`, `tutorial` {`enabled`, `activeTutorial`, `activeTutorialPhase`, `phaseKind`, `phaseText`, `introUnfinished`}, `milestone` {`pending`, `pendingReward`, `pendingText`, `achieved`, `xp`, `nextXp`, `xpToNext`, `blockedBy`}, `signatures.pending[]` {`name`, `text`}, `dialogs`, `activeTool`, `infoview`, `chirps`, `likelyBlocker`, `resolvableByBridge`, `errors[]`. Each probe is isolated, so a renamed game member shows in `errors` instead of failing the call. `likelyBlocker` is one of: `error_dialog`, `menu_screen`, `milestone_popup`, `signature_popup`, `tutorial_phase`, `unknown_ui_panel`, `window_not_focused`, `paused_by_player_or_bridge`, `none`. `milestone.blockedBy = tutorial_intro` means milestones are held.
 - **`get_pause_state`.** The pause-only subset of the same probes (speed, focus, barrier observers, tutorial, `likelyBlocker`).
@@ -113,7 +127,7 @@ Commands added by this fork (upstream commands are documented in COMMANDS.md).
   - `coverage_gaps` {service, threshold?, cell?, top?}: native service coverage at each home's road position. Returns the uncovered share, percentiles, `gapClusters` (densest first) and existing `facilities`. Services: Healthcare, FireRescue, Police, Park, PostService, Education, EmergencyShelter, Welfare.
   - `traffic_hotspots` {top?, minLength?}: road edges with the lowest native traffic flow (flowPct 100 = free flow), plus mean and city flow.
   - `project` {actions: [{prefab, count?} | {zone, cells}]}: construction, monthly upkeep, zone income when built and projected net per period, using the live tax per occupied cell. Roads and tile upkeep are not included.
-- **Snapshot `needs`** (per service: deathcare, health, fire, school, ...): `chirps` (among the 10 newest), `tutorial` (a card asks for it), `icons`, `iconRise` (streak of rising icon counts, max 3), `dead`, `sick`, `score` ("n/3") and `action`. Score = chirps + 1 for a tutorial card + icon-rise streak (max 3) + 1 for any dead or sick citizen (2 at 10 or more) + 1 for 10 or more standing notification icons (`ServiceSignals.NeedScore`, FAILURES #45). Score >= 3 gives `action` `build`; `services.ps1` builds those first. The MCP planner (`services.ts`) also escalates on >= 10 icons or >= 20 dead/sick without chirps. `iconsTop` lists the most common notification icons. Sources: `src/ServiceNeeds.cs`, `src/ServiceSignals.cs`.
+- **Snapshot `needs`** (per service: deathcare, health, fire, school, ...): `chirps` (among the 10 newest), `tutorial` (a card asks for it), `icons`, `iconRise` (streak of rising icon counts, max 3), `dead`, `sick`, `score` ("n/3") and `action`. Score = chirps + 1 for a tutorial card + icon-rise streak (max 3) + 1 for any dead or sick citizen (2 at 10 or more) + 1 for 10 or more standing notification icons (`ServiceSignals.NeedScore`, FAILURES #45). Score >= 3 gives `action` `build`; `services.ps1` builds those first. The MCP planner (`services.ts`) also escalates on >= 10 icons or >= 20 dead/sick without chirps. `iconsTop` lists the most common notification icons. `factor` and `priority` (see section 4, added 2026-10-10) tie the need to its happiness factor. Sources: `src/ServiceNeeds.cs`, `src/ServiceSignals.cs`.
 - **AutoResolve** (`src/AutoResolve.cs`): while bridge controls are on, tutorial, milestone and signature popups, and intro-held milestones, are resolved on the main thread from a fresh UI read. Events `auto_resolved` and `auto_resolve_failed` (the first 3 failures are logged; retries slow to every 30 s after that). Error dialogs and menus are never resolved.
 - **`session.json` `display`**: Unity's `Screen.fullScreenMode` and resolution at each heartbeat (`ExclusiveFullScreen`, `FullScreenWindow`, `MaximizedWindow` or `Windowed`). `upgrade.ps1` reads it after a launch.
 
@@ -123,12 +137,12 @@ Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridg
 
 - **Setup.** Node >= 22.18 (native TypeScript type stripping, no build step). `cd mcp; npm install` (`@modelcontextprotocol/sdk` 1.32.1, `zod` 3). Registered in `.mcp.json` at the repo root (`command` node, `args` `mcp/src/server.ts`). `CS2_MAILBOX` overrides the mailbox folder.
 - **Protocol** (copies `bridge.ps1`): session.json heartbeat <= 10 s and status `ready`; request written as `.tmp` then renamed; response polled every 12 ms (`POLL_MS`) and deleted after reading; 15000-byte client limit (mod 16384); culture-safe manual ISO parse; never resends a mutation after a timeout.
-- **Tools (29): 28 in `server.ts` plus `timings`** (registered by `timing.ts`). Every tool except `snapshot`, `events`, `ui`, `fix_popup`, `run`, `run_status`, `timings` and `quit` first clears popups (`ensureClear`).
+- **Tools (34): 32 in `server.ts`, plus `timings` (`timing.ts`) and `happiness` (`happiness.ts`).** Every tool except `snapshot`, `events`, `ui`, `fix_popup`, `run`, `run_status`, `timings`, `happiness`, `notifications` and `quit` first clears popups (`ensureClear`).
 
 | tool | args | does | pauses |
 |---|---|---|---|
 | `snapshot` | brief? | cached city state (section 4); `brief: true` returns only the decision fields (~1/3 of the tokens) | no |
-| `events` | since, limit, types | tail of events.jsonl | no |
+| `events` | since (cursor `session:seq` or ISO UTC), limit (1-200), types | page of events.jsonl after the cursor; `hasMore`; `gap` when the sequence jumps | no |
 | `ui` | none | speed, blocker, popups, tool, chirps | no |
 | `fix_popup` | none | dismisses milestone, signature and tutorial popups | yes |
 | `run` | seconds (1-1800), speed (1, 2, 4), cashFloor, background | bounded simulate loop; one summary line. `background: true` returns at once and keeps simulating for `seconds` while you plan (`seconds: 0` stops it) | yes; foreground ends paused |
@@ -144,26 +158,46 @@ Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridg
 | `set_service_budget` | service, budget (50-150) | budget by exact or unique partial name | yes |
 | `services` | none | name, budget, buildings (array length), workers, workplaces | no |
 | `fix_services` | maxPlacements (1-4), plan | `services.ts` planner: builds escalated needs, coverage gaps and utility capacity before growth; large lots via the roadside finder | yes |
-| `buy_tile` | n (1-3), max, x, z, plan | buys adjacent tiles within a cost cap, nearest the city or to x,z; PowerShell path | yes |
+| `buy_tile` | n (1-3), max (default 300000), x, z, plan | native: `tile_options` picks dry, flat adjacent tiles nearest the city or to x,z; price and upkeep previewed before buying | yes |
 | `save` | none | `play.ps1 save` (PowerShell) | yes |
 | `restart` | build, noInstall | `upgrade.ps1` (PowerShell): save, quit, relaunch, load newest autosave | yes |
 | `upgrade_road` | index, version, road, maxCost | replaces one road edge (index/version from traffic_hotspots) with another road prefab via `upgrade_network`; returns cost and placement reasons | yes |
 | `quit` | none | verified rolling save, then clean quit (`upgrade.ps1 -QuitOnly`); never force-kills | yes |
-| `query` | command (read-only allow-list), args, maxChars | raw read | yes |
+| `query` | command (read-only allow-list), args, fields (dot paths, max 20), offset, limit, maxChars | raw read; always valid JSON (projected, paged, or a shape summary) | yes |
 | `free_lots` | width, depth, count, zone, x, z, radius, step, margin, maxLink | `find_free_lots` (section 4) | no |
 | `roadside_lots` | prefab, x, z, radius, count | `find_roadside_lots` | no |
 | `corridor` | fromX, fromZ, toX, toZ, halfWidth | `corridor` | no |
 | `coverage_gaps` | service (enum), threshold, cell, top | `coverage_gaps` | no |
 | `traffic_hotspots` | top, minLength | `traffic_hotspots` | no |
 | `project` | actions: [{prefab, count} or {zone, cells}] | `project`: cost, upkeep and net per period before building | no |
+| `happiness` | none | factors worst first with the owner's tags, the mapped fix, the trend since the first record, actions taken and a verdict (see below) | no |
+| `notifications` | type?, top (1-100) | on-map icon counts by type with the action each asks for; positions and owners for one type | no |
+| `clear_ruins` | max (1-30), plan | bulldozes burned-down or collapsed buildings from their icons so the lots rebuild; `plan` lists them; logs the action | yes |
+| `fix_traffic` | max (1-8), flowBelow (1-90), plan | acts on traffic jam icons (`fixJams`) and widens the most congested Small Roads to Medium Road from native flow; reports hotspots it cannot fix (ramps, roads already Medium); logs the action | yes |
+| `build_arterial` | fromX, fromZ, toX, toZ, road (default Medium Road), plan | road from a point on the network to a target along the lot-free corridor; every segment previewed by the game first | yes |
 
-- **Pausing rules.** `snapshot`, `events`, `ui`, `run_status`, `timings` and the non-pausing reads (`services`, `prefabs`, `free_lots`, `roadside_lots`, `corridor`, `coverage_gaps`, `traffic_hotspots`, `project`) never pause and are safe during `run`. Tools that call `assertIdle` (all mutations, plus `fix_popup`, `query` and `quit`) refuse with `run_in_progress` during a foreground `run`. With `run {background: true}` mutations are allowed: `mutate()` holds the simulation loop, and the game pauses only for that call.
+- **Pausing rules.** `snapshot`, `events`, `ui`, `run_status`, `timings`, `happiness`, `notifications` and the non-pausing reads (`services`, `prefabs`, `free_lots`, `roadside_lots`, `corridor`, `coverage_gaps`, `traffic_hotspots`, `project`) never pause and are safe during `run`. Tools that call `assertIdle` (all mutations, plus `fix_popup`, `query` and `quit`) refuse with `run_in_progress` during a foreground `run`. With `run {background: true}` mutations are allowed: `mutate()` holds the simulation loop, and the game pauses only for that call.
+
+- **GoalLock** (`mcp\src\bridge.ts`). One exclusive lock per goal (preview, build, zone, verify, background step). FIFO mutex; release is idempotent; re-entrant through AsyncLocalStorage, so a nested `mutate()` in the same chain runs directly. `mutate()` and `runPwsh()` take it. The background loop takes it per step and is preempted (cancel by id) when a goal waits (`goalLock.waiting`). Replaces the old mutation counter (FAILURES #50, #53).
+- **Events cursor** (`pageEvents`, `bridge.ts`). The cursor is `session:seq`, because `seq` restarts with each game process. `hasMore` says another page exists; `gap` reports a jump in the sequence. `since` also accepts an ISO UTC timestamp.
+- **Query projection** (`project.ts` `fit`). `fields` keeps dot paths, `offset` and `limit` page an array, and an oversized result becomes a shape summary. The output is never cut mid-JSON (FAILURES #58).
+- **Happiness history and action log.** `journals\happiness-history.jsonl` gets one record per check: `{utc, frame, pop, happy, f:{factor: value}}`, for factors below 0. `journals\actions.jsonl` gets `{utc, need, tool, detail}` for each recorded action (`recordAction`). `happiness` joins them by need.
+- **Verdicts** (`happiness.ts`), per factor below 0. The tag comes from the owner thresholds; a verdict reads the actions for that factor's need.
+  - `act_now`: very_high (worse than -5), no action inside the settle window.
+  - `act`: priority (worse than -3), no action inside the settle window.
+  - `watch`: normal (-3 to 0).
+  - `waiting`: an action for this factor's need is inside the settle window.
+  - `improving`: two or more actions and the factor is at least 0.5 better than at the first action.
+  - `investigate`: two or more actions and the factor has not risen by 0.5. Stop adding the same building; diagnose with `crime_map`, `home_clusters` or `coverage_gaps` (through `query`, outside a foreground run).
+  - `report_only`: the Tax factor, exempt by owner decision.
+  - `no_fix_known`: the factor has no mapped need.
+- **Not wired in.** `mcp\src\taxes.ts` (tax autopilot) is not imported by `server.ts`. It is unverified; its test file write was blocked by the permission system and needs the owner's approval. The harness does not change tax rates; they are owner-set (`journals\tax-pins.json`).
 
 ### Performance (2026-10-10)
 - Full grid cycle: 64 s (PowerShell path) -> 33 s (first native path) -> 17 s -> 6.6 s. At 6.6 s: sites 1.1 s, plan 0.2 s, preview 2.7 s, build 2.4 s, zone 0.08 s, verify 0.05 s.
 - Snapshot round trip 50-80 ms; fix_services plan 380-550 ms; place_service 1.2-3.8 s; grow plan 4.9-6.9 s (was 30.7 s on the PowerShell path, 20 s before that).
 - Remaining cost is the game's own road preview and build (about 0.35 s per road; frame-bound, ~10 frames per tool operation). Count operations and round trips, not lines of code (FAILURES #49). Every result carries wall-clock `ms` and `phases`; `timings` summarises them.
-- **Cost and upkeep.** Mutating tools return `cost` (money before minus after). `monthlyUpkeep` comes from prefab costs and is set only by `place_service`; `build_grid`, `grow`, `link`, `buy_tile` and `upgrade_road` return `null`, and road and tile upkeep show in snapshot expense after the next budget period. `zone` and `set_tax` cost 0. Use `project` before building to see construction, upkeep and net per period.
+- **Cost and upkeep.** Mutating tools return `cost` (money before minus after). Known issue: it is a money delta, so it is wrong when income or a milestone reward lands in the same step; use the operation's `previewCost`. `monthlyUpkeep` comes from prefab costs and is set only by `place_service`; `build_grid`, `grow`, `link`, `buy_tile` and `upgrade_road` return `null`, and road and tile upkeep show in snapshot expense after the next budget period. `zone` and `set_tax` cost 0. Use `project` before building to see construction, upkeep and net per period.
 - **Tests** (run from `mcp\`):
   - `node test/smoke.ts`: offline; tool list and events.
   - `node test/popups.ts`: offline; `fixPopups` survives a phase change between its read and its resolve (temp mailbox, fake mod, no game calls).
@@ -223,12 +257,12 @@ Derived from `git log` (26 commits) and FAILURES.md (numbers in brackets).
 ## 8. Known gaps / needs improvement
 
 - **Public transport.** The bridge has no transit-line or stop commands. Needed around 2k population (CITYPLAN).
-- **Traffic-aware routing.** Edges expose raw traffic counters; the harness does not read or use them.
+- **Traffic-aware routing.** Edges expose raw traffic counters; `fix_traffic` uses native flow to pick upgrades. Route choice (`link`, `grid`, `build_arterial`, `grid_connectors`) does not weigh traffic.
 - **Wind direction for industry.** Industry is placed by distance only; wind is not modelled.
 - **District and policy management.** `create_district` / `edit_district` exist; policies are not exposed. Naming can report an EntityCommandBuffer error after success (RELEASE-NOTES.md).
 - **Service capacity and response time.** DONE for coverage: fire and service placement use the mod's native `coverage_gaps` where a rule has a coverage category, and escalated `needs` (FAILURES #38, #39). Capacity and response time are still not modelled (FAILURES #39).
 - **Upgrade buildings.** Extensions and wings are ignored (`Upgrade|Extension|Wing` filter in services.ps1); no command places them.
-- **Road hierarchy upgrades.** `upgrade_network` and the `upgrade_road` tool exist, but nothing triggers them when a road is congested.
+- **Road hierarchy upgrades.** `upgrade_road` exists, and `fix_traffic` now widens the most congested Small Roads to Medium Road from native flow. Ramps and roads already Medium are reported, not fixed.
 - **Water and power capacity planning.** DONE for signals: snapshot `util` (power, water and sewage capacity against use, plus electricity import or export) is read. Open: the harness does not forecast demand or plan plants before growth.
 - **Medium and high density rezoning of existing blocks.** Not designed (FAILURES open issues); autoplay only zones empty land.
 - **Editor tutorials.** Out of scope; the bridge requires a loaded city.

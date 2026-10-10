@@ -3,6 +3,14 @@
 Agents: read before building. Update the "Built" and "Next" sections when you finish work.
 Coordinates are world metres (x east, z north). The core sits at roughly x -935..-85, z -495..935.
 
+## 2026-10-10 state
+- Population about 6,070. Milestone 6.
+- Taxes R15 C13 I15 O13: owner floor, revenue-first. The Tax factor is exempt from the priority rules.
+- Services added today: cemetery, 2 clinics, 3 police stations, fire house, coal plant, wind turbine, 6 parks, radio mast.
+- Tiles bought: south, north, west, far-west.
+- Known problems: unemployment about 31%; job-zone demand 0 from the taxes (FAILURES #61); highway junction jam at (-800, 17) (FAILURES #63, open); about 60 noise pollution icons.
+- The "Built" and "Next" sections below predate this block; this block is current.
+
 ## Principles
 1. **Arterials first.** New districts attach to arterials (Medium Road via `play.ps1 link`), never through another district's back streets. Lots line every road, so enclosed districts cannot be reached later without demolition.
 2. **Every grid leaves stubs.** `grid.ps1` builds four 64 m stubs outward before zoning. Do not zone over or build on stub ends; they are the next district's connection.

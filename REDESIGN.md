@@ -1,9 +1,9 @@
 # Harness redesign: live play through an MCP server
 
-Status: Phase 1 and Phase 2 implemented and verified live (2026-10-10). Phase 3 not started.
+Status: Phases 1 and 2 implemented and verified live (2026-10-10); harness overhead work and the fork-audit fixes B1-B16 landed; Phase 3 (strategist/operator) not started.
 
 ## Why
-The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (44 entries):
+The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (63 entries):
 - **The agent is blind while the game runs.** Every bridge read except a few status calls runs `PauseAnalysis()` (Mod.cs Dispatch). So the agent either watches or plays, and problems (24% unemployment, a -₡113k/period budget) surfaced late.
 - **Decisions are hard-coded thresholds in scripts**, so the agent patches rules instead of reasoning about the city.
 - **It's slow.** Spatial work happens in PowerShell: the occupancy raster, site search and connector search take 1–4 minutes per cycle.
@@ -100,10 +100,28 @@ Haiku (operator, routine events)     ──MCP tools──▶        │  mailbo
 - At 6.6 s: sites 1.1 s, plan 0.2 s, preview 2.7 s, build 2.4 s, zone 0.08 s, verify 0.05 s.
 - Left: road preview and build are frame-bound (~10 frames per tool operation, ~0.35 s per road). Tile purchase and save still shell out to PowerShell. The project should calibrate upkeep with the observed ~2.7x factor (FAILURES #47).
 
+## Happiness-driven services and icons (2026-10-10)
+What exists now:
+- **Happiness factors** are read in the snapshot (`happiness`, `happinessPriority`, `worstHappy`). Owner thresholds: worse than -5 very_high (act now), worse than -3 priority (act this cycle), Tax exempt (report only).
+- **Needs** (`ServiceSignals.NeedScore`) carry the factor value and its priority. A need with score >= 3 gets action `build` and is built ahead of growth.
+- **`happiness` tool** (`mcp\src\happiness.ts`) gives the verdicts (act_now, act, watch, waiting, improving, investigate, report_only, no_fix_known) from `journals\happiness-history.jsonl` and `journals\actions.jsonl`. A factor that two actions did not move gets `investigate`.
+- **Notification icons** are read by the mod (`notifications`, snapshot `icons` and `jams`). Icons are acted on by `clear_ruins` (burned-down or collapsed buildings) and `fix_traffic` (jams and congested Small Roads).
+- **`build_arterial`** routes a Medium Road along the lot-free corridor, with each segment previewed by the game.
+- Live evidence: `clear_ruins` bulldozed 4 burned-down buildings in 2.3 s (FAILURES #60). Factor movements are in LEARNINGS.md.
+
 ## Phase 3: strategist and operator
 - The strategist (Claude, fresh session) reads `snapshot` + `CITYPLAN.md` every few game months and issues a small plan of typed actions.
 - The operator (Haiku) handles events: popups, power at 90%, deficits, fires. It escalates anything unusual.
 - Retire autoplay.ps1's hard-coded rules; keep play.ps1 for manual debugging.
+
+## What is left
+- Arterial smoothing: minimum segment length and a turn-angle limit for `build_arterial` (FAILURES #63).
+- Highway junction at (-800, 17): the single ramp is the traffic bottleneck; wider prefabs are locked.
+- Tax autopilot: wire `mcp\src\taxes.ts` into the server after its tests are verified (test file write needs owner approval).
+- Cost from `previewCost`: mutating tools report a money delta, which is wrong when income or a reward lands in the same step.
+- Transit lines (P1 in HARNESS.md section 9).
+- `commands.json` descriptions: 75 of 75 are empty (`undocumented: true`).
+- Phase 3 (strategist and operator), not started.
 
 ## Constraints (unchanged)
 - Never force-kill the game. Save (verified) before quit; load only at the main menu; the owner's `test` and `Olympia` saves are untouched.

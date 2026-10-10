@@ -62,7 +62,7 @@ namespace CitiesIIAgentBridge
             var candidates=new JArray();
             foreach(JObject edge in edges.OrderBy(e=> (int)e["index"]))
             {
-                var entity=new Entity{Index=(int)edge["index"],Version=(int)edge["version"]};
+                var entity=Mod.CheckedEntity((int)edge["index"], (int)edge["version"]);
                 if(!em.HasComponent<Game.Net.Road>(entity)) continue;
                 var netPrefab=em.GetComponentData<PrefabRef>(entity).m_Prefab;
                 float halfRoad=em.HasComponent<NetGeometryData>(netPrefab)?em.GetComponentData<NetGeometryData>(netPrefab).m_DefaultWidth*0.5f:8;

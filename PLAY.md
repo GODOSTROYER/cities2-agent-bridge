@@ -5,28 +5,31 @@ Read this instead of COMMANDS.md; LEARNINGS.md has the why.
 ## Preferred: MCP tools
 Use the `cs2` MCP server (HARNESS.md section 4b). Its tools replace most verbs below. Preconditions below still apply.
 
-MCP loop:
-1. `run {background: true, seconds}` once. The simulation keeps running while you plan.
-2. Plan with non-pausing reads while it runs (`free_lots`, `roadside_lots`, `corridor`, `coverage_gaps`, `project`, `prefabs`, `services`).
-3. `snapshot {brief: true}` each decision.
-4. If any `needs.<service>.action` is `build`, `fix_services` first.
-5. Then `grow` or `build_grid`. Each pauses only for itself; the run resumes.
-6. `run_status` for sim share; `timings` for overhead.
+Start once: `run {background: true, seconds}`. The simulation keeps running while you plan.
 
-Core loop:
-1. `snapshot`: money, net, population, demand, jobs, utilities, shortages, ui, `needs`. Non-pausing.
-2. If any `needs.<service>.action` is `build`, run `fix_services` (or `place_service` for one exact building) before growth. Escalated needs are orders, not noise.
-3. `project` the proposed actions before spending: construction, monthly upkeep, income and net per period. Read `demandWhy` and `jobs.vacantByEdu` before zoning. Judge power by `util.power` use vs production and import, not plant load.
-4. `save` and wait for `complete`.
-5. Act, plan first: `grow`, `build_grid`, `link`, `buy_tile`, `place_service` with `plan: true`. Check `prefabs` costs and `monthlyUpkeep` before building, then repeat without `plan`.
-6. `run` (`seconds`, `speed`, `cashFloor`). A foreground run ends paused; `background: true` keeps it running.
-7. `events` (`since` = last `utc`) or `snapshot`. Save again.
+Play cycle (every decision):
+1. `snapshot {brief: true}`: money, net, demand, jobs, utilities, `needs` (with `factor` and `priority`), `happinessPriority`, `icons`, `jams`. Non-pausing.
+2. `happiness`: factors worst first, each with a verdict (act_now, act, watch, waiting, improving, investigate, report_only). Non-pausing.
+3. `notifications`: on-map icons by type. Every cycle.
+4. Act in this order:
+   - very_high first: `act_now` factors and `needs` with action `build` (`fix_services`, or `place_service` for one exact building). Ruins: `clear_ruins`. Jams: `fix_traffic`.
+   - Then priority: `act` factors, this cycle, ahead of growth.
+   - Then growth: `grow`, `build_grid`, `link`, `buy_tile`, `build_arterial`. Use `project` first and `plan: true` where offered.
+5. Never add a third building for a factor that two actions did not move. Verdict `investigate` means stop: find the cause with `crime_map`, `home_clusters` or `coverage_gaps` (through `query`, outside a foreground run).
+6. Tax: report the rates, tax income, net, cash and the Tax factor each cycle (see Tax policy).
+7. `run {seconds, speed, cashFloor}`. A foreground run ends paused. Then `events` (`since` = last cursor) and `snapshot`. Save again.
+
+Tax policy (owner's rule, `journals\tax-pins.json`):
+- Revenue-first. Floors: R15 C13 I15 O13. Never set a rate below its floor.
+- Rates are owner-set. Change them only on owner direction; never automatically.
+- The Tax factor is exempt from the priority rules (verdict `report_only`). Report it, flag it below -5, and never lower rates or add buildings because of it.
+- Report demandWhy and unemployment next to every tax decision. With job-zone demand at 0, build no new housing (FAILURES #61).
 
 Rules:
-- During a foreground `run`, `snapshot`, `events`, `ui`, `run_status`, `timings` and the non-pausing reads (`services`, `prefabs`, `free_lots`, `roadside_lots`, `corridor`, `coverage_gaps`, `traffic_hotspots`, `project`) are safe. Mutations, `fix_popup`, `query` and `quit` refuse with `run_in_progress`. With `background: true`, a mutation pauses only for itself and the run resumes.
+- During a foreground `run`, `snapshot`, `events`, `ui`, `run_status`, `timings`, `happiness`, `notifications` and the non-pausing reads (`services`, `prefabs`, `free_lots`, `roadside_lots`, `corridor`, `coverage_gaps`, `traffic_hotspots`, `project`) are safe. Mutations, `fix_popup`, `query` and `quit` refuse with `run_in_progress`. With `background: true`, a mutation pauses only for itself and the run resumes.
 - After a `timeout` error, do not resend the mutation. Read `snapshot` first.
+- `cost` is a money delta. It is wrong when income or a milestone reward lands in the same step; use the operation's `previewCost` when it matters.
 - `monthlyUpkeep` is set only by `place_service`. Road and tile upkeep show in `snapshot` expense after the next budget period. `project` leaves them out too.
-
 - Use the quit tool (save + clean quit) instead of leaving the game idle during long offline work.
 
 Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
@@ -36,7 +39,7 @@ Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
 - Owner ticked Options > Cities II Agent Bridge > Allow local bridge controls. It resets on every city load.
 - Never close, launch, install or kill the game without owner permission. The bridge has no quit command.
 
-## Core loop
+## Core loop (script verbs)
 1. `play.ps1 look`
 2. `play.ps1 save before-x`
 3. Act: `grow`, `grid -X x -Z z`, or `zone -X x -Z z`. Add `-Plan` first when unsure.

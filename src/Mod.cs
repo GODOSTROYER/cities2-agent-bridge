@@ -153,7 +153,7 @@ namespace CitiesIIAgentBridge
                 throw new InvalidOperationException("control_disabled: enable it in Options > Cities II Agent Bridge");
         }
 
-        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "service_buildings", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
+        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "service_buildings", "home_clusters", "crime_map", "notifications", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
 
         // multi {commands:[{command,args}]}: up to 16 non-pausing reads in one mailbox round trip.
         private JObject Multi(JObject args)
@@ -174,7 +174,43 @@ namespace CitiesIIAgentBridge
             return new JObject { ["results"] = results };
         }
 
+        // Caller-supplied entity ids are range-checked before any EntityManager access.
+        internal static Entity CheckedEntity(int index, int version)
+        {
+            // This Entities version exposes no capacity; reject negative and absurd ids so that a bad
+            // caller value can never index outside the entity store. Exists() then validates the rest.
+            if (index < 0 || version < 0 || index >= 100000000) throw new ArgumentException("entity_id_out_of_range");
+            return new Entity { Index = index, Version = version };
+        }
+
+        private static bool IsBridgeTool(ToolBaseSystem tool) => tool is BridgeRoadTool || tool is BridgeZoneTool || tool is BridgeObjectTool || tool is BridgeBulldozeTool || tool is BridgeDistrictTool;
+
+        // A command that claimed the operation slot or installed a bridge tool and then threw must
+        // not leave later builds stuck on construction_busy (FAILURES #22, #23): roll both back.
         private JObject Dispatch(string command, JObject args)
+        {
+            string activeBefore = ConstructionAccess.Active;
+            try { return DispatchCore(command, args); }
+            catch (Exception e)
+            {
+                string claimed = ConstructionAccess.Active;
+                if (claimed != null && claimed != activeBefore)
+                {
+                    try { ConstructionAccess.Finish(claimed, "failed", "setup_failed: " + e.GetBaseException().Message); } catch { }
+                    try
+                    {
+                        var w = World.DefaultGameObjectInjectionWorld; var tools = w?.GetExistingSystemManaged<ToolSystem>();
+                        if (tools != null && IsBridgeTool(tools.activeTool)) tools.activeTool = w.GetExistingSystemManaged<DefaultToolSystem>();
+                    }
+                    catch { }
+                    if (tileOperation == claimed) { tileOperation = null; pendingTiles = null; }
+                    if (simulationOperation == claimed) simulationWindow = null;
+                }
+                throw;
+            }
+        }
+
+        private JObject DispatchCore(string command, JObject args)
         {
             // These status polls must not terminate an active bounded simulation step.
             bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state" || command == "get_snapshot" || command == "load_save" || command == "quit_game"
@@ -229,6 +265,9 @@ namespace CitiesIIAgentBridge
                 case "connected": return RoadsConnected(args);
                 case "service_buildings": return ServiceBuildings();
                 case "tile_options": return TileOptions(args);
+                case "home_clusters": return HomeClusters(args);
+                case "crime_map": return CrimeMap(args);
+                case "notifications": return Notifications(args);
                 case "coverage_gaps": return CoverageGaps(args);
                 case "traffic_hotspots": return TrafficHotspots(args);
                 case "project": return Project(args);
@@ -266,7 +305,7 @@ namespace CitiesIIAgentBridge
                 }
                 case "inspect_entity":
                 {
-                    var entity = new Entity { Index = RequiredInt(args, "index"), Version = RequiredInt(args, "version") };
+                    var entity = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
                     return Inspect(RequireCity(), entity);
                 }
                 case "get_water_facilities": return WaterFacilities();

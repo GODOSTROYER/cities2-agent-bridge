@@ -108,6 +108,17 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Coverage is not capacity. Native coverage showed every home covered by a fire house (range 5000), yet three fires burned in about 70 minutes with one fire house. Watch fire events and `needs`, not coverage alone (FAILURES #39).
 - Tax per occupied cell (monthly, from the `project` query on the live city): industry ~80, commercial ~110-150, office ~52-57, residential ~12-20. Compare zones with these before zoning.
 
+## Happiness factors, icons and taxes (2026-10-10)
+- **Owner thresholds** (`ServiceSignals.FactorPriority`; `mcp\src\happiness.ts`): a factor worse than -5 is `very_high` (act now, every cycle until it improves); worse than -3 is `priority` (act this cycle, ahead of growth); -3 or better is `normal`.
+- **Tax factor is exempt.** Report it (flag below -5); never lower rates or add buildings because of it. Owner rates are R15 C13 I15 O13 (`journals\tax-pins.json`).
+- **Factors seen moving after an action:**
+  - Entertainment -4 -> 0 after six small parks (35k).
+  - Telecom -2 -> 0 after one radio mast (25k).
+  - Healthcare -1.4 -> 0 after the health budget went to 100%.
+  - Crime -7.5 -> -4.7 after two more police stations and the budget at 100%. It took about 20 minutes to show, so judge only after the settle window.
+- **Tax floor and job-zone demand** (FAILURES #61). At R15 C13 I15 O13 the native Taxes factor is -450 (industry), -240 (commercial), -60 (office). Unemployment went 12% -> 31% and job-zone demand fell to 0 while housing kept adding workers. Read `demandWhy` and unemployment with every tax decision.
+- **Icon types seen on the map:** Noise Pollution, Air Pollution, Traffic Bottleneck Notification, Garbage Notification, Burned Down, Hearse Notification, MissingUneducatedWorkers, No Customers, Powerline Not Connected. Burned-down ruins: `clear_ruins`. Jams: `fix_traffic`.
+
 ## Harness bugs fixed in this copy (see `git log`)
 1. **Culture-dependent heartbeat parse.** PS7 `ConvertFrom-Json` turns `heartbeatUtc` into a `DateTime`. `[DateTimeOffset]::Parse()` then re-parsed its string form in the user's culture (en-IN read 10/09 as 10 Sep), so every command failed with "heartbeat stale". Fixed by using the DateTime directly and parsing strings with InvariantCulture.
 2. **Indented request JSON.** Indentation roughly doubled request size and pushed valid batches past 16 KB. Requests are now compact, with a client-side size check that refuses before sending.

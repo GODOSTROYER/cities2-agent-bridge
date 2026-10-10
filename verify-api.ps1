@@ -44,7 +44,7 @@ try {
     $modSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'src\Mod.cs') -Raw
     $clientSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bridge.ps1') -Raw
     $commands = @([regex]::Matches($modSource, 'case "([a-z_]+)":') | ForEach-Object { $_.Groups[1].Value })
-    $declared = @((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'commands.json') -Raw | ConvertFrom-Json))
+    $declared = @((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'commands.json') -Raw | ConvertFrom-Json) | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.name } })
     foreach ($command in $commands) {
         if (!$clientSource.Contains("'$command'") -or $command -notin $declared) { throw "Command is unreachable or undocumented: $command" }
     }

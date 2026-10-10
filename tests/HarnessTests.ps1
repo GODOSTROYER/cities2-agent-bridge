@@ -166,6 +166,22 @@ Invoke-HarnessTest 'upgrade: launches exactly as before' {
     Assert-That (-not $upgradeText.Contains('AllowRelaunch')) 'upgrade.ps1 still contains AllowRelaunch'
 }
 
+# 9. commands.json and the bridge.ps1 ValidateSet are generated from the mod dispatcher (static, no game)
+Invoke-HarnessTest 'commands.json and bridge.ps1 match the dispatcher' {
+    Push-Location $repo
+    try { $genOutput = & node gen-commands.mjs --check 2>&1; $genExit = $LASTEXITCODE }
+    finally { Pop-Location }
+    Assert-That ($genExit -eq 0) "node gen-commands.mjs --check exited ${genExit}: $($genOutput -join ' | ')"
+}
+
+Invoke-HarnessTest 'commands.json: every command has boolean pausing and control' {
+    $entries = @(Get-Content -LiteralPath (Join-Path $repo 'commands.json') -Raw | ConvertFrom-Json)
+    Assert-That ($entries.Count -gt 0) 'commands.json has no entries'
+    foreach ($entry in $entries) {
+        Assert-That ($entry.pausing -is [bool] -and $entry.control -is [bool]) "$($entry.name) lacks boolean pausing/control"
+    }
+}
+
 Write-Output ("{0} tests: {1} passed, {2} failed" -f $script:Ran, ($script:Ran - $script:Failed), $script:Failed)
 if ($script:Failed) { exit 1 }
 exit 0

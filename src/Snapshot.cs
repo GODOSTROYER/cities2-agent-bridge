@@ -152,7 +152,7 @@ namespace CitiesIIAgentBridge
                 var income = new List<KeyValuePair<string, long>>(); var expense = new List<KeyValuePair<string, long>>();
                 foreach (IncomeSource src in Enum.GetValues(typeof(IncomeSource))) if (src != IncomeSource.Count) income.Add(new KeyValuePair<string, long>(src.ToString(), b.GetIncome(src)));
                 foreach (ExpenseSource src in Enum.GetValues(typeof(ExpenseSource))) if (src != ExpenseSource.Count) expense.Add(new KeyValuePair<string, long>(src.ToString(), b.GetExpense(src)));
-                s["income"] = Top(income, 5); s["expense"] = Top(expense, 5);
+                s["income"] = Top(income, 4); s["expense"] = Top(expense, 3);
             });
             Timed(errors, perf, "tax", () =>
             {
@@ -183,12 +183,22 @@ namespace CitiesIIAgentBridge
             {
                 Timed(errors, perf, "happinessFactors", () =>
                 {
-                    var worst = new JObject();
+                    // Every happiness factor with a visible effect, worst first (the game's own panel).
+                    var all = new JObject();
                     foreach (var p in HappinessFactors(w).Properties()
-                        .Where(p => p.Value is JObject f && (bool?)f["locked"] != true && (int?)f["samples"] > 0)
-                        .OrderBy(p => (double)p.Value["effect"]).Take(3))
-                        worst[p.Name] = Math.Round((double)p.Value["effect"], 1);
-                    s["worstHappy"] = worst;
+                        .Where(p => p.Value is JObject f && (bool?)f["locked"] != true && (int?)f["samples"] > 0 && Math.Abs((double)f["effect"]) >= 0.5)
+                        .OrderBy(p => (double)p.Value["effect"]))
+                        all[p.Name] = Math.Round((double)p.Value["effect"], 1);
+                    s["happiness"] = all;
+                    // Priority tags per the owner rule: < -5 very_high, < -3 priority.
+                    var tags = new JObject { ["very_high"] = new JArray(), ["priority"] = new JArray() };
+                    foreach (var p in all.Properties())
+                    {
+                        if (p.Name == "Tax") continue; // exempt: reported, never prioritised
+                        string tag = ServiceSignals.FactorPriority((double)p.Value);
+                        if (tag != "normal") ((JArray)tags[tag]).Add(p.Name);
+                    }
+                    s["happinessPriority"] = tags;
                 });
                 Timed(errors, perf, "demandFactors", () =>
                 {
@@ -204,7 +214,8 @@ namespace CitiesIIAgentBridge
             }
             else
             {
-                if (prev?["worstHappy"] != null) s["worstHappy"] = prev["worstHappy"].DeepClone();
+                if (prev?["happiness"] != null) s["happiness"] = prev["happiness"].DeepClone();
+                if (prev?["happinessPriority"] != null) s["happinessPriority"] = prev["happinessPriority"].DeepClone();
                 if (prev?["demandWhy"] != null) s["demandWhy"] = prev["demandWhy"].DeepClone();
             }
             var util = new JObject(); s["util"] = util;
@@ -275,10 +286,11 @@ namespace CitiesIIAgentBridge
                     s["milestone"] = ms;
                 }
                 if (ui["chirps"] is JArray chirps)
-                    s["chirps"] = new JArray(chirps.Take(3).Select(c => { string t = (string)c["text"] ?? ""; return (JToken)(t.Length > 90 ? t.Substring(0, 90) + "\u2026" : t); }));
+                    s["chirps"] = new JArray(chirps.Take(2).Select(c => { string t = (string)c["text"] ?? ""; return (JToken)(t.Length > 90 ? t.Substring(0, 90) + "\u2026" : t); }));
                 if (ui["errors"] is JArray uiErrors) foreach (var x in uiErrors.Take(3)) errors.Add("ui." + (string)x);
             });
-            Timed(errors, perf, "needs", () => s["needs"] = ServiceNeeds(w, recentChirps, activePhase));
+            Timed(errors, perf, "needs", () => s["needs"] = ServiceNeeds(w, recentChirps, activePhase, s["happiness"] as JObject));
+            Timed(errors, perf, "icons", () => SnapshotIcons(w, s, sim.frameIndex, prev != null));
             if (errors.Count > 0) s["errors"] = errors;
             perf["total"] = Math.Round(total.Elapsed.TotalMilliseconds, 1);
             if (total.Elapsed.TotalMilliseconds >= 10) s["perfMs"] = perf; // only when the build is slow
@@ -364,7 +376,7 @@ namespace CitiesIIAgentBridge
                     if (File.Exists(old)) File.Delete(old);
                     File.Move(path, old);
                 }
-                var line = new JObject { ["seq"] = ++eventSeq, ["type"] = type, ["frame"] = frame, ["utc"] = DateTime.UtcNow.ToString("O"), ["data"] = data };
+                var line = new JObject { ["s"] = mailbox.Session.Substring(0, 8), ["seq"] = ++eventSeq, ["type"] = type, ["frame"] = frame, ["utc"] = DateTime.UtcNow.ToString("O"), ["data"] = data };
                 Mailbox.RetrySharingViolation(() => File.AppendAllText(path, line.ToString(Formatting.None) + "\n", new UTF8Encoding(false)));
             }
             catch (Exception e) { eventError = e.GetBaseException().Message; }

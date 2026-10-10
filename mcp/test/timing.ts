@@ -1,6 +1,6 @@
 // Offline timing test: wraps a fake server, calls three tools in-process, checks the log and summary.
 // Never touches the game. Points CS2_TIMINGS at a temp file before importing the module.
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,6 +70,74 @@ async function main(): Promise<void> {
   check('summary slowest[0] is a', s.slowest?.[0]?.tool === 'a');
   const future = await summarize(new Date(Date.now() + 60_000).toISOString());
   check('summary with future since has calls === 0', future.calls === 0, String(future.calls));
+
+  // Domain / transport / verified classes (B12). Runs after the checks above, which see only a, b, c.
+  const text = (t: string) => ({ content: [{ type: 'text', text: t }] });
+  fake.registerTool('d', {}, async () => text(JSON.stringify({ ok: false, reason: 'grid_blocked' })));
+  fake.registerTool('e', {}, async () => text(JSON.stringify({ ok: false, partial: true, reason: 'half_built' })));
+  fake.registerTool('f', {}, async () => text(JSON.stringify({ ok: true, connected: true })));
+  fake.registerTool('g', {}, async () => text(JSON.stringify({ ok: true })));
+  fake.registerTool('h', {}, async () => {
+    throw new Error('bridge down');
+  });
+  fake.registerTool('i', {}, async () => text('plain words, not json'));
+  fake.registerTool('k', {}, async () => text(JSON.stringify({ ok: true, at: { x: 1, z: 2 } })));
+
+  await fake.tools.d({}, {});
+  await fake.tools.e({}, {});
+  await fake.tools.f({}, {});
+  await fake.tools.g({}, {});
+  let thrown = '';
+  try {
+    await fake.tools.h({}, {});
+  } catch (err: any) {
+    thrown = String(err?.message);
+  }
+  await fake.tools.i({}, {});
+  await fake.tools.k({}, {});
+  // Old-format lines (written before B12, only `ok`) must still be summarised.
+  appendFileSync(tmpFile, JSON.stringify({ utc: '2020-01-01T00:00:00.000Z', tool: 'old', ms: 7, ok: false }) + '\n');
+  appendFileSync(tmpFile, JSON.stringify({ utc: '2020-01-01T00:00:01.000Z', tool: 'oldOk', ms: 3, ok: true }) + '\n');
+
+  const all: any[] = existsSync(tmpFile)
+    ? readFileSync(tmpFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+    : [];
+  const by = (tool: string): any => all.find(e => e.tool === tool) ?? {};
+
+  check('d: transport ok, domain failed, ok false', by('d').transport === 'ok' && by('d').domain === 'failed' && by('d').ok === false,
+    JSON.stringify(by('d')));
+  check('d: reason grid_blocked logged', by('d').reason === 'grid_blocked', String(by('d').reason));
+  check('e: domain partial (over failed), ok false, verified false', by('e').domain === 'partial' && by('e').ok === false && by('e').verified === false,
+    JSON.stringify(by('e')));
+  check('e: reason half_built logged', by('e').reason === 'half_built', String(by('e').reason));
+  check('f: {ok:true,connected:true} -> verified true, domain ok, ok true', by('f').verified === true && by('f').domain === 'ok' && by('f').ok === true,
+    JSON.stringify(by('f')));
+  check('g: {ok:true} -> verified null', by('g').verified === null && by('g').ok === true, JSON.stringify(by('g')));
+  check('h: throwing handler -> transport error, ok false, error rethrown',
+    by('h').transport === 'error' && by('h').ok === false && by('h').domain === 'n/a' && thrown === 'bridge down',
+    `thrown=${thrown}`);
+  check('i: non-JSON text -> domain n/a, transport ok', by('i').domain === 'n/a' && by('i').transport === 'ok' && by('i').ok === true,
+    JSON.stringify(by('i')));
+  check('k: {ok:true,at:{...}} -> verified true', by('k').verified === true, JSON.stringify(by('k')));
+
+  const s2: any = await summarize();
+  const row = (tool: string): any => s2.tools.find((t: any) => t.tool === tool) ?? {};
+  const NUMERIC = ['n', 'avgMs', 'p50Ms', 'maxMs', 'totalMs', 'transportErrors', 'domainFailed', 'partial', 'verified', 'failed'];
+  check('summary rows carry all numeric fields', s2.tools.every((t: any) => NUMERIC.every(k => typeof t[k] === 'number')));
+  check('summary d: domainFailed 1, transportErrors 0, failed 1',
+    row('d').domainFailed === 1 && row('d').transportErrors === 0 && row('d').failed === 1, JSON.stringify(row('d')));
+  check('summary e: partial 1, domainFailed 0, failed 1',
+    row('e').partial === 1 && row('e').domainFailed === 0 && row('e').failed === 1, JSON.stringify(row('e')));
+  check('summary f: verified 1; g: verified 0', row('f').verified === 1 && row('g').verified === 0);
+  check('summary h: transportErrors 1, failed 1', row('h').transportErrors === 1 && row('h').failed === 1, JSON.stringify(row('h')));
+  check('summary i: no failure classes', row('i').failed === 0 && row('i').domainFailed === 0 && row('i').partial === 0);
+  check('summary c (isError): transportErrors 1', row('c').transportErrors === 1 && row('c').failed === 1);
+  check('old ok:false line -> transportErrors 1', row('old').transportErrors === 1 && row('old').failed === 1 && row('old').domainFailed === 0,
+    JSON.stringify(row('old')));
+  check('old ok:true line -> transport ok, domain n/a, failed 0', row('oldOk').n === 1 && row('oldOk').failed === 0);
+  check('totals: transportErrors 3 (c, h, old)', s2.totals?.transportErrors === 3, JSON.stringify(s2.totals));
+  check('totals: domainFailed 1, partial 1, verified 2 (f, k)',
+    s2.totals?.domainFailed === 1 && s2.totals?.partial === 1 && s2.totals?.verified === 2, JSON.stringify(s2.totals));
 }
 
 try {

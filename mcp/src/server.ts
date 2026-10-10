@@ -4,13 +4,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService, buyTile } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
+import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
+import { notifications, clearRuins, fixJams } from './notifications.ts';
+import { fit } from './project.ts';
+import { invalidatePrefabCache } from './city.ts';
 
 const server = new McpServer({ name: 'cs2', version: '0.1.0' });
 instrument(server);          // every tool: wall-clock ms in the result and in journals/mcp-timings.jsonl
 registerTimingsTool(server, z);
+registerHappinessTool(server, z);
+let lastMilestone: number | null = null;   // unlocks change with milestones: drop cached prefab lock state
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
@@ -67,10 +73,13 @@ server.registerTool('snapshot', {
 }, async (a) => {
   try {
     const d = await callOk('get_snapshot', {}, 10);
+    void recordFactors(d);
+    const milestone = Number(d.milestone?.achieved ?? NaN);
+    if (Number.isFinite(milestone)) { if (lastMilestone !== null && milestone !== lastMilestone) invalidatePrefabCache(); lastMilestone = milestone; }
     if (!a.brief) return ok(d);
     const needs = Object.fromEntries(Object.entries(d.needs ?? {}).filter(([k]) => k !== 'iconsTop').map(([k, v]: [string, any]) => [k, `${v.score} ${v.action}`]));
     return ok({ money: d.city?.money, net: d.city?.net, pop: d.city?.pop, moveIn: d.city?.moveIn, happy: d.happy, health: d.health, demand: d.demand, unemp: d.jobs?.unemp, vacant: d.jobs?.vacantByEdu,
-      why: d.demandWhy, worst: d.worstHappy, util: [d.util?.power?.pct, d.util?.water?.pct, d.util?.sewage?.pct], needs, xp: `${d.milestone?.xp}/${d.milestone?.nextXp}`, ms: d.milestone?.achieved, blocker: d.ui?.blocker, speed: d.liveSpeed, frame: d.liveFrame, fire: d.buildings?.onFire, errors: d.errors });
+      why: d.demandWhy, happiness: Object.fromEntries(Object.entries(d.happiness ?? d.worstHappy ?? {}).filter(([, v]) => Number(v) < 0)), util: [d.util?.power?.pct, d.util?.water?.pct, d.util?.sewage?.pct], needs, xp: `${d.milestone?.xp}/${d.milestone?.nextXp}`, ms: d.milestone?.achieved, blocker: d.ui?.blocker, speed: d.liveSpeed, frame: d.liveFrame, capturedFrame: d.frame, ageSec: d.ageSec, fire: d.buildings?.onFire, priority: d.happinessPriority, icons: d.icons, jams: d.jams, errors: d.errors });
   } catch (e) { return fail(e); }
 });
 
@@ -213,7 +222,10 @@ server.registerTool('place_service', {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await placeService(a.prefab, a.x, a.z, a.radius, a.maxCost, a.plan), cleared));
+    const placedResult = await placeService(a.prefab, a.x, a.z, a.radius, a.maxCost, a.plan);
+    const need = /Police/i.test(a.prefab) ? 'police' : /Fire/i.test(a.prefab) ? 'fire' : /Clinic|Hospital/i.test(a.prefab) ? 'health' : /Park|Playground|Plaza/i.test(a.prefab) ? 'entertainment' : /RadioMast|Telecom|Server/i.test(a.prefab) ? 'telecom' : /School|College|University/i.test(a.prefab) ? 'education' : /Cemetery|Crematorium/i.test(a.prefab) ? 'deathcare' : /Landfill|Incinerat|Recycl/i.test(a.prefab) ? 'garbage' : /Power|Wind|Solar/i.test(a.prefab) ? 'power' : null;
+    if (placedResult.ok && !a.plan && need) await recordAction({ need, tool: 'place_service', detail: `${a.prefab}@${placedResult.at?.x},${placedResult.at?.z}` });
+    return ok(withCleared(placedResult, cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -259,6 +271,7 @@ server.registerTool('set_tax', {
     const cleared = await ensureClear();
     assertIdle();
     const r = await callOk('set_tax', { area: a.area, rate: a.rate });
+    if (Number(r.after) < Number(r.before)) await recordAction({ need: 'tax', tool: 'set_tax', detail: `${a.area} ${r.before}->${r.after}` });
     return ok(withCleared({ area: a.area, before: r.before, after: r.after, cost: 0, monthlyUpkeep: 0 }, cleared));
   } catch (e) { return fail(e); }
 });
@@ -307,7 +320,7 @@ server.registerTool('services', {
 
 server.registerTool('fix_services', {
   description: 'Builds city services that are escalated (snapshot needs with action=build), missing, or uncovered by native coverage, plus utilities near capacity, before growth. Escalated needs override the cash floor and upkeep discipline. plan=true lists what it would build.',
-  inputSchema: { maxPlacements: z.number().int().min(1).max(4).default(2), plan: z.boolean().optional() },
+  inputSchema: { maxPlacements: z.number().int().min(1).max(8).default(2), plan: z.boolean().optional() },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
@@ -376,6 +389,49 @@ server.registerTool('upgrade_road', {
   } catch (e) { return fail(e); }
 });
 
+server.registerTool('fix_traffic', {
+  description: 'Upgrades the most congested Small Road segments (native traffic flow) to Medium Road and reports the hotspots it cannot fix (highway ramps, roads already Medium). plan=true lists them without building.',
+  inputSchema: { max: z.number().int().min(1).max(8).optional(), flowBelow: z.number().min(1).max(90).optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const jams = await fixJams(a.max ?? 3, !!a.plan);
+    const flow = await fixTraffic({ max: a.max, flowBelow: a.flowBelow, plan: a.plan });
+    if ((flow.upgraded ?? []).some((u: any) => u.status === 'complete')) await recordAction({ need: 'traffic', tool: 'fix_traffic', detail: 'congested Small Road widened (flow hotspots)' });
+    return ok(withCleared({ ok: jams.ok !== false && flow.ok !== false, jamIcons: jams, flowHotspots: flow }, cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('build_arterial', {
+  description: "Builds a road (default Medium Road) from a point on the existing network to a target along the lot-free corridor found by the mod: straight when possible, otherwise around lots. Every segment is previewed by the game first. Use it to open new land or add a parallel connection. plan=true previews only.",
+  inputSchema: { fromX: z.number(), fromZ: z.number(), toX: z.number(), toZ: z.number(), road: z.string().optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    return ok(withCleared(await buildCorridor(a.fromX, a.fromZ, a.toX, a.toZ, a.road ?? 'Medium Road', !!a.plan), cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('notifications', {
+  description: 'On-map notification icons (traffic bottleneck, burned down, noise pollution, hearse, garbage, no power...): counts by type with the action each asks for, and the positions/owners for one type. Non-pausing. Check every play cycle.',
+  inputSchema: { type: z.string().optional(), top: z.number().int().min(1).max(100).optional() },
+}, async (a) => {
+  try { return ok(await notifications(a.type, a.top ?? 20)); } catch (e) { return fail(e); }
+});
+
+server.registerTool('clear_ruins', {
+  description: 'Bulldozes burned-down or collapsed buildings (from their notification icons) so the lots rebuild. plan=true lists them. Add fire coverage where fires recur.',
+  inputSchema: { max: z.number().int().min(1).max(30).optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    return ok(withCleared(await clearRuins(a.max ?? 8, !!a.plan), cleared));
+  } catch (e) { return fail(e); }
+});
+
 server.registerTool('quit', {
   description: 'Verified rolling save, then a clean quit through the mod (never force-kills). Use it instead of leaving the game idle during long offline work.',
   inputSchema: {},
@@ -388,15 +444,17 @@ server.registerTool('quit', {
 });
 
 server.registerTool('query', {
-  description: 'Raw read-only bridge query; pauses the game. Last resort when no dedicated tool fits.',
+  description: 'Raw read-only bridge query (last resort). The result is always valid JSON: use fields (dot paths) to project, offset/limit to page an array; an oversized result is returned as a shape summary instead of cut text. Most commands pause the game.',
   inputSchema: {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),
+    fields: z.array(z.string()).max(20).optional().describe('dot paths to keep, e.g. ["edges.index","edges.prefab"]; arrays are mapped'),
+    offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(500).optional(),
     maxChars: z.number().int().min(200).max(20000).default(4000),
   },
 }, async (a) => {
@@ -404,11 +462,8 @@ server.registerTool('query', {
     await ensureClear(); // text result: popups cleared here are not reported
     assertIdle();
     const res = await callOk(a.command, a.args ?? {}, 30);
-    const text = JSON.stringify(res) ?? 'null';
-    const out = text.length > a.maxChars
-      ? text.slice(0, a.maxChars) + ' …[truncated ' + text.length + ' chars]'
-      : text;
-    return { content: [{ type: 'text', text: out }] };
+    // Always valid JSON: projected by fields, paged by offset/limit, or summarised by shape.
+    return { content: [{ type: 'text', text: fit(res, { fields: a.fields, offset: a.offset, limit: a.limit, maxChars: a.maxChars }) }] };
   } catch (e) { return fail(e); }
 });
 

@@ -14,6 +14,7 @@ for (const f of await fs.readdir(inDir)) await fs.unlink(join(inDir, f));
 const client = new Client({ name: 'cs2-session', version: '0.1.0' });
 await client.connect(new StdioClientTransport({ command: process.execPath, args: ['src/server.ts'], cwd: here, stderr: 'ignore' }));
 console.log('session ready');
+const beat = setInterval(() => { fs.writeFile(join(root, 'alive'), new Date().toISOString()).catch(() => {}); }, 1000);
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 while (!existsSync(join(inDir, 'STOP'))) {
   for (const f of (await fs.readdir(inDir)).filter(f => f.endsWith('.json')).sort()) {
@@ -31,4 +32,5 @@ while (!existsSync(join(inDir, 'STOP'))) {
   await sleep(40);
 }
 await fs.unlink(join(inDir, 'STOP')).catch(() => {});
+clearInterval(beat); await fs.unlink(join(root, 'alive')).catch(() => {});
 await client.close(); console.log('session closed');

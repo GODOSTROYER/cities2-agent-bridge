@@ -190,21 +190,21 @@ namespace CitiesIIAgentBridge
             if (ConstructionAccess.Active != null || (string)batch?["status"] == "running")
                 throw new InvalidOperationException("wait_for_construction_before_district_assignment");
             em.CompleteAllTrackedJobs();
-            var e = new Entity { Index = RequiredInt(args, "index"), Version = RequiredInt(args, "version") };
+            var e = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
             if (!AtlasLive(em, e) || !em.HasComponent<Game.Buildings.Building>(e) || !em.HasBuffer<ServiceDistrict>(e))
                 throw new ArgumentException("live_building_with_service_district_buffer_required");
             var desired = args["districts"] as JArray; DistrictAssignment.Keys(desired);
             var before = AtlasAssignments(em, e); DistrictAssignment.CheckExpected(before, args["expectedDistricts"]);
             foreach (JObject row in desired)
             {
-                var d = new Entity { Index = (int)row["index"], Version = (int)row["version"] };
+                var d = Mod.CheckedEntity((int)row["index"], (int)row["version"]);
                 if (!AtlasLive(em, d) || !em.HasComponent<District>(d)) throw new ArgumentException("live_district_required");
             }
             bool apply = (bool?)args["apply"] == true;
             if (apply)
             {
                 var buffer = em.GetBuffer<ServiceDistrict>(e); buffer.Clear();
-                foreach (JObject row in desired) buffer.Add(new ServiceDistrict(new Entity { Index = (int)row["index"], Version = (int)row["version"] }));
+                foreach (JObject row in desired) buffer.Add(new ServiceDistrict(Mod.CheckedEntity((int)row["index"], (int)row["version"])));
                 // Matches SelectionToolSystem.UpdateServiceDistrictsJob's notification.
                 if (!em.HasComponent<Updated>(e)) em.AddComponent<Updated>(e);
                 districtAtlas = null;

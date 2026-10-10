@@ -109,7 +109,7 @@ namespace CitiesIIAgentBridge
             start = a; end = b; maxCost = budget; stage = 0; frames = 0;
             deadline = DateTime.UtcNow.AddSeconds(20);
             before = ConstructionAccess.Roads(EntityManager);
-            Replacement = Entity.Null;
+            if (RequestedMode != Mode.Replace) Replacement = Entity.Null;
             expectedPrefab = World.GetExistingSystemManaged<PrefabSystem>().GetEntity(road);
             prefab = road; mode = RequestedMode; elevation = RequestedElevation; parallelCount = 0;
             World.GetExistingSystemManaged<ToolSystem>().activeTool = this;
@@ -130,6 +130,12 @@ namespace CitiesIIAgentBridge
                 {
                     var points = GetControlPoints(out var pointsDeps); pointsDeps.Complete(); points.Clear(); points.Add(start); if (ExtraPoints != null) foreach (var p in ExtraPoints) points.Add(p); points.Add(end);
                     ConstructionAccess.Field(typeof(NetToolSystem), this, "m_Prefab", prefab);
+                    // NetToolSystem.OnUpdate normally refreshes the snap masks every frame; this tool
+                    // replaces that update path, so they must be initialised here or snapping runs
+                    // with whatever a previous tool left behind.
+                    GetAvailableSnapMask(out var snapOn, out var snapOff);
+                    ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOnMask", snapOn);
+                    ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOffMask", snapOff);
                     applyMode = ApplyMode.Clear;
                     deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "SnapControlPoints", deps, false);
                     deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "UpdateCourse", deps, false);
@@ -142,6 +148,16 @@ namespace CitiesIIAgentBridge
                     var errors = ConstructionAccess.Errors(EntityManager);
                     if (errors.Count > 0) { ConstructionAccess.Results[operation]["placementErrors"] = errors; throw new InvalidOperationException("game_rejected_placement"); }
                     if (!GetAllowApply()) { if (frames < 30) return deps; throw new InvalidOperationException("no_valid_road_preview"); }
+                    // An upgrade must really be a replacement of the target edge: if the game's preview
+                    // does not modify that edge, refuse instead of silently building a new road.
+                    if (RequestedMode == Mode.Replace)
+                    {
+                        if (mode != Mode.Replace) throw new InvalidOperationException("replace_mode_not_supported_for_prefab");
+                        bool touchesTarget = false;
+                        using (var tq = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<Temp>()))
+                        using (var temps = tq.ToComponentDataArray<Temp>(Allocator.Temp)) foreach (var t in temps) if (t.m_Original == Replacement && Replacement != Entity.Null) { touchesTarget = true; break; }
+                        if (!touchesTarget) throw new InvalidOperationException("replace_preview_does_not_modify_target");
+                    }
                     int cost = 0;
                     using (var q = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<Temp>()))
                     using (var ts = q.ToComponentDataArray<Temp>(Allocator.Temp)) foreach (var t in ts) cost = checked(cost + Math.Max(0, t.m_Cost));
@@ -161,6 +177,7 @@ namespace CitiesIIAgentBridge
                     ConstructionAccess.Results[operation]["createdRoads"] = created;
                     bool replaced = Replacement != Entity.Null && EntityManager.Exists(Replacement) && EntityManager.HasComponent<PrefabRef>(Replacement) && EntityManager.GetComponentData<PrefabRef>(Replacement).m_Prefab == expectedPrefab;
                     if (replaced) ConstructionAccess.Results[operation]["upgradedEntity"] = NativeBuild.Id(Replacement);
+                    if (RequestedMode == Mode.Replace && !replaced) throw new InvalidOperationException("replace_not_observed_on_target");
                     if (created.Count == 0 && !replaced) throw new InvalidOperationException("network_change_not_observed");
                     Finish("complete");
                 }

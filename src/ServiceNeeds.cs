@@ -19,7 +19,7 @@ namespace CitiesIIAgentBridge
         
 
 
-        private JObject ServiceNeeds(World w, JArray chirps, string tutorialPhase)
+        private JObject ServiceNeeds(World w, JArray chirps, string tutorialPhase, JObject happiness)
         {
             var em = w.EntityManager; var needs = new Dictionary<string, JObject>();
             JObject Need(string k) { if (!needs.TryGetValue(k, out var n)) needs[k] = n = new JObject(); return n; }
@@ -55,6 +55,13 @@ namespace CitiesIIAgentBridge
                     string k = ServiceSignals.ServiceForText((string)c["text"]); if (k == null) continue;
                     var n = Need(k); n["chirps"] = ((int?)n["chirps"] ?? 0) + 1;
                 }
+            if (happiness != null)
+                foreach (var f in happiness.Properties())
+                {
+                    string k = ServiceSignals.NeedForFactor(f.Name); double effect = (double)f.Value;
+                    if (k == null || effect > -1) continue;
+                    var n = Need(k); n["factor"] = Math.Min((double?)n["factor"] ?? 0, effect);
+                }
             if (needIconsBefore == null) { needIconsBefore = new Dictionary<string, int>(); needIconStreak = new Dictionary<string, int>(); }
             var result = new JObject();
             foreach (var pair in needs.OrderBy(p => p.Key))
@@ -65,11 +72,11 @@ namespace CitiesIIAgentBridge
                 streak = iconsNow > before ? streak + 1 : iconsNow < before ? 0 : streak;
                 needIconStreak[pair.Key] = streak; needIconsBefore[pair.Key] = iconsNow;
                 if (streak > 0) n["iconRise"] = streak;
-                int score = ServiceSignals.NeedScore((int?)n["chirps"] ?? 0, (bool?)n["tutorial"] == true, streak, ((int?)n["dead"] ?? 0) + ((int?)n["sick"] ?? 0), iconsNow);
+                int score = ServiceSignals.NeedScore((int?)n["chirps"] ?? 0, (bool?)n["tutorial"] == true, streak, ((int?)n["dead"] ?? 0) + ((int?)n["sick"] ?? 0), iconsNow, (double?)n["factor"] ?? 0);
                 n["score"] = score + "/" + ServiceSignals.Threshold; n["action"] = score >= ServiceSignals.Threshold ? "build" : "watch";
+                if (n["factor"] != null) { string tag = ServiceSignals.FactorPriority((double)n["factor"]); if (tag != "normal") n["priority"] = tag; }
                 result[pair.Key] = n;
             }
-            result["iconsTop"] = new JObject(icons.Where(p => ServiceSignals.ServiceForText(p.Key) != null || p.Key.Contains("Traffic")).OrderByDescending(p => p.Value).Take(3).Select(p => new JProperty(p.Key, p.Value)));
             return result;
         }
     }

@@ -68,7 +68,7 @@ namespace CitiesIIAgentBridge
                     else if ((bool?)simulationOptions["stopOnDemandChange"] == true && !JToken.DeepEquals(now["demand"],simulationBefore["demand"])) reason = "demand_changed";
                     else if ((bool?)simulationOptions["stopOnNewShortage"] != false && now["shortageEntities"].Values<string>().Except(simulationBefore["shortageEntities"].Values<string>()).Any()) reason = "new_utility_shortage";
                     else if ((bool?)simulationOptions["stopOnConstructionComplete"] == true && ((JArray)simulationBefore["constructionEntities"]).Any(item=> {
-                        var e=new Entity{Index=(int)item["index"],Version=(int)item["version"]};var em=RequireCity().EntityManager;
+                        var e=Mod.CheckedEntity((int)item["index"], (int)item["version"]);var em=RequireCity().EntityManager;
                         return em.Exists(e)&&em.HasComponent<Game.Buildings.Building>(e)&&!em.HasComponent<Game.Common.Deleted>(e)&&!em.HasComponent<Game.Objects.UnderConstruction>(e);
                     })) reason = "construction_completed";
                     ConstructionAccess.Results[simulationOperation]["latest"] = now;
@@ -80,6 +80,8 @@ namespace CitiesIIAgentBridge
         private JObject EndSimulation(JObject args)
         {
             RequireCity(); RequireControl();
+            // A caller that names a step cancels only that step, never a newer one started since.
+            if (args["id"] != null && (string)args["id"] != simulationOperation) throw new ArgumentException("simulation_step_not_found");
             if (SimulationRunning) FinishSimulation("cancelled");
             else PauseAnalysis();
             return simulationOperation == null ? new JObject { ["paused"] = true } : ConstructionAccess.Status(simulationOperation);

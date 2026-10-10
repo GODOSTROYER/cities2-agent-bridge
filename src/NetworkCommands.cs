@@ -46,8 +46,8 @@ namespace CitiesIIAgentBridge
         private JObject NetworkPath(JObject args)
         {
             var w = RequireCity(); var em = w.EntityManager;
-            var from = new Entity { Index = RequiredInt(args, "fromIndex"), Version = RequiredInt(args, "fromVersion") };
-            var to = new Entity { Index = RequiredInt(args, "toIndex"), Version = RequiredInt(args, "toVersion") };
+            var from = Mod.CheckedEntity(RequiredInt(args, "fromIndex"), RequiredInt(args, "fromVersion"));
+            var to = Mod.CheckedEntity(RequiredInt(args, "toIndex"), RequiredInt(args, "toVersion"));
             if (!em.HasComponent<Game.Net.Node>(from) || !em.HasComponent<Game.Net.Node>(to)) throw new ArgumentException("endpoints_must_be_live_network_nodes");
             var queue = new Queue<Entity>(); var seen = new Dictionary<Entity, Entity>(); var via = new Dictionary<Entity,Entity>(); queue.Enqueue(from); seen[from] = Entity.Null;
             while (queue.Count > 0 && seen.Count <= 100000)
@@ -67,7 +67,7 @@ namespace CitiesIIAgentBridge
         private JObject UpgradeNetwork(JObject args)
         {
             var w = RequireCity(); RequireControl(); CheckBuildTool(w); var em = w.EntityManager;
-            var target = new Entity { Index = RequiredInt(args,"index"), Version = RequiredInt(args,"version") };
+            var target = Mod.CheckedEntity(RequiredInt(args,"index"), RequiredInt(args,"version"));
             if (!em.Exists(target) || !em.HasComponent<Game.Net.Edge>(target) || !em.HasComponent<Game.Net.Curve>(target)) throw new ArgumentException("live_network_edge_required");
             var prefab = BuildPrefab<NetPrefab>(w,args); var curve = em.GetComponentData<Game.Net.Curve>(target).m_Bezier;
             var a = new ControlPoint { m_OriginalEntity = target, m_Position = curve.a, m_HitPosition = curve.a, m_CurvePosition = 0, m_Rotation = quaternion.identity };
@@ -75,7 +75,9 @@ namespace CitiesIIAgentBridge
             int budget = RequiredInt(args,"maxCost"); if (budget < 0 || budget > 1000000) throw new ArgumentException("invalid_budget");
             var tool = w.GetExistingSystemManaged<BridgeRoadTool>(); tool.ExtraPoints = null; tool.RequestedMode = NetToolSystem.Mode.Replace;
             tool.RequestedElevation = 0;
-            tool.Begin(prefab,a,b,budget); tool.Replacement = target;
+            if (em.GetComponentData<PrefabRef>(target).m_Prefab == w.GetExistingSystemManaged<PrefabSystem>().GetEntity(prefab)) throw new ArgumentException("edge_already_uses_prefab");
+            tool.PreviewOnly = (bool?)args["previewOnly"] == true;
+            tool.Replacement = target; tool.Begin(prefab,a,b,budget);
             return ConstructionAccess.Status(ConstructionAccess.Active);
         }
         private Entity[] pendingTiles;
@@ -88,7 +90,7 @@ namespace CitiesIIAgentBridge
             var input = args["tiles"] as JArray; if (input == null || input.Count < 1 || input.Count > 64) throw new ArgumentException("select_1_to_64_tiles");
             var tiles = new HashSet<Entity>(); foreach (JObject t in input)
             {
-                var e = new Entity { Index = RequiredInt(t,"index"), Version = RequiredInt(t,"version") };
+                var e = Mod.CheckedEntity(RequiredInt(t,"index"), RequiredInt(t,"version"));
                 if (!em.Exists(e) || !em.HasComponent<Game.Areas.MapTile>(e) || !em.HasComponent<Native>(e)) throw new ArgumentException("tile_stale_or_already_owned"); tiles.Add(e);
             }
             int budget = RequiredInt(args,"maxCost"); if (budget < 0) throw new ArgumentException("invalid_budget");

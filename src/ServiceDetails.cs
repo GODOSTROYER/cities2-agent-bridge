@@ -65,7 +65,7 @@ namespace CitiesIIAgentBridge
         }
         private JObject PrefabDetails(JObject args)
         {
-            var w = RequireCity(); var e = new Entity { Index = RequiredInt(args,"index"), Version = RequiredInt(args,"version") };
+            var w = RequireCity(); var e = Mod.CheckedEntity(RequiredInt(args,"index"), RequiredInt(args,"version"));
             if (!w.EntityManager.Exists(e) || !w.EntityManager.HasComponent<PrefabData>(e)) throw new ArgumentException("live_prefab_entity_required");
             return new JObject { ["name"] = w.GetExistingSystemManaged<PrefabSystem>().GetPrefabName(e), ["rawData"] = Details(w,e), ["locked"] = IsPrefabLocked(w.EntityManager,e), ["costs"] = PrefabCosts(w.EntityManager,e) };
         }

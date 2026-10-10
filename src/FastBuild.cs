@@ -264,6 +264,45 @@ namespace CitiesIIAgentBridge
             return new JObject { ["tiles"] = new JArray(rows.OrderByDescending(r => r.score).Take(top).Select(r => r.row)), ["adjacent"] = rows.Count, ["owned"] = owned.Count, ["availablePurchases"] = purchase.GetAvailableTiles(), ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
         }
 
+        // crime_map {cell?,top?}: where crime actually accumulates (average CrimeProducer.m_Crime of
+        // the buildings in each bucket), for investigating a crime factor that police stations
+        // alone do not move.
+        private JObject CrimeMap(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager;
+            double cell = args["cell"] == null ? 400 : Math.Max(100, RequiredFloat(args, "cell")); int top = Math.Max(1, Math.Min(20, (int?)args["top"] ?? 8));
+            var buckets = new Dictionary<(long, long), (double sum, double max, int n, double x, double z)>(); double total = 0; int count = 0;
+            foreach (var e in NativeBuild.Buildings(em))
+            {
+                if (!em.HasComponent<CrimeProducer>(e) || !em.HasComponent<Game.Objects.Transform>(e)) continue;
+                var p = em.GetComponentData<Game.Objects.Transform>(e).m_Position; double c = em.GetComponentData<CrimeProducer>(e).m_Crime;
+                var key = ((long)Math.Floor(p.x / cell), (long)Math.Floor(p.z / cell));
+                buckets.TryGetValue(key, out var b); buckets[key] = (b.sum + c, Math.Max(b.max, c), b.n + 1, b.x + p.x, b.z + p.z);
+                total += c; count++;
+            }
+            return new JObject
+            {
+                ["buildings"] = count, ["meanCrime"] = count == 0 ? 0 : Math.Round(total / count, 1),
+                ["clusters"] = new JArray(buckets.Values.Where(b => b.n >= 5).OrderByDescending(b => b.sum / b.n).Take(top)
+                    .Select(b => new JObject { ["x"] = Math.Round(b.x / b.n), ["z"] = Math.Round(b.z / b.n), ["buildings"] = b.n, ["meanCrime"] = Math.Round(b.sum / b.n, 1), ["maxCrime"] = Math.Round(b.max) }))
+            };
+        }
+
+        // home_clusters {cell?,top?}: where people live, as bucket centroids with home counts, so new
+        // parks/stations/clinics can go to the districts farthest from the existing ones.
+        private JObject HomeClusters(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager;
+            double cell = args["cell"] == null ? 400 : Math.Max(100, RequiredFloat(args, "cell")); int top = Math.Max(1, Math.Min(40, (int?)args["top"] ?? 16));
+            var homes = new List<(double x, double z)>();
+            foreach (var e in NativeBuild.Buildings(em))
+            {
+                if (!em.HasComponent<ResidentialProperty>(e) || !em.HasComponent<Game.Objects.Transform>(e)) continue;
+                var p = em.GetComponentData<Game.Objects.Transform>(e).m_Position; homes.Add((p.x, p.z));
+            }
+            return new JObject { ["homes"] = homes.Count, ["cell"] = cell, ["clusters"] = new JArray(PointClusters.Densest(homes, cell, top).Select(c => new JArray(Math.Round(c.x), Math.Round(c.z), c.n))) };
+        }
+
         // service_buildings: placed service buildings (prefab, position) plus home/industry centroids,
         // for the native services planner.
         private JObject ServiceBuildings()

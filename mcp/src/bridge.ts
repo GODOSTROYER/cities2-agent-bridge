@@ -7,6 +7,7 @@ import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export const MAILBOX = process.env.CS2_MAILBOX ?? join(process.env.LOCALAPPDATA ?? '', 'CitiesIIAgentBridge');
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -116,35 +117,214 @@ export async function multi(commands: { command: string; args?: Json }[]): Promi
   return r.results.map((x: Json) => { if (!x.ok) throw new Error(`${x.command}: ${x.error}`); return x.result; });
 }
 
-// events.jsonl (+ rotated events.1.jsonl): entries strictly after `since` (ISO utc or seq).
-export async function readEvents(since?: string | number, limit = 20, types?: string[]): Promise<{ events: Json[]; next?: string }> {
-  const lines: string[] = [];
+// ---- events: paging over events.jsonl (+ rotated events.1.jsonl) ----
+// An event is { s: <8-char mod session id>, seq, type, frame, utc, data }; lines without "s" (older
+// mods) are session ''. seq restarts at 1 in each new mod session. A cursor is "<s>:<seq>", the last
+// event a caller has consumed. File order (oldest first) is the order of the log.
+export interface EventPage { events: Json[]; next?: string; cursor: string; hasMore: boolean; gap?: Json }
+
+const eventKey = (e: Json): string => `${e.s ?? ''}:${e.seq}`;
+const sessionOf = (e: Json): string => String(e.s ?? '');
+const seqOf = (e: Json): number => Number(e.seq);
+const wanted = (e: Json, types?: string[]): boolean => !types?.length || types.includes(e.type);
+
+function parseCursor(text: string): { s: string; seq: number } | null {
+  const m = /^([^:]*):(\d+)$/.exec(text);
+  return m ? { s: m[1], seq: Number(m[2]) } : null;
+}
+
+// Walks list[start..] in file order and stops after `limit` matching events. Filtered-out events
+// are scanned too, so `last` (the last scanned index, start-1 when none) moves past them.
+// `prev` is the caller's own cursor event when it sits right before `start`; it anchors the
+// sequence check across the seam.
+function scanFrom(list: Json[], start: number, limit: number, types: string[] | undefined, prev: Json | null) {
+  const events: Json[] = [];
+  let last = start - 1, jump: Json | undefined, p = prev;
+  for (let j = start; j < list.length && events.length < limit; j++) {
+    const e = list[j];
+    last = j;
+    if (p && !jump && sessionOf(p) === sessionOf(e) && seqOf(e) !== seqOf(p) + 1) {
+      jump = { reason: 'sequence_jump', expected: seqOf(p) + 1, got: seqOf(e) };
+    }
+    p = e;
+    if (wanted(e, types)) events.push(e);
+  }
+  return { events, last, hasMore: last + 1 < list.length, jump };
+}
+
+// Legacy filters (ISO time, seq within the newest session): the filtered view is paged oldest first.
+function viewPage(view: Json[], list: Json[], text: string, limit: number, types?: string[]): EventPage {
+  const page = scanFrom(view, 0, limit, types, null);
+  return {
+    events: page.events,
+    next: page.events.length ? page.events[page.events.length - 1].utc : text,
+    cursor: page.last >= 0 ? eventKey(view[page.last]) : (list.length ? eventKey(list[list.length - 1]) : ''),
+    hasMore: page.hasMore,
+    ...(page.jump ? { gap: page.jump } : {}),
+  };
+}
+
+// Pure paging over the parsed, file-ordered event list. readEvents is a thin file-reading wrapper.
+export function pageEvents(all: Json[], since: string | number | undefined, limit = 20, types?: string[]): EventPage {
+  const L = Math.max(1, Math.min(200, Number(limit) || 20));
+  const list = all;
+  if (since === undefined || since === null || since === '') {
+    // First look: the newest L matching events; the cursor is the newest event in the list.
+    let start = 0, matched = 0;
+    for (let j = list.length - 1; j >= 0; j--) {
+      if (!wanted(list[j], types)) continue;
+      if (++matched === L) { start = j; break; }
+    }
+    const page = scanFrom(list, start, Infinity, types, null);
+    return {
+      events: page.events,
+      next: page.events.length ? page.events[page.events.length - 1].utc : undefined,
+      cursor: list.length ? eventKey(list[list.length - 1]) : '',
+      hasMore: false,
+      ...(page.jump ? { gap: page.jump } : {}),
+    };
+  }
+  const text = String(since);
+  if (typeof since === 'number' || /^\d+$/.test(text)) {
+    // Legacy seq filter: seq > N within the newest session (the session of the last line).
+    const newest = sessionOf(list.length ? list[list.length - 1] : {});
+    const N = Number(since);
+    return viewPage(list.filter(e => sessionOf(e) === newest && seqOf(e) > N), list, text, L, types);
+  }
+  const cur = Number.isNaN(parseUtc(text)) ? parseCursor(text) : null;
+  if (!cur) {
+    // Legacy ISO since: events strictly after that time.
+    const t = parseUtc(text);
+    return viewPage(list.filter(e => parseUtc(e.utc) > t), list, text, L, types);
+  }
+  const idx = list.findIndex(e => sessionOf(e) === cur.s && seqOf(e) === cur.seq);
+  let start = 0, prev: Json | null = null, restarted = false;
+  if (idx >= 0) {
+    // The cursor's event is still in the files: continue right after it. Events of another session
+    // after it mean the mod restarted and seq began again at 1.
+    start = idx + 1; prev = list[idx];
+    restarted = list.slice(start).some(e => sessionOf(e) !== cur.s);
+  } else {
+    // Cursor event rotated away: resume at the caller's session's next event if one remains, else
+    // after that session's last event, else at the oldest available event.
+    const own: number[] = [];
+    list.forEach((e, j) => { if (sessionOf(e) === cur.s) own.push(j); });
+    const ahead = own.find(j => seqOf(list[j]) > cur.seq);
+    start = ahead ?? (own.length ? own[own.length - 1] + 1 : 0);
+  }
+  const page = scanFrom(list, start, L, types, prev);
+  const firstAvailable = start < list.length ? eventKey(list[start]) : '';
+  // One gap per page: a rotated-away cursor or a restart is reported in preference to a sequence jump.
+  const gap = idx < 0 ? { reason: 'cursor_not_found', from: text, firstAvailable }
+    : restarted ? { reason: 'session_restarted', from: text, firstAvailable }
+    : page.jump;
+  return {
+    events: page.events,
+    next: page.events.length ? page.events[page.events.length - 1].utc : text,
+    cursor: page.last >= start ? eventKey(list[page.last]) : text,
+    hasMore: page.hasMore,
+    ...(gap ? { gap } : {}),
+  };
+}
+
+export async function readEvents(since?: string | number, limit = 20, types?: string[]): Promise<EventPage> {
+  const all: Json[] = [];
   for (const name of ['events.1.jsonl', 'events.jsonl']) {
-    try { lines.push(...(await fs.readFile(join(MAILBOX, name), 'utf8')).split('\n')); } catch { /* absent */ }
+    let text: string;
+    try { text = (await fs.readFile(join(MAILBOX, name), 'utf8')).replace(/^﻿/, ''); } catch { continue; } // absent
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try { const e = JSON.parse(line); if (e && typeof e === 'object') all.push(e); } catch { /* partial last line */ }
+    }
   }
-  let events = lines.filter(l => l.trim()).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-  if (since !== undefined && since !== null && since !== '') {
-    if (typeof since === 'number' || /^\d+$/.test(String(since))) events = events.filter(e => e.seq > Number(since));
-    else { const t = parseUtc(String(since)); events = events.filter(e => parseUtc(e.utc) > t); }
+  return pageEvents(all, since, limit, types);
+}
+
+// ---- goal lock: one goal (mutation, script, background step) holds the game at a time ----
+// FIFO mutex. A queued waiter can be abandoned through its AbortSignal: it leaves the queue at
+// once and its promise rejects, so the queue behind it still advances when the holder releases.
+// A grant that is never awaited cannot be observed by the lock; callers must await acquire()
+// (run() does) or pass a signal.
+type Waiter = { owner: string; resolve: (release: () => void) => void; reject: (e: unknown) => void; signal?: AbortSignal; onAbort: () => void };
+export class GoalLock {
+  #holder: { owner: string; token: object } | null = null;
+  #queue: Waiter[] = [];
+
+  get held(): string | null { return this.#holder?.owner ?? null; }
+  get waiting(): number { return this.#queue.length; }
+
+  // Resolves with an idempotent release function once this caller holds the lock.
+  acquire(owner: string, signal?: AbortSignal): Promise<() => void> {
+    return new Promise<() => void>((resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason ?? new Error('aborted')); return; }
+      const waiter: Waiter = {
+        owner, resolve, reject, signal,
+        onAbort: () => {
+          const i = this.#queue.indexOf(waiter);
+          if (i >= 0) { this.#queue.splice(i, 1); reject(signal?.reason ?? new Error('aborted')); }
+        },
+      };
+      signal?.addEventListener('abort', waiter.onAbort, { once: true });
+      this.#queue.push(waiter);
+      this.#dispatch();
+    });
   }
-  if (types?.length) events = events.filter(e => types.includes(e.type));
-  events = events.slice(-Math.max(1, Math.min(200, limit)));
-  return { events, next: events.length ? events[events.length - 1].utc : (since === undefined ? undefined : String(since)) };
+
+  // Acquire, run fn, always release (also when fn throws or rejects).
+  async run<T>(owner: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquire(owner);
+    try { return await fn(); } finally { release(); }
+  }
+
+  #dispatch(): void {
+    if (this.#holder) return;
+    const next = this.#queue.shift();
+    if (!next) return;
+    next.signal?.removeEventListener('abort', next.onAbort);
+    const token = {};
+    this.#holder = { owner: next.owner, token };
+    next.resolve(() => {
+      // Only the grant that created this release can free the lock; a second call is a no-op.
+      if (this.#holder?.token === token) { this.#holder = null; this.#dispatch(); }
+    });
+  }
+}
+export const goalLock = new GoalLock();
+
+// Set while an async chain runs inside a goal that holds goalLock. Nested mutate()/runPwsh()
+// calls in that chain run directly instead of queueing behind their own outer goal.
+// `active` clears when the goal's fn ends, so a detached continuation queues normally.
+const lockCtx = new AsyncLocalStorage<{ active: boolean }>();
+const holdsLock = (): boolean => lockCtx.getStore()?.active === true;
+function inLockContext<T>(fn: () => Promise<T>): Promise<T> {
+  const token = { active: true };
+  return lockCtx.run(token, async () => { try { return await fn(); } finally { token.active = false; } });
+}
+
+// Queued or held goals count in state.mutating (other code reads it). The release is idempotent.
+async function acquireGoal(owner: string): Promise<() => void> {
+  state.mutating++;
+  const release = await goalLock.acquire(owner);
+  let counted = true;
+  return () => { release(); if (counted) { counted = false; state.mutating--; } };
 }
 
 // Runs a harness PowerShell script (pwsh 7) from the repo root; returns its output lines.
-export function runPwsh(script: string, args: string[], timeoutMs = 600000): Promise<{ code: number | null; lines: string[] }> {
-  // Scripts mutate (and pause) the game: hold the background run while one is active.
-  state.mutating++; let released = false; const release = () => { if (!released) { released = true; state.mutating--; } };
+// The script holds the goal lock until the process exits, even when the caller stops waiting at
+// its time limit: a running script is never killed, and nothing may interleave with it.
+export async function runPwsh(script: string, args: string[], timeoutMs = 600000): Promise<{ code: number | null; lines: string[] }> {
+  const release = holdsLock() ? () => {} : await acquireGoal(`script:${script}`);
   return new Promise((done0) => {
-    const done = (v: { code: number | null; lines: string[] }) => { release(); done0(v); };
+    let settled = false;
+    const done = (v: { code: number | null; lines: string[] }) => { if (!settled) { settled = true; done0(v); } };
     const child = spawn('pwsh', ['-NoProfile', '-NonInteractive', '-File', join(REPO, script), ...args], { cwd: REPO, windowsHide: true });
     let out = '';
     child.stdout.on('data', d => { out += d; });
     child.stderr.on('data', d => { out += d; });
     const timer = setTimeout(() => { out += '\n[mcp] script time limit reached; the script was left running (never kill a running mutation)'; done({ code: null, lines: lines(out) }); }, timeoutMs);
-    child.on('close', code => { clearTimeout(timer); done({ code, lines: lines(out) }); });
-    child.on('error', e => { clearTimeout(timer); done({ code: -1, lines: [String(e)] }); });
+    child.on('close', code => { clearTimeout(timer); done({ code, lines: lines(out) }); release(); });
+    // A spawn failure never starts a process (no pid), so the lock is released here; otherwise 'close' releases it.
+    child.on('error', e => { clearTimeout(timer); done({ code: -1, lines: [String(e)] }); if (child.pid === undefined) release(); });
   });
 }
 const lines = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map(l => l.trimEnd()).filter(l => l.length);
@@ -156,40 +336,111 @@ export function assertIdle(): void { if (state.running) throw new Error('run_in_
 // Mutations pause the game (the mod requires it). While a background run is active they are
 // allowed: the running step ends with analysis_requested and the loop resumes afterwards, so
 // the simulation only stops for the build itself, never for planning reads.
+// Mutations are serialized by goalLock; a nested mutate() in the same async chain runs directly.
 export async function mutate<T>(fn: () => Promise<T>): Promise<T> {
+  if (holdsLock()) return fn();
   state.mutating++;
-  try { return await fn(); } finally { state.mutating--; }
+  try { return await goalLock.run('mutation', () => inLockContext(fn)); }
+  finally { state.mutating--; }
 }
 
-export const background = { until: 0, speed: 4, active: false, lastStop: '', steps: 0 };
-export function startBackground(seconds: number, speed = 4): void {
+export const background = { until: 0, speed: 4, active: false, lastStop: '', steps: 0, cashFloor: 0, stopOnNewShortage: true };
+export function startBackground(seconds: number, speed = 4, cashFloor = 0, stopOnNewShortage = true): void {
   background.until = Date.now() + seconds * 1000; background.speed = speed;
-  if (!background.active) { background.active = true; void backgroundLoop().finally(() => { background.active = false; }); }
+  background.cashFloor = cashFloor; background.stopOnNewShortage = stopOnNewShortage;
+  if (!background.active) {
+    background.active = true;
+    // The loop takes goalLock per step itself, so it must not inherit the caller's lock context.
+    void lockCtx.exit(() => backgroundLoop())
+      .catch((e: unknown) => { background.lastStop = `loop_error: ${String((e as any)?.message ?? e)}`; })
+      .finally(() => { background.active = false; });
+  }
 }
 export function stopBackground(): void { background.until = 0; }
+
+// simulate_step arguments shared by run() and the background loop (cashFloor only when > 0).
+function simArgs(wall: number, speed: number, stopOnNewShortage: boolean, cashFloor: number): Json {
+  const args: Json = { frames: 262144, wallSeconds: wall, stallSeconds: Math.min(5, wall), speed, stopOnNewShortage };
+  if (cashFloor > 0) args.cashFloor = cashFloor;
+  return args;
+}
+
+type StepOutcome =
+  | { kind: 'refused'; error: string }            // domain refusal (e.g. an operation still in flight)
+  | { kind: 'transport'; error: unknown }         // call() threw: timeout or bridge not responding
+  | { kind: 'deadline' }                          // the mod did not finish the step in time
+  | { kind: 'ended'; cause: 'finished' | 'preempted' | 'stopped'; res: Json | null };
+
+// Background simulation: one simulate_step at a time, each under goalLock. A waiting goal
+// preempts the running step, and a stop request ends it; both cancel by the step's id. Transport
+// errors back off and stop the loop after three in a row (never a blind retry loop).
 async function backgroundLoop(): Promise<void> {
-  let shortSteps = 0;
+  let shortSteps = 0, shortageStreak = 0, transportErrors = 0;
+  // Any successful call() resets the consecutive transport-error count.
+  const tcall = async (command: string, args: Json, timeoutSeconds: number): Promise<Response> => {
+    const r = await call(command, args, timeoutSeconds); transportErrors = 0; return r;
+  };
+  // Cancel by id, then wait (bounded) until the mod reports the step ended, so the next goal starts on an idle game.
+  const cancelAndWait = async (id: string): Promise<Json | null> => {
+    await tcall('cancel_simulation_step', { id }, 5);
+    const end = Date.now() + 5000;
+    while (Date.now() < end) {
+      const r = await tcall('get_simulation_step', { id }, 5);
+      if (r.ok && r.result?.status !== 'running') return r.result;
+      await sleep(100);
+    }
+    return null;
+  };
+  const step = async (wall: number): Promise<StepOutcome> => {
+    try {
+      const started = await tcall('simulate_step', { ...simArgs(wall, background.speed, background.stopOnNewShortage, background.cashFloor), acknowledgeNoProgress: true }, 10);
+      if (!started.ok) return { kind: 'refused', error: String(started.error) };
+      const id = started.result?.id;
+      if (!id) return { kind: 'refused', error: 'simulate_step returned no operation id' };
+      const end = Date.now() + (wall + 8) * 1000;
+      while (Date.now() < end) {
+        await sleep(400);
+        if (Date.now() >= background.until) return { kind: 'ended', cause: 'stopped', res: await cancelAndWait(id) };
+        if (goalLock.waiting > 0) return { kind: 'ended', cause: 'preempted', res: await cancelAndWait(id) };
+        const r = await tcall('get_simulation_step', { id }, 5);
+        if (!r.ok) return { kind: 'deadline' };
+        if (r.result?.status !== 'running') return { kind: 'ended', cause: 'finished', res: r.result };
+      }
+      await tcall('cancel_simulation_step', { id }, 5).catch(() => {});
+      return { kind: 'deadline' };
+    } catch (error) { return { kind: 'transport', error }; }
+  };
+
   while (Date.now() < background.until) {
     if (state.mutating > 0 || state.running) { await sleep(150); continue; }
     const wall = Math.min(50, Math.max(5, Math.ceil((background.until - Date.now()) / 1000)));
-    let started: Response;
-    try { started = await call('simulate_step', { frames: 262144, wallSeconds: wall, stallSeconds: 5, speed: background.speed, stopOnNewShortage: false, acknowledgeNoProgress: true }, 10); }
-    catch (e: any) { background.lastStop = String(e.message ?? e); await sleep(2000); continue; }
-    if (!started.ok) { background.lastStop = String(started.error); await sleep(400); continue; } // e.g. an operation is still in flight
-    let res: Json = null; const clientEnd = Date.now() + (wall + 8) * 1000;
-    while (Date.now() < clientEnd) {
-      await sleep(400);
-      try { res = await callOk('get_simulation_step', { id: started.result.id }, 5); } catch { res = null; break; }
-      if (res.status !== 'running') break;
+    const o = await goalLock.run('background', async () => (Date.now() < background.until ? step(wall) : null));
+    if (!o) continue;
+    if (o.kind === 'transport') {
+      transportErrors++;
+      background.lastStop = `transport_error: ${String((o.error as any)?.message ?? o.error)}`;
+      if (transportErrors >= 3) { background.until = 0; break; }
+      await sleep(2000); // back off; call() re-reads the heartbeat before anything is sent again
+      continue;
     }
-    if (!res || res.status === 'running') { background.lastStop = 'client_deadline'; continue; }
-    background.steps++; stats.simSteps++; stats.simSeconds += Number(res.elapsedSeconds ?? 0);
-    background.lastStop = String(res.reason);
+    if (o.kind === 'refused') { background.lastStop = o.error; await sleep(400); continue; }
+    if (o.kind === 'deadline') { background.lastStop = 'client_deadline'; continue; }
+    if (o.res) { background.steps++; stats.simSteps++; stats.simSeconds += Number(o.res.elapsedSeconds ?? 0); }
+    if (o.cause !== 'finished' || !o.res) { background.lastStop = o.cause; continue; }
+
+    const res = o.res;
+    const reason = String(res.reason);
+    background.lastStop = reason;
     shortSteps = Number(res.elapsedSeconds ?? 0) < 1 ? shortSteps + 1 : 0;
-    if (res.reason === 'game_paused') { try { await fixPopups(3); } catch { /* the mod also auto-resolves */ } await sleep(600); }
-    if (shortSteps >= 8 && state.mutating === 0) { background.lastStop = `stalled:${res.reason}`; await sleep(3000); shortSteps = 0; }
+    shortageStreak = reason === 'new_utility_shortage' ? shortageStreak + 1 : 0;
+    if (reason === 'cash_floor') { background.until = 0; background.lastStop = 'cash_floor'; break; }
+    if (shortageStreak >= 3) { background.until = 0; background.lastStop = 'new_shortages_3_steps'; break; }
+    if (reason === 'game_paused') {
+      try { await goalLock.run('background:popups', () => fixPopups(3)); } catch { /* the mod also auto-resolves */ }
+      await sleep(600);
+    }
+    if (shortSteps >= 8 && state.mutating === 0) { background.lastStop = `stalled:${reason}`; await sleep(3000); shortSteps = 0; }
   }
-  try { if (state.mutating === 0 && !state.running) await call('cancel_simulation_step', {}, 5); } catch { /* already paused */ }
 }
 
 export async function fixPopups(max = 10): Promise<string[]> {
@@ -214,6 +465,13 @@ export async function fixPopups(max = 10): Promise<string[]> {
   return done;
 }
 
+// The goal lock for one foreground step (not across the popup/snapshot reads between steps).
+// A no-op when this async chain already holds the lock.
+async function acquireStep(owner: string): Promise<() => void> {
+  if (holdsLock()) return () => {};
+  return goalLock.acquire(owner);
+}
+
 // Bounded simulation like run-session.ps1: chained simulate_step (<= 50 s each), status
 // polls only (non-pausing), popups passed through, stops paused with a reason otherwise.
 export async function run(totalSeconds: number, speed = 4, cashFloor = 0): Promise<string> {
@@ -223,20 +481,23 @@ export async function run(totalSeconds: number, speed = 4, cashFloor = 0): Promi
     let used = 0, steps = 0, frames = 0, shortageStreak = 0, resolutions = 0; let stop = 'done'; const notes: string[] = [];
     while (used < totalSeconds && totalSeconds - used >= 1) {
       const wall = Math.min(50, Math.ceil(totalSeconds - used));
-      const stepArgs: Json = { frames: 262144, wallSeconds: wall, stallSeconds: Math.min(5, wall), speed, stopOnNewShortage: true };
-      if (cashFloor > 0) stepArgs.cashFloor = cashFloor;
-      const started = await call('simulate_step', stepArgs, 10);
-      if (!started.ok) { stop = `step_refused: ${started.error}`; break; }
-      let res: Json = null; const clientEnd = Date.now() + (wall + 8) * 1000;
-      while (Date.now() < clientEnd) {
-        await sleep(1000);
-        res = await callOk('get_simulation_step', { id: started.result.id }, 5);
-        if (res.status !== 'running') break;
-      }
-      if (!res || res.status === 'running') {
-        try { await callOk('cancel_simulation_step', {}, 5); } catch { notes.push('cancel not confirmed'); }
-        stop = 'client_deadline'; break;
-      }
+      const release = await acquireStep('run');
+      let res: Json = null;
+      try {
+        const started = await call('simulate_step', simArgs(wall, speed, true, cashFloor), 10);
+        if (!started.ok) { stop = `step_refused: ${started.error}`; break; }
+        const id = started.result?.id;
+        const clientEnd = Date.now() + (wall + 8) * 1000;
+        while (Date.now() < clientEnd) {
+          await sleep(1000);
+          res = await callOk('get_simulation_step', { id }, 5);
+          if (res.status !== 'running') break;
+        }
+        if (!res || res.status === 'running') {
+          if (id) { try { await callOk('cancel_simulation_step', { id }, 5); } catch { notes.push('cancel not confirmed'); } }
+          stop = 'client_deadline'; break;
+        }
+      } finally { release(); }
       steps++; used += Number(res.elapsedSeconds ?? 0); frames += Number(res.advancedFrames ?? 0);
       stats.simSteps++; stats.simSeconds += Number(res.elapsedSeconds ?? 0);
       const reason = String(res.reason);

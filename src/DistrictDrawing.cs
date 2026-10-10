@@ -23,7 +23,7 @@ namespace CitiesIIAgentBridge
             var polygon=DistrictGeometry.Read(args["polygon"]); Entity target=Entity.Null, pe;
             if(editing)
             {
-                target=new Entity { Index=RequiredInt(args,"index"),Version=RequiredInt(args,"version") };
+                target=Mod.CheckedEntity(RequiredInt(args,"index"), RequiredInt(args,"version"));
                 if(!AtlasLive(em,target) || !em.HasComponent<District>(target) || em.HasComponent<Owner>(target) || !em.HasBuffer<Game.Areas.Node>(target)) throw new ArgumentException("live_root_district_required");
                 if(!DistrictGeometry.Equivalent(DistrictGeometry.Read(args["expectedPolygon"]),BridgeDistrictTool.Polygon(em,target))) throw new InvalidOperationException("district_boundary_changed_refresh_before_retry");
                 pe=em.GetComponentData<PrefabRef>(target).m_Prefab;

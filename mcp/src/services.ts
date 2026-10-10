@@ -1,28 +1,33 @@
 // Native city-services planner: the TypeScript port of services.ps1 (same intent, same rules).
 // decideServices() is pure and fed with snapshot/building/gap data; fixServices() is the only
 // part that talks to the game (non-pausing reads, then placeService() for the chosen needs).
+import { recordFactors, recordAction, assess, readJsonl, HISTORY_PATH, ACTIONS_PATH } from './happiness.ts';
 import { promises as fs } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { callOk, multi, REPO } from './bridge.ts';
 import type { Json } from './bridge.ts';
 import { placeService } from './city.ts';
 
-export interface Rule { t: string; need: string; rx: RegExp; prefabs: string[]; cov?: string; minPop: number }
+export interface Rule { t: string; need: string; rx: RegExp; prefabs: string[]; cov?: string; minPop: number; spacing: number }
 
 export const RULES: Rule[] = [
-  { t: 'health', need: 'health', rx: /^(MedicalClinic|Hospital)/, prefabs: ['MedicalClinic01', 'MedicalClinic02'], cov: 'Healthcare', minPop: 300 },
-  { t: 'deathcare', need: 'deathcare', rx: /^(Cemetery|Crematorium)/, prefabs: ['Cemetery01', 'Cemetery02', 'Crematorium01'], minPop: 500 },
-  { t: 'fire', need: 'fire', rx: /^(FireHouse|RS_FireHouse|FireStation)/, prefabs: ['FireHouse01', 'RS_FireHouse01', 'FireHouse02'], cov: 'FireRescue', minPop: 600 },
-  { t: 'police', need: 'police', rx: /^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)/, prefabs: ['PoliceStation01', 'PoliceStation02'], cov: 'Police', minPop: 800 },
-  { t: 'school', need: 'education', rx: /^ElementarySchool/, prefabs: ['ElementarySchool01', 'ElementarySchool02'], cov: 'Education', minPop: 600 },
-  { t: 'highschool', need: 'education_high', rx: /^HighSchool/, prefabs: ['HighSchool01', 'HighSchool02'], minPop: 2500 },
-  { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice01', 'PostOffice02'], cov: 'PostService', minPop: 1500 },
-  { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['Landfill01', 'IncinerationPlant01'], minPop: 1000 },
+  { t: 'health', need: 'health', rx: /^(MedicalClinic|Hospital)/, prefabs: ['MedicalClinic01', 'MedicalClinic02'], cov: 'Healthcare', minPop: 300, spacing: 700 },
+  { t: 'deathcare', need: 'deathcare', rx: /^(Cemetery|Crematorium)/, prefabs: ['Cemetery01', 'Cemetery02', 'Crematorium01'], minPop: 500, spacing: 2500 },
+  { t: 'fire', need: 'fire', rx: /^(FireHouse|RS_FireHouse|FireStation)/, prefabs: ['FireHouse01', 'RS_FireHouse01', 'FireHouse02'], cov: 'FireRescue', minPop: 600, spacing: 900 },
+  { t: 'police', need: 'police', rx: /^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)/, prefabs: ['PoliceStation02', 'PoliceStation01'], cov: 'Police', minPop: 800, spacing: 900 },
+  { t: 'school', need: 'education', rx: /^ElementarySchool/, prefabs: ['ElementarySchool01', 'ElementarySchool02'], cov: 'Education', minPop: 600, spacing: 900 },
+  { t: 'highschool', need: 'education_high', rx: /^HighSchool/, prefabs: ['HighSchool01', 'HighSchool02'], minPop: 2500, spacing: 2000 },
+  { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice01', 'PostOffice02'], cov: 'PostService', minPop: 1500, spacing: 1500 },
+  { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['Landfill01', 'IncinerationPlant01'], minPop: 1000, spacing: 3000 },
+  { t: 'entertainment', need: 'entertainment', rx: /Park|Playground|Plaza/, prefabs: ['ChirperPark01', 'Playground01', 'CityPark05', 'CityPark01'], cov: 'Park', minPop: 300, spacing: 350 },
+  { t: 'telecom', need: 'telecom', rx: /RadioMast|ServerFarm|Telecom/, prefabs: ['RadioMast01'], minPop: 1000, spacing: 1500 },
 ];
 
 export interface Center { n: number; x: number; z: number }
 export interface Gap { uncoveredPct: number; gapClusters: { x: number; z: number; homes: number }[] }
 export interface Buildings { services: [string, number, number][]; homes: Center; industry: Center }
+// Where people live: [x, z, homes] per cell (mod home_clusters).
+export type Cluster = [number, number, number];
 
 export interface ServicesInput {
   snap: Json;
@@ -32,11 +37,14 @@ export interface ServicesInput {
   nowMs: number;
   cashFloor?: number;
   uncoveredShare?: number;
+  clusters?: Cluster[];
+  perRule?: number; // placements per rule in one call (only entertainment uses more than one)
 }
 
 export interface Need {
   t: string; need: string; prefabs: string[]; x: number; z: number; have: number;
   uncoveredPct: number; escalated: boolean; critical: boolean; why: string;
+  distance: number | null; // metres to the nearest existing building of this rule, null when none exists
 }
 
 const COOLDOWN_MS = 10 * 60 * 1000;
@@ -54,10 +62,63 @@ function anchor(services: [string, number, number][], rx: RegExp, homes: Center)
   return { x: homes.x, z: homes.z };
 }
 
+type Pt = { x: number; z: number };
+const metres = (a: Pt, b: Pt): number => Math.hypot(a.x - b.x, a.z - b.z);
+const nearestTo = (p: Pt, pts: Pt[]): number => Math.min(...pts.map(q => metres(p, q)));
+const rotate = <T,>(xs: T[], by: number): T[] => {
+  const k = by % xs.length;
+  return [...xs.slice(k), ...xs.slice(0, k)];
+};
+
+// Where the next building of a rule goes. existing = buildings already standing, planned = picks made earlier in
+// this call. Returns null when the city is already dense enough for the rule (nothing worth adding).
+function placement(rule: Rule, existing: Pt[], planned: Pt[], gap: Gap | undefined, share: number,
+  uncoveredShare: number, clusters: Cluster[] | undefined, buildings: Buildings): { at: Pt; distance: number | null } | null {
+  const all = [...existing, ...planned];
+  const cluster = gap?.gapClusters?.[0];
+
+  // First building of this rule: the original targeting (gap cluster, else homes centroid; garbage -> industry).
+  if (all.length === 0) {
+    const at = rule.t === 'garbage' && buildings.industry.n > 0 ? buildings.industry
+      : cluster ? { x: Number(cluster.x), z: Number(cluster.z) }
+      : buildings.homes;
+    return { at: { x: at.x, z: at.z }, distance: null };
+  }
+
+  // a. A coverage gap applies: the gap cluster (a cluster already picked in this call does not count again).
+  if (rule.cov && share > uncoveredShare && cluster) {
+    const gapAt = { x: Number(cluster.x), z: Number(cluster.z) };
+    if (!planned.some(p => metres(p, gapAt) < rule.spacing)) {
+      return { at: gapAt, distance: Math.round(nearestTo(gapAt, all)) };
+    }
+  }
+
+  // No cluster data: the old target, once per call.
+  if (!clusters || clusters.length === 0) {
+    if (planned.length > 0) return null;
+    const at = rule.t === 'garbage' && buildings.industry.n > 0 ? buildings.industry
+      : cluster ? { x: Number(cluster.x), z: Number(cluster.z) }
+      : buildings.homes;
+    return { at: { x: at.x, z: at.z }, distance: Math.round(nearestTo(at, all)) };
+  }
+
+  // b. The populated cluster (>= 10 homes) furthest from every existing building of this rule.
+  let best: { at: Pt; d: number } | null = null;
+  for (const c of clusters) {
+    if (Number(c[2]) < 10) continue;
+    const at = { x: Number(c[0]), z: Number(c[1]) };
+    const d = nearestTo(at, all);
+    if (!best || d > best.d) best = { at, d };
+  }
+  if (!best || best.d < rule.spacing) return null; // dense enough already
+  return { at: best.at, distance: Math.round(best.d) };
+}
+
 export function decideServices(input: ServicesInput): Need[] {
   const { snap, buildings, gaps, cooldown, nowMs } = input;
   const cashFloor = input.cashFloor ?? 250000;
   const uncoveredShare = input.uncoveredShare ?? 0.15;
+  const perRule = Math.max(1, Math.floor(Number(input.perRule ?? 1)) || 1);
   const needs: Json = snap?.needs ?? {};
   const pop = Number(snap?.city?.pop ?? 0);
   const money = Number(snap?.city?.money ?? 0);
@@ -72,25 +133,41 @@ export function decideServices(input: ServicesInput): Need[] {
 
   const out: Need[] = [];
   for (const rule of RULES) {
-    const isEsc = escalated.includes(rule.need);
-    if (pop < rule.minPop && !isEsc) continue;
+    let isEsc = escalated.includes(rule.need);
     const have = buildings.services.filter(s => rule.rx.test(s[0]));
+    // A service that already exists needs a strong, sustained signal before another building
+    // is added (6 dead and a wobbling icon count scored 3/3 with a cemetery already working):
+    // 3+ chirps, 10+ icons, dead+sick above max(20, 1% of the population), or a happiness factor <= -2.
+    const sig = needs[rule.need] ?? {};
+    const sustained = Number(sig.chirps ?? 0) >= 3 || Number(sig.icons ?? 0) >= 10 || Number(sig.dead ?? 0) + Number(sig.sick ?? 0) >= Math.max(20, pop / 100)
+      || Number(sig.factor ?? 0) <= -2;
+    isEsc = isEsc && (have.length === 0 || sustained);
+    if (pop < rule.minPop && !isEsc) continue;
     const gap = rule.cov ? gaps?.[rule.cov] : undefined;
     const share = gap ? Number(gap.uncoveredPct ?? 0) / 100 : 0;
     const missing = isEsc || have.length === 0 || (!!rule.cov && share > uncoveredShare);
     if (!missing) continue;
     if (net < 0 && !isEsc) continue; // upkeep discipline: no new permanent upkeep while losing money
 
-    const cluster = gap?.gapClusters?.[0];
-    const at = rule.t === 'garbage' && buildings.industry.n > 0 ? buildings.industry
-      : cluster ? { x: Number(cluster.x), z: Number(cluster.z) }
-      : buildings.homes;
     const pct = Math.round(share * 100);
-    const why = isEsc ? `escalated ${needs[rule.need]?.score ?? ''}`.trim()
-      : have.length === 0 ? 'none built'
-      : `${pct}% homes uncovered`;
-    out.push({ t: rule.t, need: rule.need, prefabs: rule.prefabs, x: at.x, z: at.z, have: have.length,
-      uncoveredPct: pct, escalated: isEsc, critical: false, why });
+    const existing: Pt[] = have.map(s => ({ x: Number(s[1]), z: Number(s[2]) }));
+    const planned: Pt[] = [];
+    // Several placements only for entertainment (parks spread out); each pick counts as a building for the next.
+    const copies = rule.t === 'entertainment' ? perRule : 1;
+    for (let i = 0; i < copies; i++) {
+      const pick = placement(rule, existing, planned, gap, share, uncoveredShare, input.clusters, buildings);
+      if (!pick) break;
+      planned.push(pick.at);
+      // Park variety: rotate the prefab list so successive parks differ.
+      const prefabs = rule.t === 'entertainment' ? rotate(rule.prefabs, have.length + i) : rule.prefabs;
+      const base = isEsc ? `escalated ${needs[rule.need]?.score ?? ''}`.trim()
+        : have.length === 0 && i === 0 ? 'none built'
+        : pct > 0 ? `${pct}% homes uncovered`
+        : 'spread further';
+      const why = pick.distance === null ? base : `${base}, nearest ${pick.distance} m`;
+      out.push({ t: rule.t, need: rule.need, prefabs, x: pick.at.x, z: pick.at.z, have: have.length,
+        uncoveredPct: pct, escalated: isEsc, critical: false, why, distance: pick.distance });
+    }
   }
 
   // Utilities: critical, never skipped by upkeep discipline.
@@ -101,7 +178,7 @@ export function decideServices(input: ServicesInput): Need[] {
   const utility = (t: string, need: string, prefabs: string[], rx: RegExp, why: string): Need => {
     const near = anchor(buildings.services, rx, buildings.homes);
     return { t, need, prefabs, x: near.x, z: near.z, have: buildings.services.filter(s => rx.test(s[0])).length,
-      uncoveredPct: 0, escalated: false, critical: true, why };
+      uncoveredPct: 0, escalated: false, critical: true, why, distance: null };
   };
   if (powerPct > 85 || powerImport > 0) {
     out.push(utility('power', 'power', ['SmallCoalPowerPlant01', 'WindTurbine01'], /Power|WindTurbine|Transformer/,
@@ -117,8 +194,12 @@ export function decideServices(input: ServicesInput): Need[] {
 
   // Cash floor: below it only critical or escalated needs survive.
   const kept = money < cashFloor ? out.filter(n => n.critical || n.escalated) : out;
+  // Owner rule: critical utilities first, then happiness factors worse than -5 (very_high), then
+  // worse than -3 (priority), then the other escalated needs.
+  const rank = (n: Need) => { const p = needs[n.need]?.priority; return p === 'very_high' ? 2 : p === 'priority' ? 1 : 0; };
   return kept.sort((a, b) =>
     (Number(b.critical) - Number(a.critical)) ||
+    (rank(b) - rank(a)) ||
     (Number(b.escalated) - Number(a.escalated)) ||
     (Number(b.have === 0) - Number(a.have === 0)) ||
     (b.uncoveredPct - a.uncoveredPct));
@@ -138,9 +219,21 @@ async function writeCooldown(cool: Record<string, string>): Promise<void> {
   await fs.writeFile(COOL_FILE, JSON.stringify(cool), 'utf8');
 }
 
+// home_clusters result -> [x, z, homes] list; undefined when the mod gave none (decideServices then falls back).
+function parseClusters(res: Json): Cluster[] | undefined {
+  if (!Array.isArray(res?.clusters)) return undefined;
+  return res.clusters
+    .filter((c: Json) => Array.isArray(c) && c.length >= 3)
+    .map((c: Json): Cluster => [Number(c[0]), Number(c[1]), Number(c[2])]);
+}
+
 export async function fixServices(opts: { maxPlacements?: number; plan?: boolean } = {}): Promise<Json> {
   const t0 = Date.now();
-  const [snap, buildings] = await multi([{ command: 'get_snapshot' }, { command: 'service_buildings' }]);
+  const [snap, buildings, homeClusters] = await multi([
+    { command: 'get_snapshot' }, { command: 'service_buildings' },
+    { command: 'home_clusters', args: { cell: 400, top: 24 } },
+  ]);
+  const clusters = parseClusters(homeClusters);
 
   // The game's own per-road coverage; a failed query just means no gap entry (distance-free fallback).
   const gaps: Record<string, Gap> = {};
@@ -150,18 +243,34 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   }
 
   const cooldown = await readCooldown();
-  const needs = decideServices({ snap, buildings, gaps, cooldown, nowMs: Date.now() });
+  const happiness = snap?.happiness ?? {};
+  // Record the factors, then judge each one against the actions already taken for it: a factor
+  // that two actions did not move is investigated, not given a third building; one that was
+  // acted on in the last 5 minutes is given time to respond.
+  await recordFactors(snap);
+  let verdicts: Json[] = [];
+  try { verdicts = assess({ factors: happiness, history: await readJsonl(HISTORY_PATH), actions: await readJsonl(ACTIONS_PATH), nowMs: Date.now() }); } catch { verdicts = []; }
+  const verdictOf = (need: string) => verdicts.filter(v => v.need === need).sort((a, b) => a.value - b.value)[0];
+  // A very_high factor keeps being acted on every cycle (its own settle time replaces the cooldown).
+  const liveCooldown = Object.fromEntries(Object.entries(cooldown).filter(([k]) => snap?.needs?.[k]?.priority !== 'very_high'));
+  const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3 });
+  const held = all.filter(n => ['investigate', 'waiting'].includes(verdictOf(n.need)?.verdict));
+  const needs = all.filter(n => !held.includes(n));
+  const investigate = verdicts.filter(v => v.verdict === 'investigate').map(v => ({ factor: v.factor, value: v.value, actions: v.actions, delta: v.delta, hint: v.fix }));
+  const waiting = [...new Set(held.filter(n => verdictOf(n.need)?.verdict === 'waiting').map(n => n.t))];
 
   if (opts.plan) {
     return {
       plan: true,
-      needs: needs.map(n => ({ t: n.t, prefab: n.prefabs[0], x: n.x, z: n.z, why: n.why })),
+      happiness,
+      needs: needs.map(n => ({ t: n.t, prefab: n.prefabs[0], x: n.x, z: n.z, why: n.why, ...(snap?.needs?.[n.need]?.priority ? { priority: snap.needs[n.need].priority } : {}) })),
+      ...(investigate.length ? { investigate } : {}), ...(waiting.length ? { waiting } : {}),
       ms: Date.now() - t0,
     };
   }
 
   const requested = Number.isFinite(opts.maxPlacements) ? Math.floor(opts.maxPlacements as number) : 2;
-  const maxPlacements = Math.max(1, Math.min(4, requested));
+  const maxPlacements = Math.max(1, Math.min(8, requested));
   const placed: Json[] = [];
   const failed: Json[] = [];
   let cooldownError: string | undefined;
@@ -173,6 +282,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
       const r = await placeService(prefab, n.x, n.z, 600);
       if (r.ok) {
         placed.push({ t: n.t, prefab, cost: r.cost, monthlyUpkeep: r.monthlyUpkeep, at: r.at });
+        await recordAction({ need: n.need, tool: 'fix_services', detail: `${prefab}@${r.at?.x},${r.at?.z}`, ...(typeof snap?.needs?.[n.need]?.factor === 'number' ? { factor: snap.needs[n.need].factor } : {}) });
         if (n.escalated) {
           cooldown[n.need] = new Date().toISOString();
           try { await writeCooldown(cooldown); } catch (e: any) { cooldownError = String(e?.message ?? e); }
@@ -190,12 +300,14 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
 
   const pending = needs.slice(maxPlacements).map(n => ({ t: n.t, why: n.why }));
   return {
+    happiness,
     placed,
     failed,
     pending,
     cost: placed.reduce((s, p) => s + Number(p.cost ?? 0), 0),
     monthlyUpkeep: placed.reduce((s, p) => s + Number(p.monthlyUpkeep ?? 0), 0),
     ...(cooldownError ? { cooldownError } : {}),
+    ...(investigate.length ? { investigate } : {}), ...(waiting.length ? { waiting } : {}),
     ms: Date.now() - t0,
   };
 }

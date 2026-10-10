@@ -36,7 +36,7 @@ namespace CitiesIIAgentBridge
         }
         private T BuildPrefab<T>(World w, JObject args) where T : PrefabBase
         {
-            var em = w.EntityManager; var e = new Entity { Index = RequiredInt(args, "prefabIndex"), Version = RequiredInt(args, "prefabVersion") };
+            var em = w.EntityManager; var e = Mod.CheckedEntity(RequiredInt(args, "prefabIndex"), RequiredInt(args, "prefabVersion"));
             if (!em.Exists(e) || IsPrefabLocked(em, e)) throw new ArgumentException("prefab_stale_or_locked");
             if (!w.GetExistingSystemManaged<PrefabSystem>().TryGetPrefab<T>(e, out var p)) throw new ArgumentException("incorrect_prefab_type");
             return p;
@@ -51,7 +51,7 @@ namespace CitiesIIAgentBridge
             float curvePosition = 0;
             if (args["index"] != null)
             {
-                entity = new Entity { Index = RequiredInt(args, "index"), Version = RequiredInt(args, "version") };
+                entity = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
                 if (!w.EntityManager.Exists(entity)) throw new ArgumentException("stale_point_entity");
                 if (w.EntityManager.HasComponent<Game.Net.Node>(entity)) pos = w.EntityManager.GetComponentData<Game.Net.Node>(entity).m_Position;
                 else if (w.EntityManager.HasComponent<Game.Net.Curve>(entity))
@@ -84,7 +84,19 @@ namespace CitiesIIAgentBridge
             roadTool.RequestedElevation = elevation;
             a.m_Elevation = b.m_Elevation = elevation; a.m_HitPosition.y += elevation; b.m_HitPosition.y += elevation;
             a.m_Position.y += elevation; b.m_Position.y += elevation;
-            if (args["control"] is JObject c) { roadTool.ExtraPoints = new[] { BuildPoint(w, c) }; roadTool.RequestedMode = NetToolSystem.Mode.SimpleCurve; }
+            // Only two shapes are supported; anything else is refused instead of being built straight.
+            string shape = (string)args["mode"];
+            if (shape != null && shape != "straight" && shape != "curve") throw new ArgumentException("unsupported_curve_mode: straight or curve");
+            if (args["controls"] != null || args["points"] != null) throw new ArgumentException("only_one_control_point_supported: use control");
+            if (shape == "curve" && !(args["control"] is JObject)) throw new ArgumentException("curve_requires_control_point");
+            if (shape == "straight" && args["control"] != null) throw new ArgumentException("straight_road_takes_no_control_point");
+            if (args["control"] is JObject c)
+            {
+                var control = BuildPoint(w, c);
+                if (math.distance(control.m_Position.xz, a.m_Position.xz) < 4 || math.distance(control.m_Position.xz, b.m_Position.xz) < 4) throw new ArgumentException("control_point_too_close_to_an_endpoint");
+                if (math.distance(control.m_Position.xz, a.m_Position.xz) + math.distance(control.m_Position.xz, b.m_Position.xz) > 1500) throw new ArgumentException("control_point_too_far");
+                roadTool.ExtraPoints = new[] { control }; roadTool.RequestedMode = NetToolSystem.Mode.SimpleCurve;
+            }
             roadTool.PreviewOnly = (bool?)args["previewOnly"] == true;
             roadTool.Begin(p, a, b, budget);
             return ConstructionAccess.Status(ConstructionAccess.Active);
@@ -102,17 +114,20 @@ namespace CitiesIIAgentBridge
             var w = RequireCity(); var em = w.EntityManager; var rows = new JArray();
             var center = new float3(RequiredFloat(args, "x"), 0, RequiredFloat(args, "z"));
             float radius = RequiredFloat(args, "radius"); if (radius <= 0 || radius > 1000) throw new ArgumentException("radius_must_be_0_to_1000");
+            // Paged (default 512 per page) with total and nextOffset: the old hard stop at 512 nodes
+            // silently hid the rest of the network.
+            var page = new QueryPage(args, 512, 4096); int total = 0;
             using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Net.Node>() }, None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Game.Common.Deleted>(), ComponentType.ReadOnly<Game.Common.Owner>() } }))
-            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es)
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es.ToArray().OrderBy(e => e.Index).ThenBy(e => e.Version))
             {
                 var n = em.GetComponentData<Game.Net.Node>(e); if (math.distance(n.m_Position.xz, center.xz) > radius) continue;
+                if (!page.Contains(total++)) continue;
                 var edges = new JArray();
                 if (em.HasBuffer<Game.Net.ConnectedEdge>(e)) foreach (var edge in em.GetBuffer<Game.Net.ConnectedEdge>(e, true))
                     edges.Add(new JObject { ["index"] = edge.m_Edge.Index, ["version"] = edge.m_Edge.Version });
                 rows.Add(new JObject { ["index"] = e.Index, ["version"] = e.Version, ["position"] = Vector(n.m_Position), ["edges"] = edges });
-                if (rows.Count >= 512) break;
             }
-            return new JObject { ["nodes"] = rows };
+            var result = page.Result("nodes", rows, total); result["citySession"] = citySession; return result;
         }
         private JObject ZoneCells(JObject args)
         {

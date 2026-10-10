@@ -23,7 +23,7 @@ namespace CitiesIIAgentBridge
             point.m_Rotation = quaternion.RotateY(math.radians(rotation));
             int budget = RequiredInt(args, "maxCost"); if (budget < 0 || budget > 1000000) throw new ArgumentException("invalid_budget");
             Entity move = Entity.Null;
-            if (args["moveIndex"] != null) { move = new Entity { Index = RequiredInt(args, "moveIndex"), Version = RequiredInt(args, "moveVersion") }; if (!w.EntityManager.Exists(move) || !w.EntityManager.HasComponent<Game.Buildings.Building>(move)) throw new ArgumentException("invalid_building_to_move"); }
+            if (args["moveIndex"] != null) { move = Mod.CheckedEntity(RequiredInt(args, "moveIndex"), RequiredInt(args, "moveVersion")); if (!w.EntityManager.Exists(move) || !w.EntityManager.HasComponent<Game.Buildings.Building>(move)) throw new ArgumentException("invalid_building_to_move"); }
             ControlPoint[] candidates = null;
             if(args["candidates"] is JArray list)
             {
@@ -38,7 +38,7 @@ namespace CitiesIIAgentBridge
         private JObject Demolish(JObject args)
         {
             var w = RequireCity(); RequireControl(); CheckBuildTool(w); var em = w.EntityManager;
-            var entity = new Entity { Index = RequiredInt(args, "index"), Version = RequiredInt(args, "version") };
+            var entity = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
             if (!em.Exists(entity) || (!em.HasComponent<Game.Buildings.Building>(entity) && !em.HasComponent<Game.Net.Edge>(entity))) throw new ArgumentException("target_must_be_building_or_network_edge");
             float3 pos;
             if (em.HasComponent<Game.Objects.Transform>(entity)) pos = em.GetComponentData<Game.Objects.Transform>(entity).m_Position;
