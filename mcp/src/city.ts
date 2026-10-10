@@ -7,6 +7,9 @@ import type { Json } from './bridge.ts';
 export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
 const ROAD_CAP = 8000;        // per road (a full grid line up to ~900 m); Small Road costs ~4 per metre
 const now = () => Date.now();
+export function quotedCost(quoted: unknown, cashBefore: number, cashAfter: number): { cost: number; costSource: 'quoted' | 'cash_delta' } {
+  return typeof quoted === 'number' && Number.isFinite(quoted) ? { cost: quoted, costSource: 'quoted' } : { cost: cashBefore - cashAfter, costSource: 'cash_delta' };
+}
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 // Prefab index/version/costs by exact name, cached per city session. An entry lives at most
@@ -61,15 +64,17 @@ export function chunkSteps(steps: Json[], extra: Json = {}, maxBytes = 15000, ma
 }
 
 async function runBatch(steps: Json[], extra: Json = {}): Promise<Json> {
-  let last: Json = { status: 'complete', completed: 0 }; let done = 0; let offset = 0;
+  let last: Json = { status: 'complete', completed: 0 }; let done = 0; let offset = 0; let spent = 0; let quoted = true;
   for (const chunk of chunkSteps(steps, extra)) {
     const started = await callOk('batch_execute', { steps: chunk, compact: true, ...extra }, 20);
     last = await waitBatch(started.id, 300);
     done += Number(last.completed ?? 0);
+    // The mod reports moneySpent for a completed batch, measured inside the paused batch.
+    if (typeof last.moneySpent === 'number') spent += last.moneySpent; else if (Number(last.completed ?? 0) > 0) quoted = false;
     if (last.status !== 'complete') { last.failedIndex = offset + Number(last.failedStep ?? 0); break; }
     offset += chunk.length;
   }
-  last.completedTotal = done;
+  last.completedTotal = done; last.spentTotal = spent; last.spentQuoted = quoted;
   return last;
 }
 
@@ -130,14 +135,15 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
     const steps = roads.map(r => roadStep(plan.road, r[0], r[1], false));
     if (connector) steps.push(roadStep(plan.road, connectorStart(connector), connector.to, false));
     const built = await runBatch(steps);
-    let linked = built.status === 'complete'; const notes: string[] = [];
+    let linked = built.status === 'complete'; const notes: string[] = []; let connectorCost = 0;
     if (built.status !== 'complete') {
       if ((built.failedIndex ?? 0) < roads.length) return { ok: false, reason: 'build_failed_partial', builtRoads: built.completedTotal, error: built.error, reasons: reasonsOf(built), phases };
       // Streets are in, the connector failed (roads renumber as they are built): re-query and retry.
       const again = await callOk('grid_connectors', { x0: plan.bounds[0], z0: plan.bounds[1], x1: plan.bounds[2], z1: plan.bounds[3], top: 8 }, 20);
       for (const c of again.links ?? []) {
         const op = await call('build_road', roadStep(plan.road, connectorStart(c), c.to, false).args, 15);
-        if (op.ok && (await waitOperation(op.result.id, 30)).status === 'complete') { linked = true; connector = c; notes.push(`connector rebuilt (${Math.round(c.d)} m)`); break; }
+        const rebuilt = op.ok ? await waitOperation(op.result.id, 30) : null;
+        if (rebuilt?.status === 'complete') { connectorCost = Number(rebuilt.previewCost ?? 0); linked = true; connector = c; notes.push(`connector rebuilt (${Math.round(c.d)} m)`); break; }
       }
     }
     phases.build = now() - t; t = now();
@@ -169,7 +175,7 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
     phases.verify = now() - t;
     const verdict = gridOutcome({ linked, connectorUsed: connector !== null, connected: connector ? checks[2].connected === true : true, zoneStatus, leftZonable: Number(checks[0].zonable) });
     return {
-      ok: verdict.ok, ...(verdict.partial ? { partial: true } : {}), cost: Number(city0.money) - Number(checks[1].money), monthlyUpkeep: null,
+      ok: verdict.ok, ...(verdict.partial ? { partial: true } : {}), ...quotedCost(built.spentQuoted && built.status === 'complete' ? built.spentTotal + connectorCost : undefined, Number(city0.money), Number(checks[1].money)), monthlyUpkeep: null,
       roads: steps.length, shared: plan.shared, zoned: z.zonable, leftZonable: checks[0].zonable, zone: zoneStatus, zoneMode, zoneOps,
       connected: connector ? checks[2].connected : true, ...(notes.length ? { notes } : {}), ...(verdict.reason ? { reason: verdict.reason } : {}), phases,
     };
@@ -242,7 +248,7 @@ export async function link(x: number, z: number, roadName = 'Small Road', maxCos
       if (plan) return { ok: true, plan: true, length: Math.round(c.d), previewCost: pvDone.previewCost, from: c.from, phases: { plan: planMs, preview: now() - t1 } };
       const op = await callOk('build_road', args, 15); const done = await waitOperation(op.id, 60);
       const money1 = Number((await callOk('get_city_state', {}, 10)).money);
-      return { ok: done.status === 'complete', cost: Number(city0.money) - money1, monthlyUpkeep: null, length: Math.round(c.d), error: done.error, ...(tried.length ? { tried } : {}), phases: { plan: planMs, build: now() - t1 } };
+      return { ok: done.status === 'complete', ...quotedCost(done.status === 'complete' ? done.previewCost : 0, Number(city0.money), money1), monthlyUpkeep: null, length: Math.round(c.d), error: done.error, ...(tried.length ? { tried } : {}), phases: { plan: planMs, build: now() - t1 } };
     }
     return { ok: false, reason: 'every_link_rejected', tried, phases: { plan: planMs, preview: now() - t1 } };
   });
@@ -265,7 +271,7 @@ export async function placeService(name: string, x: number, z: number, radius = 
     const done = await waitOperation(op.id, 120);
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
     const reasons = [...new Set((done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []))].slice(0, 6);
-    return { ok: done.status === 'complete', cost: Number(city0.money) - money1, ...costs, at: done.snappedPosition ? { x: Math.round(done.snappedPosition.x), z: Math.round(done.snappedPosition.z) } : undefined, error: done.error, ...(reasons.length ? { reasons } : {}), attempts: (done.attempts ?? []).length, phases: { plan: planMs, place: now() - t1 } };
+    return { ok: done.status === 'complete', ...quotedCost(done.status === 'complete' ? done.previewCost : 0, Number(city0.money), money1), ...costs, at: done.snappedPosition ? { x: Math.round(done.snappedPosition.x), z: Math.round(done.snappedPosition.z) } : undefined, error: done.error, ...(reasons.length ? { reasons } : {}), attempts: (done.attempts ?? []).length, phases: { plan: planMs, place: now() - t1 } };
   });
 }
 
@@ -309,11 +315,36 @@ export async function fixTraffic(o: { max?: number; flowBelow?: number; plan?: b
     for (const h of small.slice(0, max)) {
       const op = await call('upgrade_network', { index: h.index, version: h.version, prefabIndex: medium.index, prefabVersion: medium.version, maxCost: 30000 }, 15);
       const done = op.ok ? await waitOperation(op.result.id, 60) : { status: 'failed', error: op.error };
-      upgraded.push({ x: h.x, z: h.z, length: h.length, flowPct: h.flowPct, status: done.status, ...(done.status === 'complete' ? {} : { error: done.error, reasons: (done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []).slice(0, 4) }) });
+      upgraded.push({ x: h.x, z: h.z, length: h.length, flowPct: h.flowPct, status: done.status, ...(done.status === 'complete' ? { cost: Number(done.previewCost ?? 0) } : { error: done.error, reasons: (done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []).slice(0, 4) }) });
     }
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
-    return { ok: upgraded.some(u => u.status === 'complete'), cost: Number(city0.money) - money1, monthlyUpkeep: null, upgraded, ...base, phases: { plan: base.phases.plan, build: now() - t1 } };
+    return { ok: upgraded.some(u => u.status === 'complete'), ...quotedCost(upgraded.reduce((sum, u) => sum + Number(u.cost ?? 0), 0), Number(city0.money), money1), monthlyUpkeep: null, upgraded, ...base, phases: { plan: base.phases.plan, build: now() - t1 } };
   });
+}
+
+// PURE. Waypoints -> roads. Where a segment is a short stub (under 60 m: what A* leaves when it
+// steps around a lot corner), it and its neighbour become ONE road from A to C curved through B
+// (the game's simple-curve mode). Corners between two long segments stay as they are: a corner
+// at a node is valid, and a wide curve there would cut through the lots inside the corner. A leftover
+// straight segment shorter than 12 m is merged into its neighbour's endpoint.
+export function corridorRoads(points: { x: number; z: number }[]): { a: Json; b: Json; control?: Json }[] {
+  const pts = points.filter((p, i) => i === 0 || Math.hypot(p.x - points[i - 1].x, p.z - points[i - 1].z) >= 1);
+  const d = (p: Json, q: Json) => Math.hypot(q.x - p.x, q.z - p.z);
+  const roads: { a: Json; b: Json; control?: Json }[] = []; let i = 0;
+  while (i < pts.length - 1) {
+    if (i + 2 < pts.length) {
+      const ab = d(pts[i], pts[i + 1]), bc = d(pts[i + 1], pts[i + 2]);
+      if ((ab < 60 || bc < 60) && ab >= 5 && bc >= 5 && ab + bc <= 950) { roads.push({ a: pts[i], b: pts[i + 2], control: pts[i + 1] }); i += 2; continue; }
+    }
+    roads.push({ a: pts[i], b: pts[i + 1] }); i += 1;
+  }
+  // A trailing or leading straight stub the game would refuse (< 12 m) is folded into its neighbour.
+  for (let k = roads.length - 1; k >= 0; k--) {
+    const r = roads[k]; if (r.control || d(r.a, r.b) >= 12 || roads.length === 1) continue;
+    if (k > 0) roads[k - 1].b = r.b; else roads[1].a = r.a;
+    roads.splice(k, 1);
+  }
+  return roads;
 }
 
 // Arterial along the mod's lot-free corridor (straight when possible, A* waypoints otherwise):
@@ -325,21 +356,23 @@ export async function buildCorridor(fromX: number, fromZ: number, toX: number, t
   const [route, city0] = await multi([{ command: 'corridor', args: { from: { x: fromX, z: fromZ }, to: { x: toX, z: toZ } } }, { command: 'get_city_state' }]);
   const planMs = now() - t;
   if (!route.found) return { ok: false, reason: 'no_corridor', phases: { plan: planMs } };
-  // Drop waypoints closer than 10 m to the previous one (the game needs >= 8 m per road).
-  const pts: Json[] = [route.waypoints[0]];
-  for (const p of route.waypoints.slice(1)) { const q = pts[pts.length - 1]; if (Math.hypot(p.x - q.x, p.z - q.z) >= 10) pts.push(p); else if (p === route.waypoints[route.waypoints.length - 1]) pts[pts.length - 1] = p; }
-  if (pts.length < 2) return { ok: false, reason: 'corridor_too_short', phases: { plan: planMs } };
+  // Geometry: the raw corridor has short stubs and sharp kinks the game rejects (InvalidShape).
+  // corridorRoads() turns the waypoints into roads, replacing a kink A-B-C with one curve from A
+  // to C whose control point is B.
+  const pts: Json[] = route.waypoints;
+  const roadsPlan = corridorRoads(pts);
+  if (!roadsPlan.length) return { ok: false, reason: 'corridor_too_short', phases: { plan: planMs } };
   const info = { prefabIndex: road.index, prefabVersion: road.version };
-  const step = (i: number, preview: boolean) => ({ command: 'build_road', args: { ...info, start: { x: pts[i].x, z: pts[i].z }, end: { x: pts[i + 1].x, z: pts[i + 1].z }, maxCost: 20000, ...(preview ? { previewOnly: true } : {}) } });
-  const count = pts.length - 1;
+  const step = (i: number, preview: boolean) => { const r = roadsPlan[i]; return { command: 'build_road', args: { ...info, start: { x: r.a.x, z: r.a.z }, end: { x: r.b.x, z: r.b.z }, ...(r.control ? { mode: 'curve', control: { x: r.control.x, z: r.control.z } } : {}), maxCost: 20000, ...(preview ? { previewOnly: true } : {}) } }; };
+  const count = roadsPlan.length;
   return mutate(async () => {
     const t1 = now();
     const pv = await runBatch(Array.from({ length: count }, (_, i) => step(i, true)));
     const previewMs = now() - t1;
     if (pv.status !== 'complete') return { ok: false, reason: 'segment_rejected_by_game', segment: pv.failedIndex, reasons: reasonsOf(pv), waypoints: pts, phases: { plan: planMs, preview: previewMs } };
-    if (plan) return { ok: true, plan: true, length: route.length, segments: count, waypoints: pts, phases: { plan: planMs, preview: previewMs } };
+    if (plan) return { ok: true, plan: true, length: route.length, segments: count, curves: roadsPlan.filter(r => r.control).length, waypoints: pts, phases: { plan: planMs, preview: previewMs } };
     const t2 = now(); const built = await runBatch(Array.from({ length: count }, (_, i) => step(i, false)));
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
-    return { ok: built.status === 'complete', cost: Number(built.moneySpent ?? (Number(city0.money) - money1)), monthlyUpkeep: null, length: route.length, segments: count, built: built.completedTotal, error: built.error, reasons: reasonsOf(built), phases: { plan: planMs, preview: previewMs, build: now() - t2 } };
+    return { ok: built.status === 'complete', ...quotedCost(built.spentQuoted && built.status === 'complete' ? built.spentTotal : undefined, Number(city0.money), money1), monthlyUpkeep: null, length: route.length, segments: count, curves: roadsPlan.filter(r => r.control).length, built: built.completedTotal, error: built.error, reasons: reasonsOf(built), phases: { plan: planMs, preview: previewMs, build: now() - t2 } };
   });
 }

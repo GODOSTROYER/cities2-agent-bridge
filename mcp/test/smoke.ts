@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const mcpDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED = [
   'snapshot', 'events', 'ui', 'fix_popup', 'run', 'build_grid', 'grow', 'link', 'zone', 'place_service',
-  'prefabs', 'set_tax', 'set_service_budget', 'services', 'buy_tile', 'save', 'restart', 'quit', 'upgrade_road', 'run_status', 'timings', 'fix_traffic', 'build_arterial', 'happiness', 'notifications', 'clear_ruins', 'query',
+  'prefabs', 'set_tax', 'set_service_budget', 'services', 'buy_tile', 'save', 'restart', 'quit', 'upgrade_road', 'run_status', 'timings', 'fix_traffic', 'build_arterial', 'happiness', 'notifications', 'clear_ruins', 'tax_autopilot', 'query',
   'free_lots', 'corridor', 'coverage_gaps', 'traffic_hotspots', 'project', 'fix_services', 'roadside_lots',
 ];
 
@@ -32,14 +32,14 @@ async function main(): Promise<number> {
     } else {
       console.log(`PASS: ${EXPECTED.length} tools`);
     }
-    if (EXPECTED.length !== 34) {
-      console.log(`FAIL: expected list has ${EXPECTED.length} names, want 34`);
+    if (EXPECTED.length !== 35) {
+      console.log(`FAIL: expected list has ${EXPECTED.length} names, want 35`);
       code = 1;
     }
 
     const res: any = await client.callTool({ name: 'events', arguments: { limit: 3 } });
     const text = String(res.content?.[0]?.text ?? '');
-    console.log(text.slice(0, 340));
+    console.log(text.slice(0, 350));
     if (res.isError) {
       console.log('FAIL: events returned an error');
       code = 1;

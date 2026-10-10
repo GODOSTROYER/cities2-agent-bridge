@@ -10,12 +10,14 @@ import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
 import { notifications, clearRuins, fixJams } from './notifications.ts';
 import { fit } from './project.ts';
+import { registerTaxTool, readPins, pinViolation } from './taxes.ts';
 import { invalidatePrefabCache } from './city.ts';
 
 const server = new McpServer({ name: 'cs2', version: '0.1.0' });
 instrument(server);          // every tool: wall-clock ms in the result and in journals/mcp-timings.jsonl
 registerTimingsTool(server, z);
 registerHappinessTool(server, z);
+registerTaxTool(server, z);
 let lastMilestone: number | null = null;   // unlocks change with milestones: drop cached prefab lock state
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
@@ -125,12 +127,13 @@ server.registerTool('run', {
     speed: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(4),
     cashFloor: z.number().int().min(0).default(0),
     background: z.boolean().optional(),
+    stopOnNewShortage: z.boolean().optional().describe('background only: stop after three steps in a row end on a new utility shortage (default false)'),
   },
 }, async (a) => {
   try {
     if (a.background) {
       if (a.seconds === 0) { stopBackground(); return ok({ background: 'stopping' }); }
-      startBackground(a.seconds, a.speed);
+      startBackground(a.seconds, a.speed, a.cashFloor, a.stopOnNewShortage ?? false);
       return ok({ background: 'running', seconds: a.seconds, speed: a.speed });
     }
     return ok({ summary: await run(a.seconds, a.speed, a.cashFloor) });
@@ -261,15 +264,18 @@ server.registerTool('prefabs', {
 });
 
 server.registerTool('set_tax', {
-  description: 'Sets the tax rate (percent) for one zone area; pauses the game.',
+  description: 'Sets the tax rate (percent) for one zone area; pauses the game. A rate outside the owner pin for that area is refused unless ownerSaid=true.',
   inputSchema: {
     area: z.enum(['Residential', 'Commercial', 'Industrial', 'Office']),
     rate: z.number().int().min(-10).max(30),
+    ownerSaid: z.boolean().optional().describe('true only when the owner asked for this rate; needed to leave an owner pin (journals/tax-pins.json)'),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
+    const violation = a.ownerSaid ? null : pinViolation(a.area, a.rate, await readPins());
+    if (violation) return fail(violation);
     const r = await callOk('set_tax', { area: a.area, rate: a.rate });
     if (Number(r.after) < Number(r.before)) await recordAction({ need: 'tax', tool: 'set_tax', detail: `${a.area} ${r.before}->${r.after}` });
     return ok(withCleared({ area: a.area, before: r.before, after: r.after, cost: 0, monthlyUpkeep: 0 }, cleared));
