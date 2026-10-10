@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 
@@ -194,12 +194,12 @@ server.registerTool('link', {
 
 server.registerTool('zone', {
   description: 'Zones every zonable empty cell within radius of (x,z) in one mod-side batch; free.',
-  inputSchema: { x: z.number(), z: z.number(), radius: z.number().min(20).max(500).optional(), zone: zoneEnum },
+  inputSchema: { x: z.number(), z: z.number(), radius: z.number().min(20).max(500).optional(), zone: zoneEnum, replace: z.boolean().optional().describe('also rezone cells of another zone type that have no building on them') },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await zoneArea(a.x, a.z, a.radius ?? 300, a.zone), cleared));
+    return ok(withCleared(await zoneArea(a.x, a.z, a.radius ?? 300, a.zone, !!a.replace), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -317,29 +317,16 @@ server.registerTool('fix_services', {
 });
 
 server.registerTool('buy_tile', {
-  description: 'Buys one to three adjacent map tiles (dry, flat; nearest the city or the given x,z) within a cost cap; pauses the game. Use plan=true to preview.',
+  description: 'Buys one to three adjacent map tiles (dry, flat; nearest the city or the given x,z). The game price and monthly upkeep of the selection are previewed first, so it never fails on funds. plan=true returns price, upkeep and the tile bounds without buying.',
   inputSchema: {
-    n: z.number().int().min(1).max(3).default(1),
-    max: z.number().int().default(300000),
-    x: z.number().optional(),
-    z: z.number().optional(),
-    plan: z.boolean().optional(),
+    n: z.number().int().min(1).max(3).default(1), max: z.number().int().default(300000),
+    x: z.number().optional(), z: z.number().optional(), plan: z.boolean().optional(),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const m0 = await money();
-    const near = a.x !== undefined && a.z !== undefined ? ['-X', String(a.x), '-Z', String(a.z)] : [];
-    const r = await runPwsh('play.ps1', ['buy', '-N', String(a.n), '-Max', String(a.max), ...near, ...(a.plan ? ['-Plan'] : [])]);
-    const m1 = await money();
-    return ok(withCleared({
-      cost: m0 - m1,
-      monthlyUpkeep: null,
-      upkeepNote: 'tile upkeep appears in snapshot expense',
-      exit: r.code,
-      lines: tail(r.lines),
-    }, cleared));
+    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan }), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -406,7 +393,7 @@ server.registerTool('query', {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),

@@ -6,6 +6,7 @@ using Game.Buildings;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
+using Game.Simulation;
 using Game.Tools;
 using Game.Zones;
 using Newtonsoft.Json.Linq;
@@ -115,6 +116,9 @@ namespace CitiesIIAgentBridge
             // native zone-tool path (one rectangle per block, batched).
             bool direct = !countOnly && (bool?)args["tool"] != true;
             var zoneType = direct ? em.GetComponentData<ZoneData>(zone).m_ZoneType : default;
+            // replace=true also rezones cells that carry a different zone and have no building on
+            // them (a mis-zoned empty block); occupied cells are never touched.
+            bool replace = direct && (bool?)args["replace"] == true; int replaced = 0;
             var changedBlocks = new List<Entity>(); int applied = 0;
             var steps = new JArray(); int zonable = 0, zoned = 0, blocks = 0;
             using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Block>(), ComponentType.ReadOnly<Cell>() }, None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() } }))
@@ -129,7 +133,13 @@ namespace CitiesIIAgentBridge
                         var p = ZoneUtils.GetCellPosition(block, new int2(x, y));
                         if (p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1) continue;
                         int index = y * block.m_Size.x + x; var cell = cells[index];
-                        if (cell.m_Zone.m_Index != 0) { zoned++; continue; }
+                        if (cell.m_Zone.m_Index != 0)
+                        {
+                            zoned++;
+                            if (replace && cell.m_Zone.m_Index != zoneType.m_Index && (cell.m_State & CellFlags.Occupied) == 0 && (cell.m_State & CellFlags.Visible) != 0)
+                            { cell.m_Zone = zoneType; cells[index] = cell; replaced++; if (maxX < 0) { minX = minY = 0; maxX = maxY = 0; } }
+                            continue;
+                        }
                         if ((cell.m_State & CellFlags.Visible) == 0) continue;
                         zonable++; minX = Math.Min(minX, x); minY = Math.Min(minY, y); maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
                         if (direct) { cell.m_Zone = zoneType; cells[index] = cell; applied++; }
@@ -153,7 +163,7 @@ namespace CitiesIIAgentBridge
             if (direct)
             {
                 foreach (var e in changedBlocks) if (!em.HasComponent<Updated>(e)) em.AddComponent<Updated>(e);
-                result["mode"] = "direct"; result["applied"] = applied; result["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds);
+                result["mode"] = "direct"; result["applied"] = applied; if (replace) result["replaced"] = replaced; result["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds);
                 return result;
             }
             if (countOnly || steps.Count == 0) return result;
@@ -206,6 +216,52 @@ namespace CitiesIIAgentBridge
                 foreach (var m in graph[n]) { if (!seen.Add(m)) continue; if (m == nb) { found = true; break; } queue.Enqueue(m); }
             }
             return new JObject { ["connected"] = found, ["nodeDistanceA"] = Math.Round(da, 1), ["nodeDistanceB"] = Math.Round(db, 1), ["reachable"] = seen.Count, ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
+        }
+
+        // tile_options {x?,z?,top?}: unowned map tiles adjacent to owned land, ranked like play.ps1 buy
+        // (dry samples, relief, distance to the city or to x,z). Non-pausing.
+        private JObject TileOptions(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var clock = Stopwatch.StartNew();
+            int top = Math.Max(1, Math.Min(8, (int?)args["top"] ?? 3));
+            var owned = new List<double[]>(); var open = new List<(Entity e, double[] box)>();
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<Game.Areas.MapTile>()))
+            using (var es = q.ToEntityArray(Allocator.Temp))
+                foreach (var e in es)
+                {
+                    if (!em.HasBuffer<Game.Areas.Node>(e)) continue; var nodes = em.GetBuffer<Game.Areas.Node>(e, true); if (nodes.Length == 0) continue;
+                    double ax = double.MaxValue, az = double.MaxValue, bx = double.MinValue, bz = double.MinValue;
+                    foreach (var n in nodes) { ax = Math.Min(ax, n.m_Position.x); bx = Math.Max(bx, n.m_Position.x); az = Math.Min(az, n.m_Position.z); bz = Math.Max(bz, n.m_Position.z); }
+                    var box = new[] { ax, az, bx, bz };
+                    if (em.HasComponent<Native>(e)) open.Add((e, box)); else owned.Add(box);
+                }
+            if (owned.Count == 0) throw new InvalidOperationException("no_owned_tiles");
+            bool near = args["x"] != null && args["z"] != null;
+            double cx = near ? RequiredFloat(args, "x") : owned.Average(b => (b[0] + b[2]) / 2);
+            double cz = near ? RequiredFloat(args, "z") : owned.Average(b => (b[1] + b[3]) / 2);
+            bool Adjacent(double[] t) => owned.Any(o =>
+                ((Math.Abs(o[2] - t[0]) < 1 || Math.Abs(o[0] - t[2]) < 1) && o[1] < t[3] - 1 && o[3] > t[1] + 1) ||
+                ((Math.Abs(o[3] - t[1]) < 1 || Math.Abs(o[1] - t[3]) < 1) && o[0] < t[2] - 1 && o[2] > t[0] + 1));
+            var terrain = w.GetExistingSystemManaged<TerrainSystem>().GetHeightData();
+            var water = w.GetExistingSystemManaged<WaterSystem>().GetSurfaceData(out var waterReady); waterReady.Complete();
+            bool waterOk = water.isCreated && water.hasDepths && water.resolution.x > 1;
+            var rows = new List<(double score, JObject row)>();
+            foreach (var (e, t) in open.Where(o => Adjacent(o.box)))
+            {
+                int dry = 0; double lo = double.MaxValue, hi = double.MinValue;
+                foreach (double fx in new[] { 0.2, 0.5, 0.8 }) foreach (double fz in new[] { 0.2, 0.5, 0.8 })
+                {
+                    var pos = new float3((float)(t[0] + (t[2] - t[0]) * fx), 0, (float)(t[1] + (t[3] - t[1]) * fz));
+                    pos.y = TerrainUtils.SampleHeight(ref terrain, pos); lo = Math.Min(lo, pos.y); hi = Math.Max(hi, pos.y);
+                    bool wet = false;
+                    if (waterOk) { var sp = WaterUtils.ToSurfaceSpace(ref water, pos); wet = sp.x < 0 || sp.z < 0 || sp.x >= water.resolution.x || sp.z >= water.resolution.z || WaterUtils.SampleDepth(ref water, pos) > 0.1f; }
+                    if (!wet) dry++;
+                }
+                double dist = SiteSearch.Dist((t[0] + t[2]) / 2, (t[1] + t[3]) / 2, cx, cz); double score = dry * 100 - (hi - lo) * 2 - dist / 50;
+                rows.Add((score, new JObject { ["index"] = e.Index, ["version"] = e.Version, ["x0"] = Math.Round(t[0]), ["z0"] = Math.Round(t[1]), ["x1"] = Math.Round(t[2]), ["z1"] = Math.Round(t[3]), ["dry"] = dry, ["relief"] = Math.Round(hi - lo), ["dist"] = Math.Round(dist), ["score"] = Math.Round(score) }));
+            }
+            var purchase = w.GetExistingSystemManaged<MapTilePurchaseSystem>();
+            return new JObject { ["tiles"] = new JArray(rows.OrderByDescending(r => r.score).Take(top).Select(r => r.row)), ["adjacent"] = rows.Count, ["owned"] = owned.Count, ["availablePurchases"] = purchase.GetAvailableTiles(), ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds) };
         }
 
         // service_buildings: placed service buildings (prefab, position) plus home/industry centroids,

@@ -93,9 +93,11 @@ namespace CitiesIIAgentBridge
             }
             int budget = RequiredInt(args,"maxCost"); if (budget < 0) throw new ArgumentException("invalid_budget");
             tileOperation = ConstructionAccess.Begin("purchase_tiles"); pendingTiles = tiles.ToArray(); tileBudget = budget; tileDeadline = DateTime.UtcNow.AddSeconds(10);
+            tilePreviewOnly = (bool?)args["previewOnly"] == true;
             w.GetExistingSystemManaged<MapTilePurchaseSystem>().selecting = true;
             return ConstructionAccess.Status(tileOperation);
         }
+        private bool tilePreviewOnly;
         private void TileTick()
         {
             if (tileOperation == null) return;
@@ -108,9 +110,16 @@ namespace CitiesIIAgentBridge
                     if (q.IsEmptyIgnoreFilter) return;
                     var selected = em.GetBuffer<SelectionElement>(q.GetSingletonEntity()); selected.Clear(); foreach (var tile in pendingTiles) selected.Add(new SelectionElement { m_Entity = tile });
                     ConstructionAccess.Call(typeof(MapTilePurchaseSystem),system,"UpdateStatus");
+                    // Price and upkeep are reported even when the purchase is refused or only previewed.
+                    ConstructionAccess.Results[tileOperation]["cost"] = system.cost; ConstructionAccess.Results[tileOperation]["upkeep"] = system.upkeep;
+                    if (tilePreviewOnly)
+                    {
+                        ConstructionAccess.Results[tileOperation]["previewOnly"] = true; ConstructionAccess.Results[tileOperation]["purchaseStatus"] = system.status.ToString();
+                        ConstructionAccess.Finish(tileOperation, "complete"); system.selecting = false; tileOperation = null; pendingTiles = null; return;
+                    }
                     if (system.status != TilePurchaseErrorFlags.None) throw new InvalidOperationException("tile_purchase_rejected: " + system.status);
                     if (system.cost > tileBudget) throw new InvalidOperationException("tile_cost_exceeds_budget");
-                    ConstructionAccess.Results[tileOperation]["cost"] = system.cost; system.PurchaseSelection();
+                    system.PurchaseSelection();
                     foreach (var tile in pendingTiles) if (em.HasComponent<Native>(tile)) throw new InvalidOperationException("tile_purchase_not_observed");
                     ConstructionAccess.Results[tileOperation]["tiles"] = new JArray(pendingTiles.Select(NativeBuild.Id));
                     ConstructionAccess.Finish(tileOperation,"complete");

@@ -56,6 +56,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - `build_road` attaches to an existing edge when `start` has `index`, `version` and `curvePosition` (0 to 1). Otherwise native snapping joins endpoints at or near existing nodes. Crossing roads split each other automatically.
 - `game_rejected_placement` lists `placementErrors`. Entries whose prefab differs from your road are blockers; run `inspect_entity` on them. Example: `PowerLinePylon47m01`. Fix by shifting the road (roads may pass under power lines, not through pylons).
 - Actual cost is about **₡4 per metre** for Small Road (₡896 per 220 m). Use `maxCost` of about ₡8k per road. `maxCost` must be at least 1 at execution, although `plan_neighborhood` accepts 0.
+- The city's single highway ramp is the traffic bottleneck: edge flow is 1-5% around it (`traffic_hotspots`).
 
 ### Zoning: the main time sink
 - Each road side creates **zone blocks** of up to 8 × 6 cells (8 m). Where blocks from perpendicular roads overlap, the game keeps one and flags the other's cells `Blocked`. **Blocked cells can never be zoned**, and `zone_rectangle` on them returns `no_zone_cells_in_rectangle`. That is a correct no-op, not a failure.
@@ -63,6 +64,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Use a **block-attached start** (`start.index/version` = the block) so the rectangle follows the block's axes. Otherwise the camera orientation decides, which is unpredictable.
 - A rectangle can spill into neighbouring overlapping blocks, so the per-step "changedCells" can exceed the block's size. Verify by re-reading cells; don't sum the operation results.
 - Zoning costs nothing and never consumes `maxCost`.
+- Direct zoning (`zone_area`) writes the cells and tags their blocks `Updated` in one frame. The tool path (`tool: true`) costs about 10 frames per block.
 
 ### Batches and neighbourhood plans
 - `batch_execute` is sequential and **stops at the first failure**, with no rollback. One harmless `no_zone_cells_in_rectangle` used to abort 50 good steps. `Invoke-BridgeSteps` resumes past that specific proven no-op only.
@@ -71,11 +73,16 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Connectors: diagonal links into an already-built area usually hit houses. Prefer a straight extension of a dead end to the nearest point on the new grid's perimeter. `grid.ps1` tries candidates by distance until a plan validates.
 
 ### Simulation
+- A game tool operation (road, zone rectangle) costs about 10 frames. Merge operations: one road per grid line, not per block side (FAILURES #49).
 - `simulate_step` allows at most 60 s of wall time. Chain steps; overhead is about 1 s per step. Speed 4 is the maximum and gives about 11.7k frames per 50 s.
 - Stop reasons: `wall_deadline` and `frame_limit` are normal. `cash_floor`, `new_utility_shortage`, `population_changed`, `demand_changed`, `simulation_stalled`, `game_paused`, `control_stopped` and `city_changed` need a look.
 - To stop a run safely: kill the client loop first so no new step starts, then `cancel_simulation_step`. It returns `paused:true`; confirm with `get_city_state` (`selectedSpeed` 0).
 - Growth follows **zoned capacity**. With residential demand at 100, population went 127 → 201 → 281 → 316 and then flattened (+1, +3 per 50 s) once the zoned lots filled. When `delta.population` stalls while demand is high, zone more land; don't just simulate longer.
 - `analysisPausesGame: true`: **any** read command (even `get_build_prefabs`) pauses the game, ending the active step with `game_paused`. Never query while `run-session.ps1` is running; wait for it to finish.
+
+### Service budgets
+- The budget slider scales wages, not just prefab upkeep. Health & Deathcare cost about 2,800 per budget point (65 -> 100 = +97k); Fire & Rescue about 260 per point. Real running cost of a service building was about 2.7x its prefab `monthlyUpkeep`.
+- Change one budget at a time and read `ServiceUpkeep` before and after (FAILURES #47).
 
 ## Pauses, popups and UI (mod 0.5.1-local)
 - CS2's `TimeUISystem` forces speed 0 every frame while the window lacks focus (`m_HasFocus`) or any UI panel subscribes to the simulation-paused barrier (tutorial cards, milestone popup, menus). Symptom: `simulate_step` ends after under 1 s with reason `game_paused`.

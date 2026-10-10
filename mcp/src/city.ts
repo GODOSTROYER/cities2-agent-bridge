@@ -7,6 +7,7 @@ import type { Json } from './bridge.ts';
 export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
 const ROAD_CAP = 8000;        // per road (a full grid line up to ~900 m); Small Road costs ~4 per metre
 const now = () => Date.now();
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 // Prefab index/version/costs by exact name, cached per city session.
 const prefabCache = new Map<string, Json>(); let cacheCity = '';
@@ -92,15 +93,21 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
 
     const rect = { x0: plan.bounds[0], z0: plan.bounds[1], x1: plan.bounds[2], z1: plan.bounds[3] };
     // Direct zoning in the mod: every Visible unzoned cell of the area in one frame (the same
-    // cell write the game's zone tool applies). Verified below; leftovers fall back to the
-    // native zone tool, one rectangle per block.
-    const z = await callOk('zone_area', { ...rect, zone: zoneName }, 30);
-    let zoneStatus = z.mode === 'direct' ? 'complete' : 'nothing_to_zone'; let zoneMode = z.mode ?? 'none'; let zoneOps = 0;
-    if (z.batch) { zoneStatus = (await waitBatch(z.batch, 300)).status; zoneOps = Number(z.steps ?? 0); }
-    if (Number(z.zonable ?? 0) > 0 && (await callOk('zone_area_count', rect, 10)).zonable > 0) {
+    // cell write the game's zone tool applies). The game creates zone blocks a few frames
+    // after the roads, so wait until the zonable count settles, zone, re-count and repeat;
+    // the native zone tool (one rectangle per block) is the last resort.
+    const settle = async () => { let last = -1; for (let k = 0; k < 12; k++) { const c = Number((await callOk('zone_area_count', rect, 10)).zonable); if (c === last && c > 0) return c; last = c; await sleep(150); } return last; };
+    let zonableTotal = 0, zoneStatus = 'nothing_to_zone', zoneMode = 'none', zoneOps = 0;
+    for (let pass = 0; pass < 3; pass++) {
+      const before = await settle(); if (before <= 0) break;
+      const z = await callOk('zone_area', { ...rect, zone: zoneName }, 30);
+      zonableTotal += Number(z.applied ?? 0); zoneStatus = 'complete'; zoneMode = 'direct' + (pass ? `x${pass + 1}` : '');
+    }
+    if (Number((await callOk('zone_area_count', rect, 10)).zonable) > 0) {
       const z2 = await callOk('zone_area', { ...rect, zone: zoneName, tool: true, perBlock: true }, 30);
       if (z2.batch) { zoneStatus = (await waitBatch(z2.batch, 300)).status; zoneMode += '+tool'; zoneOps += Number(z2.steps ?? 0); }
     }
+    const z = { zonable: zonableTotal };
     phases.zone = now() - t; t = now();
 
     const checks = await multi([
@@ -111,7 +118,7 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
     phases.verify = now() - t;
     return {
       ok: linked, cost: Number(city0.money) - Number(checks[1].money), monthlyUpkeep: null,
-      roads: steps.length, shared: plan.shared, zoned: z.zonable - checks[0].zonable, leftZonable: checks[0].zonable, zone: zoneStatus, zoneMode, zoneOps,
+      roads: steps.length, shared: plan.shared, zoned: z.zonable, leftZonable: checks[0].zonable, zone: zoneStatus, zoneMode, zoneOps,
       connected: connector ? checks[2].connected : true, ...(notes.length ? { notes } : {}), ...(linked ? {} : { reason: 'grid_built_but_not_connected' }), phases,
     };
   });
@@ -138,7 +145,7 @@ export async function grow(o: GrowOptions): Promise<Json> {
     for (const site of lots.sites ?? []) {
       // Quality floor for housing: never next to industry or on polluted ground (the score only
       // ranks what is free; when everything free is bad, buy land elsewhere instead).
-      if ((pick.k === 'res' || pick.k === 'resmed') && (Number(site.toIndustry) < 250 || Number(site.pollution) > 3000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
+      if ((pick.k === 'res' || pick.k === 'resmed') && (Number(site.toIndustry) < 250 || Number(site.pollution) > 8000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
       const r = await buildGrid({ x: site.x, z: site.z, cols, rows, zone: pick.k, plan: o.plan });
       if (r.ok || r.reason === 'build_failed_partial' || r.reason === 'grid_built_but_not_connected')
         return { ...r, zone: pick.k, demand: pick.v, unemp, site: { x: site.x, z: site.z, cols, rows, score: site.score, toIndustry: site.toIndustry, pollution: site.pollution }, phases: { ...phases, ...(r.phases ?? {}) }, ...(tried.length ? { tried } : {}) };
@@ -148,11 +155,11 @@ export async function grow(o: GrowOptions): Promise<Json> {
   return { ok: false, reason: 'no_free_site', zone: pick.k, tried, hint: 'no acceptable free land: buy_tile (x,z away from industry for housing), then grow again', phases };
 }
 
-export async function zoneArea(x: number, z: number, radius: number, zone: string): Promise<Json> {
+export async function zoneArea(x: number, z: number, radius: number, zone: string, replace = false): Promise<Json> {
   const zoneName = ZONES[zone]; if (!zoneName) return { ok: false, reason: `unknown_zone:${zone}` };
   const rect = { x0: x - radius, z0: z - radius, x1: x + radius, z1: z + radius, margin: 0 };
   return mutate(async () => {
-    const t = now(); const r = await callOk('zone_area', { ...rect, zone: zoneName }, 30);
+    const t = now(); const r = await callOk('zone_area', { ...rect, zone: zoneName, ...(replace ? { replace: true } : {}) }, 30);
     let status = r.batch ? (await waitBatch(r.batch, 300)).status : (r.mode === 'direct' ? 'complete' : 'nothing_to_zone');
     let left = await callOk('zone_area_count', rect, 10);
     if (left.zonable > 0 && Number(r.zonable ?? 0) > 0) {
@@ -160,7 +167,7 @@ export async function zoneArea(x: number, z: number, radius: number, zone: strin
       if (r2.batch) status = (await waitBatch(r2.batch, 300)).status;
       left = await callOk('zone_area_count', rect, 10);
     }
-    return { ok: status !== 'failed', cost: 0, monthlyUpkeep: 0, status, zoned: r.zonable - left.zonable, leftZonable: left.zonable, blocks: r.blocks, phases: { zone: now() - t } };
+    return { ok: status !== 'failed', cost: 0, monthlyUpkeep: 0, status, zoned: Number(r.applied ?? r.zonable - left.zonable), replaced: r.replaced, leftZonable: left.zonable, blocks: r.blocks, phases: { zone: now() - t } };
   });
 }
 
@@ -206,5 +213,27 @@ export async function placeService(name: string, x: number, z: number, radius = 
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
     const reasons = [...new Set((done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []))].slice(0, 6);
     return { ok: done.status === 'complete', cost: Number(city0.money) - money1, ...costs, at: done.snappedPosition ? { x: Math.round(done.snappedPosition.x), z: Math.round(done.snappedPosition.z) } : undefined, error: done.error, ...(reasons.length ? { reasons } : {}), attempts: (done.attempts ?? []).length, phases: { plan: planMs, place: now() - t1 } };
+  });
+}
+
+// Tile purchase: adjacency/dryness ranking in the mod, the game's own price for the selection
+// previewed first (so a purchase never fails on funds), then the purchase.
+export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean }): Promise<Json> {
+  const t = now(); const n = Math.max(1, Math.min(3, o.n ?? 1));
+  const [opts, city0] = await multi([{ command: 'tile_options', args: { top: Math.max(3, n), ...(o.x !== undefined && o.z !== undefined ? { x: o.x, z: o.z } : {}) } }, { command: 'get_city_state' }]);
+  const picks: Json[] = (opts.tiles ?? []).slice(0, n);
+  if (!picks.length) return { ok: false, reason: 'no_adjacent_tile', phases: { plan: now() - t } };
+  const tiles = picks.map(p => ({ index: p.index, version: p.version }));
+  const view = picks.map(p => ({ x: [p.x0, p.x1], z: [p.z0, p.z1], dry: p.dry, relief: p.relief }));
+  return mutate(async () => {
+    const pv = await callOk('purchase_tiles', { tiles, maxCost: 0, previewOnly: true }, 15); const price = await waitOperation(pv.id, 30);
+    const cost = Number(price.cost ?? 0), upkeep = Number(price.upkeep ?? 0), money = Number(city0.money), max = o.max ?? 300000;
+    const base = { cost, monthlyUpkeep: upkeep, money, tiles: view, alternatives: (opts.tiles ?? []).length, phases: { plan: now() - t } };
+    if (price.status !== 'complete') return { ok: false, reason: price.error ?? 'price_preview_failed', ...base };
+    if (o.plan) return { ok: true, plan: true, affordable: cost <= money, ...base };
+    if (cost > money) return { ok: false, reason: 'not_enough_money', short: cost - money, ...base };
+    if (cost > max) return { ok: false, reason: 'cost_exceeds_max', ...base };
+    const t1 = now(); const op = await callOk('purchase_tiles', { tiles, maxCost: max }, 15); const done = await waitOperation(op.id, 30);
+    return { ok: done.status === 'complete', error: done.error, ...base, cost: Number(done.cost ?? cost), phases: { plan: base.phases.plan, buy: now() - t1 } };
   });
 }

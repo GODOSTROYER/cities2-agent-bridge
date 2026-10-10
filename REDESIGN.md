@@ -94,6 +94,12 @@ Haiku (operator, routine events)     ──MCP tools──▶        │  mailbo
 - Extras beyond the spec: `grid_connectors`, `find_roadside_lots`, service-need escalation (snapshot `needs`, services.ps1), popup auto-resolve (`src/AutoResolve.cs`).
 - City progress (Round Rock): pop 1,427 -> 3,319; net -62k -> +128k per period; unemployment 18% -> 7.9%; milestone 5 reached.
 
+## Harness overhead (2026-10-10)
+- Full grid cycle: 64 s (PowerShell) -> 33 s (first native) -> 17 s -> 6.6 s.
+- Removed: 250 ms mod tick (now ~15 ms while busy); one road per block side, 17 roads (now one per grid line, 7 operations); one zone rectangle per block, 46 blocks = 19 s (now direct cell zoning, one frame); ~100 mailbox round trips at 200-350 ms (now single `multi` and planning queries, 12 ms polling).
+- At 6.6 s: sites 1.1 s, plan 0.2 s, preview 2.7 s, build 2.4 s, zone 0.08 s, verify 0.05 s.
+- Left: road preview and build are frame-bound (~10 frames per tool operation, ~0.35 s per road). Tile purchase and save still shell out to PowerShell. The project should calibrate upkeep with the observed ~2.7x factor (FAILURES #47).
+
 ## Phase 3: strategist and operator
 - The strategist (Claude, fresh session) reads `snapshot` + `CITYPLAN.md` every few game months and issues a small plan of typed actions.
 - The operator (Haiku) handles events: popups, power at 90%, deficits, fires. It escalates anything unusual.
