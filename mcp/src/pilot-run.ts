@@ -33,7 +33,7 @@ const log = (row: Record<string, any>) => fs.appendFile(join(dir, 'log.jsonl'), 
 const memo: PilotMemo = { last: {}, backoff: {} };
 try { Object.assign(memo, JSON.parse(await fs.readFile(join(dir, 'memo.json'), 'utf8'))); } catch { /* first run */ }
 memo.last.save = memo.last.save ?? Date.now(); // the launch already loaded a fresh save
-const did: string[] = []; let lastProgress = 0; let failures = 0; let attention: string[] = [];
+const did: string[] = []; let lastProgress = 0; let failures = 0; let attention: string[] = []; const sticky: string[] = []; // things only the agent can resolve
 await fs.unlink(join(dir, 'STOP')).catch(() => {});
 console.log('pilot running, cycle', cycleMs / 1000, 's');
 
@@ -46,7 +46,7 @@ while (!existsSync(join(dir, 'STOP'))) {
     const snap = await tool('snapshot', {}, 60_000);
     if (snap.error || !snap.city) throw new Error(`snapshot_failed:${snap.error ?? 'no city'}`);
     failures = 0;
-    const now = Date.now(); const plan = decide(snap, memo, now); attention = plan.attention;
+    const now = Date.now(); const plan = decide(snap, memo, now); attention = [...plan.attention, ...sticky.slice(-4)];
     const milestone = Number(snap.milestone?.achieved ?? NaN); const reached = memo.milestone !== undefined && milestone > memo.milestone;
     for (const a of plan.actions) {
       if (existsSync(join(dir, 'STOP'))) break;
@@ -54,7 +54,8 @@ while (!existsSync(join(dir, 'STOP'))) {
       try { result = await tool(a.tool, a.args); } catch (e: any) { result = { ok: false, error: String(e?.message ?? e) }; }
       const note = learn(memo, a, result, Date.now());
       if (note) did.push(`${new Date().toISOString().slice(11, 16)} ${note}`);
-      await log({ tool: a.tool, args: a.args, why: a.why, ok: result.ok, reason: result.reason ?? result.error, note, cost: result.cost });
+      await log({ tool: a.tool, args: a.args, why: a.why, ok: result.ok, reason: result.reason ?? result.error, note, cost: result.cost, ...(result.at ? { at: result.at } : {}), ...(result.missing ? { missing: result.missing } : {}), ...(result.site ? { site: { x: result.site.x, z: result.site.z } } : {}) });
+      if (result.reason === 'not_utility_connected' || result.reason === 'previous_district_unserved') sticky.push(`${a.tool}: ${result.reason} at ${JSON.stringify(result.at ?? result.districts ?? '?')} (roads built, NOT zoned)`);
     }
     if (Number.isFinite(milestone)) { if (reached) did.push(`${new Date().toISOString().slice(11, 16)} MILESTONE ${milestone}`); memo.milestone = milestone; }
     while (did.length > 40) did.shift();

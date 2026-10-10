@@ -70,9 +70,18 @@ namespace CitiesIIAgentBridge
             return g;
         }
 
-        private static JObject LinkOf(UtilityGraph g, float2 p, double radius)
+        // `only`: when given, the nearest node is chosen among these (road nodes), so a
+        // high-voltage cable passing through a district is not mistaken for its supply
+        // (FAILURES #89: a grid was left unzoned because the nearest power node was a cable's).
+        private static JObject LinkOf(UtilityGraph g, float2 p, double radius, UtilityGraph only = null)
         {
-            var n = g.Nearest(p, radius, out double d);
+            Entity n = Entity.Null; double d = double.MaxValue;
+            if (only == null) n = g.Nearest(p, radius, out d);
+            else
+            {
+                foreach (var kv in g.Position) { if (!only.Component.ContainsKey(kv.Key)) continue; double x = math.distance(kv.Value, p); if (x < d) { d = x; n = kv.Key; } }
+                if (d > radius) n = Entity.Null;
+            }
             if (n == Entity.Null) return new JObject { ["linked"] = false, ["reason"] = g.Position.Count == 0 ? "no_network" : "no_node_within_radius", ["nearest"] = d == double.MaxValue ? null : (JToken)Math.Round(d) };
             int c = g.Component[n];
             return new JObject { ["linked"] = c == g.Main, ["nodes"] = g.Size[c], ["mainNodes"] = g.Main >= 0 ? g.Size[g.Main] : 0, ["nodeDistance"] = Math.Round(d) };
@@ -84,7 +93,8 @@ namespace CitiesIIAgentBridge
         {
             var w = RequireCity(); var em = w.EntityManager; var clock = Stopwatch.StartNew();
             var p = new float2(RequiredFloat(args, "x"), RequiredFloat(args, "z")); double radius = args["radius"] == null ? 200 : RequiredFloat(args, "radius");
-            var power = LinkOf(BuildUtilityGraph(em, "power"), p, radius); var water = LinkOf(BuildUtilityGraph(em, "water"), p, radius); var road = LinkOf(BuildUtilityGraph(em, "road"), p, radius);
+            var roads = BuildUtilityGraph(em, "road");
+            var power = LinkOf(BuildUtilityGraph(em, "power"), p, radius, roads); var water = LinkOf(BuildUtilityGraph(em, "water"), p, radius, roads); var road = LinkOf(roads, p, radius);
             int total = 0, noPower = 0, noWater = 0, noSewage = 0;
             foreach (var e in NativeBuild.Buildings(em))
             {
@@ -137,7 +147,7 @@ namespace CitiesIIAgentBridge
         {
             if (shortageStreak == null) shortageStreak = new Dictionary<string, int>();
             var needs = s["needs"] as JObject; if (needs == null) s["needs"] = needs = new JObject();
-            var em = w.EntityManager; UtilityGraph powerGraph = null, waterGraph = null;
+            var em = w.EntityManager; UtilityGraph powerGraph = null, waterGraph = null, roadGraph = null;
             foreach (string type in new[] { "electricity", "water", "sewage" })
             {
                 int n = points != null && points.TryGetValue(type, out var list) ? list.Count : 0;
@@ -146,7 +156,7 @@ namespace CitiesIIAgentBridge
                 string key = type == "electricity" ? "power" : type;
                 var centre = PointClusters.Densest(points[type].Select(q => ((double)q.x, (double)q.y)), 400, 1)[0];
                 UtilityGraph graph = key == "power" ? (powerGraph ?? (powerGraph = BuildUtilityGraph(em, "power"))) : (waterGraph ?? (waterGraph = BuildUtilityGraph(em, "water")));
-                bool linked = (bool)LinkOf(graph, new float2((float)centre.x, (float)centre.z), 150)["linked"];
+                bool linked = (bool)LinkOf(graph, new float2((float)centre.x, (float)centre.z), 150, roadGraph ?? (roadGraph = BuildUtilityGraph(em, "road")))["linked"];
                 double usePct = (double?)s["util"]?[key]?["pct"] ?? 0;
                 var d = UtilitySignals.Need(n, streak, usePct, linked);
                 var need = needs[key] as JObject; if (need == null) needs[key] = need = new JObject();
