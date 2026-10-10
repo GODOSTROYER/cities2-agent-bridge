@@ -160,6 +160,7 @@ namespace CitiesIIAgentBridge
         private sealed class LandUse
         {
             public List<float2> Homes = new List<float2>(), Air = new List<float2>(), Noise = new List<float2>();
+            public List<float2> Turbines = new List<float2>(), Large = new List<float2>();
             public List<float2> AirWind = new List<float2>();
             public NativeArray<Game.Simulation.Wind> WindMap;
             public float2 WindAt(float2 p) => WindMap.IsCreated ? WindSystem.GetWind(new float3(p.x, 0, p.y), WindMap).m_Wind : float2.zero;
@@ -194,6 +195,8 @@ namespace CitiesIIAgentBridge
                 var p = em.GetComponentData<Game.Objects.Transform>(e).m_Position.xz; var pe = em.GetComponentData<PrefabRef>(e).m_Prefab; string name = ps.GetPrefabName(pe) ?? "";
                 if (em.HasComponent<ResidentialProperty>(e)) { land.Homes.Add(p); continue; }
                 bool zoned = em.HasComponent<CommercialProperty>(e) || em.HasComponent<IndustrialProperty>(e) || em.HasComponent<OfficeProperty>(e);
+                if (SiteRules.IsTurbine(name)) land.Turbines.Add(p);
+                else if (!zoned && em.HasComponent<BuildingData>(pe)) { var lot = em.GetComponentData<BuildingData>(pe).m_LotSize; if (lot.x * lot.y >= 100) land.Large.Add(p); }
                 var pol = PrefabPollution(em, pe);
                 if (SiteRules.IsAirSource(name, em.HasComponent<IndustrialProperty>(e), pol.air)) { land.Air.Add(p); land.AirWind.Add(land.WindAt(p)); }
                 if (!zoned && SiteRules.IsNoiseSource(name, pol.noise)) land.Noise.Add(p);

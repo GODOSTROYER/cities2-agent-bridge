@@ -47,6 +47,7 @@ namespace CitiesIIAgentBridge
                 foreach (var r in refs) { string n = ps.GetPrefabName(r.m_Prefab) ?? "?"; icons[n] = icons.TryGetValue(n, out var c) ? c + 1 : 1; }
             foreach (var pair in icons)
             {
+                if (ServiceSignals.IsNetworkWarning(pair.Key)) continue; // its own need (network), not a capacity signal
                 string k = ServiceSignals.ServiceForText(pair.Key); if (k == null) continue;
                 var n = Need(k); n["icons"] = ((int?)n["icons"] ?? 0) + pair.Value;
             }

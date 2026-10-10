@@ -9,7 +9,9 @@ namespace CitiesIIAgentBridge
     // 2 road, 3 outside owned land.
     internal sealed class OccupancyGrid
     {
-        public const byte Free = 0, Lot = 1, Road = 2, Outside = 3;
+        // Highway is a barrier (FAILURES #70, #83): a surface road may cross ordinary roads, never a
+        // highway carriageway or ramp. Crossing one takes an explicit tunnel or bridge.
+        public const byte Free = 0, Lot = 1, Road = 2, Outside = 3, Highway = 4;
         public readonly double MinX, MinZ, Cell;
         public readonly int W, H;
         public readonly byte[] Grid;
@@ -103,7 +105,7 @@ namespace CitiesIIAgentBridge
                 for (int i = ci - r; i <= ci + r; i++) for (int j = cj - r; j <= cj + r; j++)
                 {
                     if (!InBounds(i, j)) return false;
-                    byte v = this[i, j]; if (v == Lot || v == Outside) return false;
+                    byte v = this[i, j]; if (v == Lot || v == Outside || v == Highway) return false;
                 }
             }
             return true;
@@ -174,7 +176,7 @@ namespace CitiesIIAgentBridge
                 for (int i = i0 - r; i < i0 + stride + r; i++) for (int j = j0 - r; j < j0 + stride + r; j++)
                 {
                     if (!occ.InBounds(i, j)) return true;
-                    byte v = occ[i, j]; if (v == OccupancyGrid.Lot || v == OccupancyGrid.Outside) return true;
+                    byte v = occ[i, j]; if (v == OccupancyGrid.Lot || v == OccupancyGrid.Outside || v == OccupancyGrid.Highway) return true;
                 }
                 return false;
             }
@@ -278,7 +280,10 @@ namespace CitiesIIAgentBridge
         public const double SourceMin = 5000;
         public static bool IsAirSource(string prefab, bool industrial, double air = -1)
             => industrial || (air >= 0 ? air >= SourceMin : prefab != null && AirName.IsMatch(prefab) && prefab.IndexOf("WindTurbine", StringComparison.Ordinal) < 0 && prefab.IndexOf("GasStation", StringComparison.Ordinal) < 0);
-        public static bool IsNoiseSource(string prefab, double noise = -1) => noise >= 0 ? noise >= SourceMin : prefab != null && NoiseName.IsMatch(prefab);
+        // Noise: only the loud ones (turbine 20,000, coal plant 30,000). A school or a fire house is
+        // noisy too but belongs among homes, so the bar is 15,000, not 5,000.
+        public const double NoiseSourceMin = 15000;
+        public static bool IsNoiseSource(string prefab, double noise = -1) => noise >= 0 ? noise >= NoiseSourceMin : prefab != null && NoiseName.IsMatch(prefab);
 
         // True when the target lies in the plume the wind (wx, wz) blows from the source: within
         // `length` metres and inside a cone of about 35 degrees either side of the wind.
@@ -300,6 +305,17 @@ namespace CitiesIIAgentBridge
             if (ground >= GroundMax) return "ground";
             if (downwindOfAirSource) return "downwind";
             return null;
+        }
+
+        // A wind turbine claims far more room than its 24 m lot: the game refused a coal plant
+        // whose lot edge was about 60 m from a turbine, and a turbine 90 m from the plant
+        // (FAILURES #81). Centre-to-centre clearance used by the roadside finder.
+        public const double TurbineClear = 190, TurbineToTurbine = 110;
+        public static bool IsTurbine(string prefab) => prefab != null && prefab.IndexOf("WindTurbine", StringComparison.Ordinal) >= 0;
+        public static string TurbineReject(bool placingTurbine, double toTurbine, double toLargeBuilding)
+        {
+            if (placingTurbine) return toTurbine < TurbineToTurbine ? "turbine_clearance" : toLargeBuilding < TurbineClear ? "turbine_clearance" : null;
+            return toTurbine < TurbineClear ? "turbine_clearance" : null;
         }
 
         // Why a polluting or noisy building is refused at a site, or null.

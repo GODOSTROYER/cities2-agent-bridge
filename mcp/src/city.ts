@@ -3,7 +3,7 @@
 // non-pausing (the simulation keeps running), and the game is paused only inside mutate().
 import { call, callOk, multi, mutate, waitBatch, waitOperation, readSession } from './bridge.ts';
 import type { Json } from './bridge.ts';
-import { spendVerdict, growClass, blockingNeeds, utilityOutcome } from './budget.ts';
+import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater } from './budget.ts';
 import type { SpendClass } from './budget.ts';
 
 export const ZONES: Record<string, string> = { res: 'NA Residential Low', resmed: 'NA Residential Medium Row', com: 'NA Commercial Low', ind: 'Industrial Manufacturing', off: 'Office Low' };
@@ -212,22 +212,22 @@ export async function buildGrid(o: GridOptions): Promise<Json> {
   });
 }
 
-// Postcondition for every road, cable and pipe build (FAILURES #77): look at the network ends
-// at each given point. A cable or pipe end where only its own edge arrives is loose; a road
-// end is loose when the road is an island cut off from the main road network.
-export async function looseEnds(points: { x: number; z: number }[], radius = 14): Promise<Json[]> {
+// Postcondition for every road, cable and pipe build (FAILURES #77, #82): a cable or pipe end
+// is loose when the game shows its "not connected" icon there; a road end is loose when the
+// road is an island cut off from the main road network.
+export async function looseEnds(points: { x: number; z: number }[], radius = 16): Promise<Json[]> {
   if (!points.length) return [];
-  const answers = await multi(points.map(p => ({ command: 'network_ends', args: { x: p.x, z: p.z, radius } })));
-  const loose: Json[] = [];
-  answers.forEach((a: Json, i: number) => {
-    const ends: Json[] = a?.ends ?? [];
-    if (!ends.length) { loose.push({ x: Math.round(points[i].x), z: Math.round(points[i].z), why: 'no_network_end_here' }); return; }
-    for (const e of ends) if (e.loose) loose.push({ x: e.x, z: e.z, kind: e.kind, prefab: e.prefab, why: e.island ? 'road_not_joined_to_the_main_network' : 'end_not_connected' });
-  });
-  return loose.filter((l, i) => loose.findIndex(o => o.x === l.x && o.z === l.z) === i);
+  const [icons, ...ends] = await multi([{ command: 'notifications', args: { type: 'Not Connected', top: 100 } }, ...points.map(p => ({ command: 'network_ends', args: { x: p.x, z: p.z, radius } }))]);
+  return looseFrom(points, icons?.items ?? [], ends.map((e: Json) => e?.ends));
 }
 
-const LINES: Record<string, string> = { power_low: 'Low-voltage Ground Cable', power_high: 'High-voltage Ground Cable', water: 'Small Water Pipe', sewage: 'Small Sewage Pipe', pipe: 'Combined Small Pipe' };
+// Water under a planned line (non-pausing terrain samples).
+export async function waterUnder(from: { x: number; z: number }, to: { x: number; z: number }): Promise<Json> {
+  const pts = linePoints(from, to); const r = await callOk('sample_terrain', { points: pts }, 20);
+  return wetSpan(pts, (r.samples ?? []).map((q: Json) => q.waterDepth));
+}
+
+const LINES: Record<string, string> = { power_low: 'Low-voltage Ground Cable', power_high: 'High-voltage Ground Cable', power_high_overhead: 'High-voltage Line', power_low_overhead: 'Low-voltage Line', water: 'Small Water Pipe', sewage: 'Small Sewage Pipe', pipe: 'Combined Small Pipe' };
 
 // One cable or pipe between two points (ends snap to the networks and terminals there), with
 // the both-ends-connected postcondition: ok only when neither end is loose afterwards.
@@ -235,6 +235,11 @@ export async function buildLine(kind: string, from: { x: number; z: number }, to
   const name = LINES[kind] ?? kind; const net = await prefab(name, 'network');
   if (!net.found) return { ok: false, reason: 'line_prefab_not_found', similar: net.similar, kinds: Object.keys(LINES) };
   if (net.locked) return { ok: false, reason: 'line_prefab_locked', prefab: name };
+  // Never lay a ground cable or pipe across water: it dams the river (FAILURES #84).
+  if (!spansWater(name)) {
+    const water = await waterUnder(from, control ?? to); const water2 = control ? await waterUnder(control, to) : { wet: false };
+    if (water.wet || water2.wet) return { ok: false, reason: 'crosses_water', water: water.wet ? water : water2, prefab: name, hint: 'a ground cable or pipe across water acts as a dam: use power_high_overhead / power_low_overhead for the wet stretch, or route around' };
+  }
   const args = { prefabIndex: net.index, prefabVersion: net.version, start: from, end: to, maxCost: 60000, ...(control ? { control, mode: 'curve' } : {}) };
   return mutate(async () => {
     const pv = await call('build_network', { ...args, previewOnly: true }, 15);
@@ -244,7 +249,9 @@ export async function buildLine(kind: string, from: { x: number; z: number }, to
     if (plan) return { ok: true, plan: true, prefab: name, previewCost: pvDone.previewCost };
     const op = await callOk('build_network', args, 15); const done = await waitOperation(op.id, 60);
     if (done.status !== 'complete') return { ok: false, reason: 'line_build_failed', error: done.error, reasons: reasons(done) };
-    const dangling = await looseEnds([from, to]);
+    // The game clears a warning icon a few frames after the join: re-read before reporting.
+    let dangling = await looseEnds([from, to]);
+    for (let k = 0; k < 3 && dangling.length; k++) { await sleep(400); dangling = await looseEnds([from, to]); }
     return { ok: dangling.length === 0, ...(dangling.length ? { partial: true, reason: 'loose_end', dangling } : {}), prefab: name, cost: Number(done.previewCost ?? 0), costSource: 'quoted', created: (done.createdRoads ?? []).length };
   });
 }
@@ -309,7 +316,7 @@ export async function zoneArea(x: number, z: number, radius: number, zone: strin
 }
 
 // Shortest lot-free straight road from the existing network to (x,z), previewed then built.
-export async function link(x: number, z: number, roadName = 'Small Road', maxCost = 60000, plan = false): Promise<Json> {
+export async function link(x: number, z: number, roadName = 'Small Road', maxCost = 60000, plan = false, overWater = false): Promise<Json> {
   const t = now(); const road = await prefab(roadName, 'network');
   if (!road.found) return { ok: false, reason: 'road_not_found', similar: road.similar };
   if (road.locked) return { ok: false, reason: 'road_locked' };
@@ -323,6 +330,8 @@ export async function link(x: number, z: number, roadName = 'Small Road', maxCos
       const pv = await call('build_road', { ...args, previewOnly: true }, 15);
       const pvDone = pv.ok ? await waitOperation(pv.result.id, 30) : { status: 'failed', error: pv.error };
       if (pvDone.status !== 'complete') { tried.push(`${Math.round(c.d)}m:${pvDone.error ?? 'rejected'}`); continue; }
+      const water = await waterUnder(connectorStart(c), { x, z });
+      if (water.wet && water.deepest > 2 && !overWater) { tried.push(`${Math.round(c.d)}m:crosses_water(${water.metres}m, ${water.deepest}m deep)`); continue; }
       if (plan) return { ok: true, plan: true, length: Math.round(c.d), previewCost: pvDone.previewCost, from: c.from, phases: { plan: planMs, preview: now() - t1 } };
       const op = await callOk('build_road', args, 15); const done = await waitOperation(op.id, 60);
       const money1 = Number((await callOk('get_city_state', {}, 10)).money);

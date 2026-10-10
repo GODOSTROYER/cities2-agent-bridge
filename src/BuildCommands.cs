@@ -82,8 +82,14 @@ namespace CitiesIIAgentBridge
             float elevation = args["elevation"] == null ? 0 : RequiredFloat(args,"elevation");
             if (elevation < -100 || elevation > 100) throw new ArgumentException("elevation_out_of_range");
             roadTool.RequestedElevation = elevation;
-            a.m_Elevation = b.m_Elevation = elevation; a.m_HitPosition.y += elevation; b.m_HitPosition.y += elevation;
-            a.m_Position.y += elevation; b.m_Position.y += elevation;
+            // startElevation / endElevation give each end its own height (a ramp from the ground into
+            // a tunnel or onto a bridge), so every leg of a crossing can be previewed before any
+            // leg is built (FAILURES #80). `elevation` alone still applies to both ends.
+            float ea = args["startElevation"] == null ? elevation : RequiredFloat(args, "startElevation"), eb = args["endElevation"] == null ? elevation : RequiredFloat(args, "endElevation");
+            if (ea < -100 || ea > 100 || eb < -100 || eb > 100) throw new ArgumentException("elevation_out_of_range");
+            if (args["startElevation"] != null || args["endElevation"] != null) roadTool.RequestedElevation = eb;
+            a.m_Elevation = ea; b.m_Elevation = eb; a.m_HitPosition.y += ea; b.m_HitPosition.y += eb;
+            a.m_Position.y += ea; b.m_Position.y += eb;
             // Only two shapes are supported; anything else is refused instead of being built straight.
             string shape = (string)args["mode"];
             if (shape != null && shape != "straight" && shape != "curve") throw new ArgumentException("unsupported_curve_mode: straight or curve");

@@ -128,6 +128,9 @@ internal static class ServiceSignalsTests
         Check(!UtilitySignals.LooseEnd(true, 1, false) && UtilitySignals.LooseEnd(true, 1, true), "a road dead end is fine, a road island is loose");
         Check(UtilitySignals.LooseEnd(false, 1, false) && !UtilitySignals.LooseEnd(false, 2, false), "a cable or pipe end with only its own edge is loose");
 
+        Check(!ServiceSignals.IsNetworkWarning("Road Outside Connection") && !ServiceSignals.IsNetworkWarning("Electricity Outside Connection") && ServiceSignals.IsNetworkWarning("No Outside Connection"), "outside-connection markers are not warnings; a missing outside connection is");
+        Check(ServiceSignals.NeedForIcon("Electricity Bottleneck Notification") == "power" && ServiceSignals.NeedForIcon("Traffic Bottleneck Notification") == "traffic", "an electricity bottleneck is a power need, not traffic");
+
         // Persistent icons escalate by duration and count.
         Check(ServiceSignals.PersistencePoints(5, 0) == 0 && ServiceSignals.PersistencePoints(5, 10000) == 0, "fresh icons add nothing");
         Check(ServiceSignals.PersistencePoints(5, 20000) == 1, "three or more icons for a sixteenth of a day add one point");

@@ -161,9 +161,23 @@ internal static class PlanningTests
         Check(SiteRules.IsAirSource("IndustrialManufacturing_x", true) && !SiteRules.IsAirSource("ElementarySchool01", false), "industry pollutes the air, a school does not");
         Check(!SiteRules.IsAirSource("NA_CommercialGasStation01_L2_4x6", false, 0) && !SiteRules.IsAirSource("NA_CommercialGasStation01_L2_4x6", false), "a petrol station is not an air source (prefab data 0; the name 'Gas' no longer matches)");
         Check(SiteRules.IsAirSource("SewageOutlet01", false, 5000) && SiteRules.IsNoiseSource("WindTurbine01", 20000) && !SiteRules.IsNoiseSource("NA_CommercialGasStation01", 240), "prefab pollution data decides when known: 5,000 or more is a source");
+        Check(!SiteRules.IsNoiseSource("HighSchool01", 5000) && SiteRules.IsNoiseSource("SmallCoalPowerPlant01", 30000), "a moderately noisy service building (school) is not kept away from homes; the bar for noise is 15,000");
         Check(SiteRules.PolluterReject(120, 0, false) == "near_homes", "a noisy building is refused within 300 m of homes");
         Check(SiteRules.PolluterReject(500, 14, true) == "homes_downwind", "an air polluter is refused with homes in its plume");
         Check(SiteRules.PolluterReject(500, 14, false) == null && SiteRules.PolluterReject(500, 0, true) == null, "clear sites are accepted");
+
+        Check(SiteRules.TurbineReject(false, 142, 9999) == "turbine_clearance", "the live case: a coal plant 142 m from a turbine is refused by the game, so the finder refuses it");
+        Check(SiteRules.TurbineReject(false, 250, 9999) == null, "a building 250 m from the nearest turbine is fine");
+        Check(SiteRules.TurbineReject(true, 119, 9999) == null && SiteRules.TurbineReject(true, 60, 9999) == "turbine_clearance", "turbines 119 m apart worked live; 60 m is refused");
+        Check(SiteRules.TurbineReject(true, 9999, 90) == "turbine_clearance", "a turbine 90 m from a large building is refused (live: beside the coal plant)");
+        Check(SiteRules.IsTurbine("WindTurbine01") && !SiteRules.IsTurbine("SmallCoalPowerPlant01") && !SiteRules.IsTurbine(null), "turbines are recognised by prefab name");
+
+        var hw = new OccupancyGrid(0, 0, 400, 400, 4);
+        hw.FillSegment(200, 0, 200, 400, 10, OccupancyGrid.Highway);
+        hw.FillSegment(0, 300, 190, 300, 6, OccupancyGrid.Road);
+        Check(!hw.SegmentFree(100, 100, 300, 100), "a link road may not cross a highway carriageway at grade");
+        Check(hw.SegmentFree(20, 100, 20, 350), "a link road may still cross an ordinary road");
+        Check(hw.SegmentFree(20, 100, 150, 100), "a link road on one side of the highway is free");
 
         return count;
     }

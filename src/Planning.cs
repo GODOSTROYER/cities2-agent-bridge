@@ -89,7 +89,7 @@ namespace CitiesIIAgentBridge
             foreach (var edge in edges)
             {
                 float3 prev = edge.Curve.a;
-                for (int s = 1; s <= 8; s++) { var cur = BezierAt(edge.Curve, s / 8f); occ.FillSegment(prev.x, prev.z, cur.x, cur.z, edge.HalfWidth, OccupancyGrid.Road); prev = cur; }
+                for (int s = 1; s <= 8; s++) { var cur = BezierAt(edge.Curve, s / 8f); occ.FillSegment(prev.x, prev.z, cur.x, cur.z, edge.HalfWidth, edge.Highway ? OccupancyGrid.Highway : OccupancyGrid.Road); prev = cur; }
             }
             return occ;
         }
@@ -271,7 +271,7 @@ namespace CitiesIIAgentBridge
             // plume are refused for air sources; the remaining ones are ordered by distance.
             string polluter = (string)args["polluter"];
             if (polluter == null && prefab != null) { var pp = PrefabPollution(em, PrefabByName(w, prefab)); polluter = SiteRules.IsAirSource(prefab, false, pp.air) ? "air" : SiteRules.IsNoiseSource(prefab, pp.noise) ? "noise" : null; }
-            var land = polluter != null ? ReadLandUse(w) : null; var siteRejects = new SortedDictionary<string, int>();
+            var land = ReadLandUse(w); var siteRejects = new SortedDictionary<string, int>(); bool placingTurbine = SiteRules.IsTurbine(prefab);
             var owned = OwnedTiles(em); var edges = RoadEdges(w);
             double pad = radius + hw + hd + 120;
             var occ = BuildOccupancy(w, owned, edges, x - pad, z - pad, x + pad, z + pad, out int lots);
@@ -311,14 +311,18 @@ namespace CitiesIIAgentBridge
                         found.Add((d, new JObject { ["position"] = new JObject { ["x"] = Math.Round(cx, 1), ["z"] = Math.Round(cz, 1) }, ["rotation"] = Math.Round(rot, 2), ["roadEdge"] = NativeBuild.Id(e.Entity) }));
                     }
             }
-            if (land != null)
+            if (polluter != null || placingTurbine || land.Turbines.Count > 0)
             {
                 var kept = new List<(double d, JObject row)>();
                 foreach (var f in found.OrderBy(f => f.d).Take(400))
                 {
                     double cx = (double)f.row["position"]["x"], cz = (double)f.row["position"]["z"]; double toHomes = MinDistance(land.Homes, cx, cz);
-                    int downwindHomes = polluter == "air" && toHomes >= SiteRules.PolluterHomeClear ? land.HomesDownwind(cx, cz) : 0;
-                    string why = SiteRules.PolluterReject(toHomes, downwindHomes, polluter == "air");
+                    string why = SiteRules.TurbineReject(placingTurbine, MinDistance(land.Turbines, cx, cz), MinDistance(land.Large, cx, cz));
+                    if (why == null && polluter != null)
+                    {
+                        int downwindHomes = polluter == "air" && toHomes >= SiteRules.PolluterHomeClear ? land.HomesDownwind(cx, cz) : 0;
+                        why = SiteRules.PolluterReject(toHomes, downwindHomes, polluter == "air");
+                    }
                     if (why != null) { siteRejects[why] = siteRejects.TryGetValue(why, out int had) ? had + 1 : 1; continue; }
                     f.row["toHomes"] = Math.Round(toHomes); kept.Add(f);
                 }

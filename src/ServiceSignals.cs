@@ -38,6 +38,8 @@ namespace CitiesIIAgentBridge
         {
             if (string.IsNullOrEmpty(type)) return false;
             string t = type.ToLowerInvariant();
+            // "Road Outside Connection" and its siblings are map markers, not warnings.
+            if (t.EndsWith("outside connection") && !t.StartsWith("no ")) return false;
             return t.Contains("not connected") || t.Contains("dead end") || t.Contains("deadend") || t.Contains("connection") || t.Contains("no outlet") || t.Contains("no inlet");
         }
 
@@ -58,6 +60,7 @@ namespace CitiesIIAgentBridge
         internal static string NeedForIcon(string type)
         {
             if (IsNetworkWarning(type)) return "network";
+            if (type != null && type.StartsWith("Electricity", StringComparison.OrdinalIgnoreCase)) return "power"; // "Electricity Bottleneck" is not traffic
             string known = ServiceForText(type); if (known != null) return known;
             string t = (type ?? "").ToLowerInvariant();
             if (t.Contains("road") || t.Contains("pedestrian") || t.Contains("dead end") || t.Contains("connection") || t.Contains("track")) return "access";

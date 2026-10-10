@@ -196,12 +196,12 @@ server.registerTool('grow', {
 
 server.registerTool('link', {
   description: 'Shortest lot-free straight road from the existing network to (x,z), previewed by the game and then built; connects grids or adds arterials. plan=true previews only.',
-  inputSchema: { x: z.number(), z: z.number(), road: z.string().optional(), max: z.number().int().optional(), plan: z.boolean().optional() },
+  inputSchema: { x: z.number(), z: z.number(), road: z.string().optional(), max: z.number().int().optional(), plan: z.boolean().optional(), overWater: z.boolean().optional().describe('allow a connector over water deeper than 2 m (the game builds a bridge; check the water level on both sides afterwards)') },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await link(a.x, a.z, a.road ?? 'Small Road', a.max ?? 60000, !!a.plan), cleared));
+    return ok(withCleared(await link(a.x, a.z, a.road ?? 'Small Road', a.max ?? 60000, !!a.plan, !!a.overWater), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -436,7 +436,7 @@ server.registerTool('relocate_building', {
 });
 
 server.registerTool('build_line', {
-  description: 'Builds one cable or pipe between two points (kind: power_low, power_high, water, sewage, pipe, or a network prefab name); the ends snap to the road, pipe, cable or building terminal there. Previewed by the game first. Postcondition: both ends must be connected; a loose end returns partial with its position. Use it for the network need in the snapshot (loose cable/pipe icons) and to join a district the snapshot reports as not connected.',
+  description: 'Builds one cable or pipe between two points (kind: power_low, power_high, power_high_overhead, power_low_overhead, water, sewage, pipe, or a network prefab name; ground cables and pipes are refused across water, use the overhead kinds there); the ends snap to the road, pipe, cable or building terminal there. Previewed by the game first. Postcondition: both ends must be connected; a loose end returns partial with its position. Use it for the network need in the snapshot (loose cable/pipe icons) and to join a district the snapshot reports as not connected.',
   inputSchema: { kind: z.string(), fromX: z.number(), fromZ: z.number(), toX: z.number(), toZ: z.number(), viaX: z.number().optional(), viaZ: z.number().optional(), plan: z.boolean().optional() },
 }, async (a) => {
   try {

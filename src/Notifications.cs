@@ -20,7 +20,11 @@ namespace CitiesIIAgentBridge
         private struct IconRow { public string Type; public float X, Z; public Entity Owner; }
 
         // "Leveling Building" is the level-up marker, not a problem.
-        private static bool IsProblemIcon(string type) => type != null && type.IndexOf("Leveling", StringComparison.OrdinalIgnoreCase) < 0;
+        // Markers the game also draws as icons (selection, level-up, mood, outside-connection
+        // signs) are not problems and must not be counted or clustered.
+        private static readonly HashSet<string> MarkerIcons = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Selected", "Followed", "Happy Face", "Sad Face", "Building Level Up", "ValentineHeart", "Work Location", "Work Stop" };
+        private static bool IsProblemIcon(string type) => type != null && type.IndexOf("Leveling", StringComparison.OrdinalIgnoreCase) < 0 && !MarkerIcons.Contains(type)
+            && !(type.EndsWith("Outside Connection", StringComparison.OrdinalIgnoreCase) && !type.StartsWith("No ", StringComparison.OrdinalIgnoreCase));
 
         private static List<IconRow> ReadIcons(World w)
         {

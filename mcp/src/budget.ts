@@ -49,3 +49,39 @@ export function utilityOutcome(u: Record<string, any> | undefined): { ok: boolea
   if (u.verdict === 'unserved') return { ok: false, reason: 'buildings_unserved' };
   return { ok: true };
 }
+
+// PURE. Loose ends after a road, cable or pipe build (FAILURES #82). For cables and pipes the
+// game's own warning icons decide ("Powerline Not Connected", "Pipeline Not Connected"...): they
+// appear at once, even while paused, and they know about building terminals and line-to-cable
+// joints that a count of edges at the node does not. For roads the mod's island flag decides.
+export function looseFrom(points: { x: number; z: number }[], icons: { type: string; x: number; z: number }[], ends: ({ kind: string; x: number; z: number; island?: boolean; prefab?: string }[] | undefined)[], radius = 16): Record<string, any>[] {
+  const loose: Record<string, any>[] = [];
+  points.forEach((p, i) => {
+    for (const icon of icons) if (Math.hypot(icon.x - p.x, icon.z - p.z) <= radius) loose.push({ x: icon.x, z: icon.z, why: icon.type });
+    const here = ends[i] ?? [];
+    if (!here.length) loose.push({ x: Math.round(p.x), z: Math.round(p.z), why: 'no_network_end_here' });
+    for (const e of here) if (e.kind === 'road' && e.island) loose.push({ x: e.x, z: e.z, kind: e.kind, prefab: e.prefab, why: 'road_not_joined_to_the_main_network' });
+  });
+  return loose.filter((l, i) => loose.findIndex(o => o.x === l.x && o.z === l.z && o.why === l.why) === i);
+}
+
+// PURE. Water under a planned cable, pipe or road (FAILURES #84): a ground cable laid across a
+// river raised the bed like a dam; the water rose about 8 m upstream and destroyed homes within
+// minutes. Points along the line every `step` metres; `depths` are the water depths sampled
+// there (null = no water). Returns the wet length and the deepest point.
+export function linePoints(from: { x: number; z: number }, to: { x: number; z: number }, step = 25, max = 60): { x: number; z: number }[] {
+  const len = Math.hypot(to.x - from.x, to.z - from.z); const n = Math.max(1, Math.min(max, Math.ceil(len / step)));
+  return Array.from({ length: n + 1 }, (_, i) => ({ x: Math.round(from.x + (to.x - from.x) * i / n), z: Math.round(from.z + (to.z - from.z) * i / n) }));
+}
+export function wetSpan(points: { x: number; z: number }[], depths: (number | null | undefined)[], minDepth = 0.3): { wet: boolean; metres: number; deepest: number; at?: { x: number; z: number } } {
+  let metres = 0, deepest = 0; let at: { x: number; z: number } | undefined;
+  for (let i = 0; i < points.length; i++) {
+    const d = Number(depths[i] ?? 0); if (!(d > minDepth)) continue;
+    const prev = points[Math.max(0, i - 1)], next = points[Math.min(points.length - 1, i + 1)];
+    metres += Math.hypot(next.x - prev.x, next.z - prev.z) / 2;
+    if (d > deepest) { deepest = d; at = points[i]; }
+  }
+  return { wet: metres > 0, metres: Math.round(metres), deepest: Math.round(deepest * 10) / 10, ...(at ? { at } : {}) };
+}
+// Overhead lines span water on pylons; everything laid in or on the ground must not cross it.
+export const spansWater = (prefabName: string): boolean => /(^|\s)Line$/.test(prefabName) || /Bridge/i.test(prefabName);

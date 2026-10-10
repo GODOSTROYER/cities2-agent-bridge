@@ -1,5 +1,5 @@
 // Offline checks: the owner's reserve rule, the growth blockers and the utility postcondition.
-import { spendVerdict, growClass, blockingNeeds, utilityOutcome, RESERVE } from '../src/budget.ts';
+import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, RESERVE } from '../src/budget.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 
 check(RESERVE === 1_000_000, 'the working reserve is 1,000,000');
@@ -24,4 +24,19 @@ const u = utilityOutcome({ verdict: 'not_connected', road: { linked: true }, pow
 check(!u.ok && u.reason === 'not_utility_connected' && u.missing!.join() === 'power,water', 'a district joined by road but not by power and water fails, naming what is missing');
 check(utilityOutcome({ verdict: 'unserved', road: { linked: true }, power: { linked: true }, water: { linked: true } }).reason === 'buildings_unserved', 'linked but buildings still short is reported');
 check(utilityOutcome(undefined).reason === 'utility_check_failed', 'no answer is a failure, not a pass');
+const ends = [[{ kind: 'power', x: 290, z: 762 }], [{ kind: 'power', x: -697, z: 744 }]];
+check(looseFrom([{ x: 290, z: 762 }, { x: -697, z: 744 }], [], ends).length === 0, 'the live case: a cable joined to a plant terminal and to a power line has no icon and is not loose, whatever the edge count');
+const l = looseFrom([{ x: 420, z: 640 }, { x: 420, z: 670 }], [{ type: 'Powerline Not Connected - Low', x: 420, z: 640 }, { type: 'Powerline Not Connected - Low', x: 420, z: 672 }, { type: 'Powerline Not Connected', x: -454, z: -2332 }], [[{ kind: 'power', x: 420, z: 640 }], [{ kind: 'power', x: 420, z: 670 }]]);
+check(l.length === 2 && l[0].why === 'Powerline Not Connected - Low', 'a cable with the game icon at each end is loose at both; an icon elsewhere is ignored');
+check(looseFrom([{ x: 0, z: 0 }], [], [[{ kind: 'road', x: 0, z: 0, island: true, prefab: 'Small Road' }]])[0].why === 'road_not_joined_to_the_main_network', 'a road island is loose');
+check(looseFrom([{ x: 0, z: 0 }], [], [[{ kind: 'road', x: 0, z: 0, island: false }]]).length === 0, 'an ordinary road dead end is not loose');
+check(looseFrom([{ x: 0, z: 0 }], [], [undefined])[0].why === 'no_network_end_here', 'nothing built at the point is reported');
+const pts = linePoints({ x: 290, z: 762 }, { x: -697, z: 744 });
+check(pts.length === 41 && pts[0].x === 290 && pts[40].x === -697, 'a 987 m line is sampled about every 25 m, ends included');
+const depths = pts.map(p => p.x < -400 && p.x > -600 ? 13.5 : null);
+const w = wetSpan(pts, depths);
+check(w.wet && w.metres > 150 && w.metres < 230 && w.deepest === 13.5, 'the live case: the cable to the old power line crossed about 200 m of river');
+check(!wetSpan(pts, pts.map(() => null)).wet && !wetSpan(pts, pts.map(() => 0.2)).wet, 'dry ground and puddles under 0.3 m are not water');
+check(spansWater('High-voltage Line') && spansWater('Low-voltage Line') && !spansWater('High-voltage Ground Cable') && !spansWater('Small Water Pipe') && !spansWater('Small Road'), 'only overhead lines (and bridges) may cross water');
+check(linePoints({ x: 0, z: 0 }, { x: 5000, z: 0 }).length === 61, 'a very long line is capped at 60 steps');
 process.exit(failed ? 1 : 0);
