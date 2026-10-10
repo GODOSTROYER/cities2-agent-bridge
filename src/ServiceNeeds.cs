@@ -69,7 +69,7 @@ namespace CitiesIIAgentBridge
                 n["score"] = score + "/" + ServiceSignals.Threshold; n["action"] = score >= ServiceSignals.Threshold ? "build" : "watch";
                 result[pair.Key] = n;
             }
-            result["iconsTop"] = new JObject(icons.OrderByDescending(p => p.Value).Take(6).Select(p => new JProperty(p.Key, p.Value)));
+            result["iconsTop"] = new JObject(icons.OrderByDescending(p => p.Value).Take(4).Select(p => new JProperty(p.Key, p.Value)));
             return result;
         }
     }

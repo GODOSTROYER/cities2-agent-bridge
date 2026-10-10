@@ -6,17 +6,20 @@ Read this instead of COMMANDS.md; LEARNINGS.md has the why.
 Use the `cs2` MCP server (HARNESS.md section 4b). Its tools replace most verbs below. Preconditions below still apply.
 
 Core loop:
-1. `snapshot`: money, net, population, demand, jobs, utilities, shortages, ui. Non-pausing.
-2. Decide. Read `demandWhy` and `jobs.vacantByEdu` before zoning. Judge power by `util.power` use vs production and import, not plant load.
-3. `save` and wait for `complete`.
-4. Act, plan first: `grow`, `build_grid`, `link`, `buy_tile`, `place_service` with `plan: true`. Check `prefabs` costs and `monthlyUpkeep` before building, then repeat without `plan`.
-5. `run` (`seconds`, `speed`, `cashFloor`). It ends paused.
-6. `events` (`since` = last `utc`) or `snapshot`. Save again.
+1. `snapshot`: money, net, population, demand, jobs, utilities, shortages, ui, `needs`. Non-pausing.
+2. If any `needs.<service>.action` is `build`, run `fix_services` (or `place_service` for one exact building) before growth. Escalated needs are orders, not noise.
+3. `project` the proposed actions before spending: construction, monthly upkeep, income and net per period. Read `demandWhy` and `jobs.vacantByEdu` before zoning. Judge power by `util.power` use vs production and import, not plant load.
+4. `save` and wait for `complete`.
+5. Act, plan first: `grow`, `build_grid`, `link`, `buy_tile`, `place_service` with `plan: true`. Check `prefabs` costs and `monthlyUpkeep` before building, then repeat without `plan`.
+6. `run` (`seconds`, `speed`, `cashFloor`). It ends paused.
+7. `events` (`since` = last `utc`) or `snapshot`. Save again.
 
 Rules:
-- `snapshot`, `events` and `ui` are safe during `run`. Every other tool pauses the game. `services` and `prefabs` do not check for an active run, so do not call them during one.
+- `snapshot`, `events` and `ui` are safe during `run`. Every other tool pauses the game and refuses with `run_in_progress` while `run` is active, including `services` and `prefabs`.
 - After a `timeout` error, do not resend the mutation. Read `snapshot` first.
-- `monthlyUpkeep` is set only by `place_service`. Road and tile upkeep show in `snapshot` expense after the next budget period.
+- `monthlyUpkeep` is set only by `place_service`. Road and tile upkeep show in `snapshot` expense after the next budget period. `project` leaves them out too.
+
+- Use the quit tool (save + clean quit) instead of leaving the game idle during long offline work.
 
 Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
 
@@ -70,3 +73,4 @@ Run from the harness folder: `.\play.ps1 <verb> [options]` (PowerShell 7).
 - Before any mutation, `save` and wait for `complete`.
 - End with the city paused and saved.
 - Before asking the owner to exit, reload or install anything: `play.ps1 save` and wait for `complete`.
+- GPU/driver trouble or a hang: save, quit, report; do not keep relaunching.

@@ -51,7 +51,7 @@ namespace CitiesIIAgentBridge
                 string responsePath = Path.Combine(Responses, id + ".json");
                 if (pendingResponses.TryGetValue(id, out var pending))
                 {
-                    AtomicWrite(responsePath, pending);
+                    AtomicWrite(responsePath, pending, true);
                     pendingResponses.Remove(id);
                     File.Delete(path);
                     continue;
@@ -97,7 +97,7 @@ namespace CitiesIIAgentBridge
                 // Retain the result if publishing fails; do not dispatch again in this process.
                 // A restarted process has a new session and rejects the old request.
                 pendingResponses[id] = response;
-                AtomicWrite(responsePath, response);
+                AtomicWrite(responsePath, response, true);
                 pendingResponses.Remove(id);
                 File.Delete(path);
                 ++count;
@@ -105,12 +105,13 @@ namespace CitiesIIAgentBridge
             return count;
         }
 
-        public static void AtomicWrite(string path, JObject value)
+        // Responses are written compact (smaller file, faster parse); session.json stays indented.
+        public static void AtomicWrite(string path, JObject value, bool compact = false)
         {
             string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                File.WriteAllText(temp, value.ToString(Formatting.Indented), new UTF8Encoding(false));
+                File.WriteAllText(temp, value.ToString(compact ? Formatting.None : Formatting.Indented), new UTF8Encoding(false));
                 RetrySharingViolation(() => {
                     if (File.Exists(path)) File.Replace(temp, path, null);
                     else File.Move(temp, path);

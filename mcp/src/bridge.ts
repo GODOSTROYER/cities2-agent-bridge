@@ -34,17 +34,25 @@ export async function readSession(): Promise<Json> {
   }
 }
 
+// The heartbeat file is cached for 1 s: a tool that makes 20 calls reads it once, not 20 times.
+let sessionCache: { at: number; session: Json } | null = null;
+export function dropSessionCache(): void { sessionCache = null; }
 export async function sessionReady(): Promise<{ ready: boolean; session: Json; ageSec: number }> {
-  const session = await readSession();
+  if (!sessionCache || Date.now() - sessionCache.at > 1000) sessionCache = { at: Date.now(), session: await readSession() };
+  const session = sessionCache.session;
   const ageSec = (Date.now() - parseUtc(session.heartbeatUtc)) / 1000;
   return { ready: session.status === 'ready' && ageSec <= 10, session, ageSec };
 }
+const POLL_MS = 12; // the mod ticks every ~15 ms while busy; 50-100 ms polling used to dominate latency
+export const stats = { calls: 0, callMs: 0, startedAt: Date.now(), simSeconds: 0, simSteps: 0 };
 
 // One request. Transport problems throw; a mod-side failure returns {ok:false,error}.
 // Never resends: on timeout the request expires by itself and the caller must inspect state.
 export async function call(command: string, args: Json = {}, timeoutSeconds = 15): Promise<Response> {
-  const { ready, session, ageSec } = await sessionReady();
+  let { ready, session, ageSec } = await sessionReady();
+  if (!ready) { dropSessionCache(); ({ ready, session, ageSec } = await sessionReady()); }
   if (!ready) throw new Error(`bridge_not_responding: status=${session.status} heartbeatAge=${ageSec.toFixed(1)}s`);
+  const t0 = Date.now(); stats.calls++;
   const id = randomUUID().replace(/-/g, '');
   const timeout = Math.max(1, Math.min(45, timeoutSeconds));
   const packet = { protocol: 1, id, session: session.session, citySession: session.citySession, command, args: args ?? {}, expiresUtc: new Date(Date.now() + timeout * 1000).toISOString() };
@@ -60,13 +68,16 @@ export async function call(command: string, args: Json = {}, timeoutSeconds = 15
     if (existsSync(responsePath)) {
       let raw: string;
       try { raw = await fs.readFile(responsePath, 'utf8'); }
-      catch (e: any) { if (e.code === 'EBUSY' || e.code === 'EPERM') { await sleep(50); continue; } throw e; }
+      catch (e: any) { if (e.code === 'EBUSY' || e.code === 'EPERM') { await sleep(POLL_MS); continue; } throw e; }
       let response: Response;
       try { response = JSON.parse(raw.replace(/^﻿/, '')); } catch { await sleep(50); continue; } // partially visible; same id only
       fs.unlink(responsePath).catch(() => {}); // ids are unique; the mod never re-executes a completed id
+      stats.callMs += Date.now() - t0;
+      // A rejected stale session/city id means nothing ran: refresh the cache for the next call.
+      if (!response.ok && /stale_(city_)?session/.test(String(response.error))) dropSessionCache();
       return response;
     }
-    await sleep(50);
+    await sleep(POLL_MS);
   }
   throw new Error(`timeout: ${command} request ${id}; outcome unknown, inspect state before retrying`);
 }
@@ -83,9 +94,26 @@ export async function waitOperation(id: string, timeoutSeconds = 120): Promise<J
   while (Date.now() < end) {
     const op = await callOk('get_operation', { id }, 5);
     if (!PENDING.includes(op.status)) return op;
-    await sleep(400);
+    await sleep(40);
   }
   throw new Error(`operation ${id} still pending after ${timeoutSeconds}s; inspect before retrying`);
+}
+
+export async function waitBatch(id: string, timeoutSeconds = 600): Promise<Json> {
+  const end = Date.now() + timeoutSeconds * 1000;
+  while (Date.now() < end) {
+    const b = await callOk('get_batch', { id }, 5);
+    if (!PENDING.includes(b.status)) return b;
+    await sleep(40);
+  }
+  throw new Error(`batch ${id} still running after ${timeoutSeconds}s; inspect before retrying`);
+}
+
+// Several non-pausing reads in one mailbox round trip. Returns each command's result; throws
+// on the first failed one (reads only, so nothing can be half-applied).
+export async function multi(commands: { command: string; args?: Json }[]): Promise<Json[]> {
+  const r = await callOk('multi', { commands: commands.map(c => ({ command: c.command, args: c.args ?? {} })) }, 30);
+  return r.results.map((x: Json) => { if (!x.ok) throw new Error(`${x.command}: ${x.error}`); return x.result; });
 }
 
 // events.jsonl (+ rotated events.1.jsonl): entries strictly after `since` (ISO utc or seq).
@@ -119,8 +147,47 @@ export function runPwsh(script: string, args: string[], timeoutMs = 600000): Pro
 const lines = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map(l => l.trimEnd()).filter(l => l.length);
 
 // ---- shared state: one bounded run at a time; mutations refuse while it is active ----
-export const state = { running: false };
+export const state = { running: false, mutating: 0 };
 export function assertIdle(): void { if (state.running) throw new Error('run_in_progress: wait for run() to finish (snapshot/events/ui are safe meanwhile)'); }
+
+// Mutations pause the game (the mod requires it). While a background run is active they are
+// allowed: the running step ends with analysis_requested and the loop resumes afterwards, so
+// the simulation only stops for the build itself, never for planning reads.
+export async function mutate<T>(fn: () => Promise<T>): Promise<T> {
+  state.mutating++;
+  try { return await fn(); } finally { state.mutating--; }
+}
+
+export const background = { until: 0, speed: 4, active: false, lastStop: '', steps: 0 };
+export function startBackground(seconds: number, speed = 4): void {
+  background.until = Date.now() + seconds * 1000; background.speed = speed;
+  if (!background.active) { background.active = true; void backgroundLoop().finally(() => { background.active = false; }); }
+}
+export function stopBackground(): void { background.until = 0; }
+async function backgroundLoop(): Promise<void> {
+  let shortSteps = 0;
+  while (Date.now() < background.until) {
+    if (state.mutating > 0 || state.running) { await sleep(150); continue; }
+    const wall = Math.min(50, Math.max(5, Math.ceil((background.until - Date.now()) / 1000)));
+    let started: Response;
+    try { started = await call('simulate_step', { frames: 262144, wallSeconds: wall, stallSeconds: 5, speed: background.speed, stopOnNewShortage: false, acknowledgeNoProgress: true }, 10); }
+    catch (e: any) { background.lastStop = String(e.message ?? e); await sleep(2000); continue; }
+    if (!started.ok) { background.lastStop = String(started.error); await sleep(400); continue; } // e.g. an operation is still in flight
+    let res: Json = null; const clientEnd = Date.now() + (wall + 8) * 1000;
+    while (Date.now() < clientEnd) {
+      await sleep(400);
+      try { res = await callOk('get_simulation_step', { id: started.result.id }, 5); } catch { res = null; break; }
+      if (res.status !== 'running') break;
+    }
+    if (!res || res.status === 'running') { background.lastStop = 'client_deadline'; continue; }
+    background.steps++; stats.simSteps++; stats.simSeconds += Number(res.elapsedSeconds ?? 0);
+    background.lastStop = String(res.reason);
+    shortSteps = Number(res.elapsedSeconds ?? 0) < 1 ? shortSteps + 1 : 0;
+    if (res.reason === 'game_paused') { try { await fixPopups(3); } catch { /* the mod also auto-resolves */ } await sleep(600); }
+    if (shortSteps >= 8 && state.mutating === 0) { background.lastStop = `stalled:${res.reason}`; await sleep(3000); shortSteps = 0; }
+  }
+  try { if (state.mutating === 0 && !state.running) await call('cancel_simulation_step', {}, 5); } catch { /* already paused */ }
+}
 
 export async function fixPopups(max = 10): Promise<string[]> {
   const done: string[] = [];
@@ -168,6 +235,7 @@ export async function run(totalSeconds: number, speed = 4, cashFloor = 0): Promi
         stop = 'client_deadline'; break;
       }
       steps++; used += Number(res.elapsedSeconds ?? 0); frames += Number(res.advancedFrames ?? 0);
+      stats.simSteps++; stats.simSeconds += Number(res.elapsedSeconds ?? 0);
       const reason = String(res.reason);
       if (!res.paused) { stop = 'pause_not_confirmed'; break; }
       // Milestones are withheld while the tutorial intro is unfinished (FAILURES #24) without

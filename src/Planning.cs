@@ -125,8 +125,9 @@ namespace CitiesIIAgentBridge
             foreach (var e in edges.Where(e => !e.Highway))
                 foreach (float t in new[] { 0f, 0.25f, 0.5f, 0.75f, 1f }) { var p = BezierAt(e.Curve, t); roads.Add(new RoadPoint { X = p.x, Z = p.z, T = t, Index = e.Entity.Index, Version = e.Entity.Version }); }
             var rasterMs = clock.Elapsed.TotalMilliseconds;
-            var sites = SiteSearch.Find(occ, x0, z0, x1, z1, width, depth, step, margin, roads, maxLink);
-            var finalists = sites.Take(Math.Max(count * 4, 20)).ToList();
+            // Wide pool: terrain/water rejects many of the closest candidates (17 of 20 were wet once).
+            var sites = SiteSearch.Find(occ, x0, z0, x1, z1, width, depth, step, margin, roads, maxLink, 120);
+            var finalists = sites.Take(Math.Max(count * 10, 80)).ToList();
             // Land use: pollution sources, jobs, homes and highways for scoring (same weights as play.ps1 Find-Sites).
             var ps = w.GetExistingSystemManaged<PrefabSystem>(); var polluters = new List<float2>(); var jobs = new List<float2>(); var homes = new List<float2>();
             foreach (var e in NativeBuild.Buildings(em))

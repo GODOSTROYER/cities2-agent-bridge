@@ -281,7 +281,7 @@ namespace CitiesIIAgentBridge
             Timed(errors, perf, "needs", () => s["needs"] = ServiceNeeds(w, recentChirps, activePhase));
             if (errors.Count > 0) s["errors"] = errors;
             perf["total"] = Math.Round(total.Elapsed.TotalMilliseconds, 1);
-            s["perfMs"] = perf;
+            if (total.Elapsed.TotalMilliseconds >= 10) s["perfMs"] = perf; // only when the build is slow
             s["bytes"] = 0;
             s["bytes"] = Encoding.UTF8.GetByteCount(s.ToString(Formatting.None));
 

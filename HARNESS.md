@@ -43,13 +43,13 @@
 
 | file | role | key behaviours |
 |---|---|---|
-| `play.ps1` | agent front end | Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `buy`, `grow`, `zone`, `run`, `link`, `place`, `save`, `prefab`, `raw`, `help`. Terse output; `raw` strips noisy fields unless `-Full`. `grow` picks the zone by demand (res, resmed, com, ind, off (office); needs demand >= 20 and an unlocked prefab; `-Zone` overrides; reads unemployment from `get_snapshot`) and steps the grid down 3x2 -> 2x2 -> 2x1 -> 1x1 when land is short. |
+| `play.ps1` | agent front end | Verbs: `look`, `ui`, `fix`, `sites`, `grid`, `buy`, `grow`, `zone`, `run`, `link`, `place`, `save`, `prefab`, `raw`, `help`. Terse output; `raw` strips noisy fields unless `-Full`. `grow` picks the zone by demand (res, resmed, com, ind, off (office); needs demand >= 20 and an unlocked prefab; `-Zone` overrides; reads unemployment from `get_snapshot`) and steps the grid down 3x2 -> 2x2 -> 2x1 -> 1x1 when land is short. `Find-Sites` calls the mod's `find_free_lots` (PowerShell raster only on mods without it); `place` calls `find_roadside_lots`, then `find_building_sites` if that finds nothing. Grow plan takes ~20 s instead of minutes. |
 | `autoplay.ps1` | growth loop | Per cycle: wait for the road tool to clear, `grow -BuyTiles` if residential/commercial demand >= 50 and cash > floor + 150k, `services.ps1` every 3rd cycle, `run` for 120 s, budget autopilot. Stops on `STOPPED` from `run`, or on a milestone with `-UntilMilestone`. Ends with `save`. |
-| `grid.ps1` | road grid builder | World-aligned grid (110 m blocks, max 62 roads). Adds four 64 m outward stubs (`-NoStubs` disables). Connector from the nearest existing road node, up to 400 m, validated with `plan_neighborhood`. Native pre-flight of each road (`build_road previewOnly`) when capability `roadPreview` exists; rejected stubs are dropped, a lost connector is rebuilt from another candidate. Executes with `execute_neighborhood` (before/after saves), then zones and checks connectivity by graph search. `-PlanOnly` changes nothing. `-AllowDemolition` may remove one house to open a street. Connector fallback drops stale edge ids (`stale_point_entity`) and retries with native snapping. |
+| `grid.ps1` | road grid builder | World-aligned grid (110 m blocks, max 62 roads). Adds four 64 m outward stubs (`-NoStubs` disables). Connector from the nearest existing road node, up to 400 m, found by the mod's `grid_connectors` (PowerShell raster fallback on older mods) and validated with `plan_neighborhood`. Native pre-flight of each road (`build_road previewOnly`) when capability `roadPreview` exists; rejected stubs are dropped, a lost connector is rebuilt from another candidate. Executes with `execute_neighborhood` (before/after saves), then zones and checks connectivity by graph search. `-PlanOnly` changes nothing. `-AllowDemolition` may remove one house to open a street. Connector fallback drops stale edge ids (`stale_point_entity`) and retries with native snapping. |
 | `zone-fill.ps1` | zoning | Zones only `Visible`, unzoned cells, one block-attached rectangle per block. Blocked duplicate cells are skipped. Verifies with a re-read of cells, not operation claims. `-WhatIf` is read-only. |
 | `run-session.ps1` | bounded simulation | Chains `simulate_step` (max 50 s each, speed <= 4) to `-TotalSeconds`. Logs to `journals\run-session.jsonl`. Shortage triage: continues while only `_shortfall` issues exist and the count is not rising for 3 steps. `-ResolveTutorials` clears tutorial, milestone and signature popups (max 10). Stops paused, with a reason, on anything else. |
-| `services.ps1` | basic services | Detects police, fire, clinic, school and landfill by prefab regex, targets population-based need, and places via `play.ps1 place` near the homes or industry that lack coverage. Needs cash >= 300k. Counts only; not real coverage. |
-| `upgrade.ps1` | unattended restart | Saves and waits for `complete`; `quit_game` (refused unless the named save is < 5 min old); waits up to 3 min for exit, never kills; optional `-Build` runs package and tests; installs with hash check; starts `Cities2.exe -continuelastsave`; calls `load_save` from the main menu (newest `CitiesIIAgentBridge-autosave-*`); waits up to 600 s for the city. |
+| `services.ps1` | basic services | Escalated needs first: snapshot `needs` with action `build` (chirps, tutorial cards, notification icons, dead or sick citizens) are built ahead of growth, overriding the cash floor and upkeep discipline, with a 10-minute cooldown per service (`journals\services-escalation.json`). Then per service (prefab regex) it reads the mod's `coverage_gaps` where a rule has a coverage category, plus utility capacity, and places via `play.ps1 place`. Cash floor `-MinCash` 250000: below it only power, water, sewage and escalated needs are built. `-MaxPlacements` and `-Plan` are available. |
+| `upgrade.ps1` | unattended restart | Saves and waits for `complete`; `quit_game` (refused unless the named save is < 5 min old); waits up to 3 min for exit, never kills; optional `-Build` runs package and tests; installs with hash check. `-QuitOnly` saves and quits without installing or launching. Starts `Cities2.exe -continuelastsave`. Calls `load_save` from the main menu (newest `CitiesIIAgentBridge-autosave-*`); waits up to 600 s for the city, then prints the display mode reported by the mod. |
 | `lib\BridgeClient.psm1` | client library | `Invoke-Bridge` (throws on `ok:false`), `Get-BridgePaged` (follows `nextOffset`), `Wait-BridgeOperation`, `Wait-BridgeBatch`, `Invoke-BridgeSteps` (chunks to 15000 bytes and 64 steps; resumes past proven no-op zoning errors only), `Invoke-BridgeRoad` (on rejection, inspects the blocker and retries perpendicular offsets), `Get-BridgeRoadGraph` / `Find-BridgeNearestNode` / `Test-BridgeNodesConnected` (local connectivity), `Resolve-BridgePrefab` (name to index, cached per city session in `journals\prefab-cache.json`), `Get-BridgeOccupancy` plus the `Test-Occupancy*` functions (4 m raster from real lot rectangles and road chords), `Clear-BridgeRollingSaves` (keeps newest; never touches `keep-*` or the owner's own saves; recycles to the Recycle Bin). |
 | `grid.ps1` header | builder contract | Documents the plan-then-execute order and the `-PlanOnly` guarantee. Read it before changing the grid flow. |
 | `bridge.ps1` | raw client | Single-command client: `bridge.ps1 <command> -ArgsJson '{...}'`; also `stop`. Reads responses with shared delete access and retries on sharing violations. Journals events when `journals\active.json` exists. |
@@ -94,13 +94,25 @@ Commands added by this fork (upstream commands are documented in COMMANDS.md).
   - `seq` restarts with each game process, so filter by `utc` (the `since` argument of the MCP `events` tool).
 - **`get_prefab_details` costs.** `costs` {`construction`, `monthlyUpkeep` (ServiceUpkeepData money), `consumptionUpkeep` (ConsumptionData `m_Upkeep`), `netUpkeep` for networks}.
 
+- **Phase 2 queries** (all computed in C#; each pauses the game like other analysis commands). Measured: `find_free_lots` 120-480 ms, `grid_connectors` 59 ms for 1,245 links, `corridor` 28-78 ms, `coverage_gaps` 1-15 ms, `traffic_hotspots` 5 ms, `project` under 10 ms.
+  - `find_free_lots` {width, depth, count?, zone?, x?, z?, radius?, step?, margin?, maxLink?}: owned, dry, flat (relief <= 25 m) rectangles ranked by link to a lot-free road and by land use. Returns `sites[]` (x, z = min corner, link, clearLink, relief, pollution, distances, score, connector) and rejected counts.
+  - `grid_connectors` {x0, z0, x1, z1, maxLength?, top?, halfWidth?}: shortest lot-free links from existing non-highway roads to points around a grid's perimeter. Returns `links[]` (from edge index, version, t; to; d).
+  - `find_roadside_lots` {prefab | width+depth, x, z, radius?, count?}: rotated lot positions beside a road, clear of lots, roads and unowned land. Returns `candidates[]` (position, rotation, roadEdge) to pass to `place_building`.
+  - `corridor` {from{x,z}, to{x,z}, halfWidth?}: lot-free route on owned land, straight when possible, otherwise waypoints (up to 4 km). Returns `straight`, `found`, `waypoints`, `length`, `segments`.
+  - `coverage_gaps` {service, threshold?, cell?, top?}: native service coverage at each home's road position. Returns the uncovered share, percentiles, `gapClusters` (densest first) and existing `facilities`. Services: Healthcare, FireRescue, Police, Park, PostService, Education, EmergencyShelter, Welfare.
+  - `traffic_hotspots` {top?, minLength?}: road edges with the lowest native traffic flow (flowPct 100 = free flow), plus mean and city flow.
+  - `project` {actions: [{prefab, count?} | {zone, cells}]}: construction, monthly upkeep, zone income when built and projected net per period, using the live tax per occupied cell. Roads and tile upkeep are not included.
+- **Snapshot `needs`** (per service: deathcare, health, fire, school, ...): `chirps` (among the 10 newest), `tutorial` (a card asks for it), `icons`, `iconRise` (streak of rising icon counts, max 3), `dead`, `sick`, `score` ("n/3") and `action`. Score = chirps + 1 for a tutorial card + icon-rise streak (max 3) + 1 for any dead or sick citizen (2 at 10 or more). Score >= 3 gives `action` `build`; `services.ps1` builds those first. `iconsTop` lists the most common notification icons. Sources: `src/ServiceNeeds.cs`, `src/ServiceSignals.cs`.
+- **AutoResolve** (`src/AutoResolve.cs`): while bridge controls are on, tutorial, milestone and signature popups, and intro-held milestones, are resolved on the main thread from a fresh UI read. Events `auto_resolved` and `auto_resolve_failed` (the first 3 failures are logged; retries slow to every 30 s after that). Error dialogs and menus are never resolved.
+- **`session.json` `display`**: Unity's `Screen.fullScreenMode` and resolution at each heartbeat (`ExclusiveFullScreen`, `FullScreenWindow`, `MaximizedWindow` or `Windowed`). `upgrade.ps1` reads it after a launch.
+
 ## 4b. MCP server (cs2)
 
 Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridge.ts` (mailbox client).
 
 - **Setup.** Node >= 22.18 (native TypeScript type stripping, no build step). `cd mcp; npm install` (`@modelcontextprotocol/sdk` 1.32.1, `zod` 3). Registered in `.mcp.json` at the repo root (`command` node, `args` `mcp/src/server.ts`). `CS2_MAILBOX` overrides the mailbox folder.
 - **Protocol** (copies `bridge.ps1`): session.json heartbeat <= 10 s and status `ready`; request written as `.tmp` then renamed; response polled every 50 ms and deleted after reading; 15000-byte client limit (mod 16384); culture-safe manual ISO parse; never resends a mutation after a timeout.
-- **Tools (18).**
+- **Tools (27).** Every tool except `snapshot`, `events`, `ui`, `fix_popup`, `run` and `quit` first clears popups (`ensureClear`). `quit` does not.
 
 | tool | args | does | pauses |
 |---|---|---|---|
@@ -113,20 +125,31 @@ Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridg
 | `grow` | zone, cols, rows, plan, buyTiles | `play.ps1 grow` | yes |
 | `link` | x, z, road, max, plan | `play.ps1 link` | yes |
 | `zone` | x, z, radius, zone | `play.ps1 zone` (free) | yes |
-| `place_service` | prefab, x, z, radius, maxCost, plan | places an exact building prefab; plan shows costs | yes |
+| `place_service` | prefab, x, z, radius, maxCost, plan | places an exact building prefab; maxCost defaults to max(150000, 1.2 x construction); plan shows costs | yes |
 | `prefabs` | filter, kind, limit, costs | prefab search with construction and upkeep | yes |
 | `set_tax` | area, rate | tax rate for R, C, I or O | yes |
 | `set_service_budget` | service, budget (50-150) | budget by exact or unique partial name | yes |
 | `services` | none | name, budget, buildings (array length), workers, workplaces | yes |
-| `buy_tile` | n (1-3), max, plan | buys tiles within a cost cap | yes |
+| `fix_services` | maxPlacements (1-4), plan | `services.ps1`: builds escalated needs, coverage gaps and utility capacity before growth; large lots via the roadside finder | yes |
+| `buy_tile` | n (1-3), max, x, z, plan | buys adjacent tiles within a cost cap, nearest the city or to x,z | yes |
 | `save` | none | `play.ps1 save` | yes |
 | `restart` | build, noInstall | `upgrade.ps1`: save, quit, relaunch, load newest autosave | yes |
+| `upgrade_road` | index, version, road, maxCost | replaces one road edge (index/version from traffic_hotspots) with another road prefab via `upgrade_network`; returns cost and placement reasons | yes |
+| `quit` | none | verified rolling save, then clean quit (`upgrade.ps1 -QuitOnly`); never force-kills | yes |
 | `query` | command (read-only allow-list), args, maxChars | raw read | yes |
+| `free_lots` | width, depth, count, zone, x, z, radius, step, margin, maxLink | `find_free_lots` (section 4) | yes |
+| `roadside_lots` | prefab, x, z, radius, count | `find_roadside_lots` | yes |
+| `corridor` | fromX, fromZ, toX, toZ, halfWidth | `corridor` | yes |
+| `coverage_gaps` | service (enum), threshold, cell, top | `coverage_gaps` | yes |
+| `traffic_hotspots` | top, minLength | `traffic_hotspots` | yes |
+| `project` | actions: [{prefab, count} or {zone, cells}] | `project`: cost, upkeep and net per period before building | yes |
 
-- **Pausing rules.** `snapshot`, `events` and `ui` never pause and are safe during `run`. Mutating tools and `query` refuse with `run_in_progress` while `run` is active. `services` and `prefabs` do not check, so do not call them during a run.
-- **Cost and upkeep.** Mutating tools return `cost` (money before minus after). `monthlyUpkeep` comes from prefab costs and is set only by `place_service`; `build_grid`, `grow`, `link` and `buy_tile` return `null` and note that road and tile upkeep show in snapshot expense after the next budget period. `zone` and `set_tax` cost 0.
+- **Pausing rules.** `snapshot`, `events` and `ui` never pause and are safe during `run`. Every other tool, including `services` and `prefabs`, refuses with `run_in_progress` while `run` is active (`assertIdle`).
+- **Cost and upkeep.** Mutating tools return `cost` (money before minus after). `monthlyUpkeep` comes from prefab costs and is set only by `place_service`; `build_grid`, `grow`, `link`, `buy_tile` and `upgrade_road` return `null`, and road and tile upkeep show in snapshot expense after the next budget period. `zone` and `set_tax` cost 0. Use `project` before building to see construction, upkeep and net per period.
 - **Tests** (run from `mcp\`):
   - `node test/smoke.ts`: offline; tool list and events.
+  - `node test/popups.ts`: offline; `fixPopups` survives a phase change between its read and its resolve (temp mailbox, fake mod, no game calls).
+  - `node test/phase2.ts [name ...]`: live; the Phase 2 queries through the MCP server, with timings.
   - `node test/live.ts concurrency 90`: live; `run` while polling `snapshot`.
   - `node test/live.ts call <tool> '<json>'`: one live tool call.
 
@@ -146,6 +169,7 @@ Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridg
 ## 6. Safety model
 
 - **Never force-kill the game.** `upgrade.ps1` waits up to 3 min for a clean exit and stops if it does not happen. The bridge has no kill command.
+- GPU/driver trouble or a hang: save, quit, report. (FAILURES #43)
 - **Save before quit or change.** `quit_game` in a city requires a save < 5 min old. `execute_neighborhood` writes before/after saves. `play.ps1 save` waits for `complete`. The owner is asked to exit only after a saved checkpoint.
 - **Rolling saves.** Bridge saves are recycled to the Recycle Bin, keeping the newest. `keep-*` (`save -Keep`) and all non-bridge saves are never touched.
 - **Native pre-flight.** The game's validator (`previewOnly`) checks roads before the plan is trusted; a geometric plan alone is not enough.
@@ -174,6 +198,7 @@ Derived from `git log` (26 commits) and FAILURES.md (numbers in brackets).
 - Caller-side bugs fixed: negative-number argument binding, `$args` reuse, `-Plan` lost on re-invocation, `Get-BridgePaged` array wrapping, reserved and one-letter helper names, reused typed variables [5, 6, 9, 10, 11, 12, 22].
 - Operator rules encoded: no queries during a run [8]; never kill a running player's tool session [23].
 - Live view and typed tools (2026-10-10): `get_snapshot` and `events.jsonl` in the mod; cs2 MCP server with 18 tools; prefab costs; office zoning fixed; power judged by use vs production; demand factors read before zoning; connector fallback no longer aborts zoning [30-36].
+- Phase 2 and popups (2026-10-10): Phase 2 queries in the mod; popups resolved on the main thread [37]; service needs escalate ahead of growth, read from the game rather than population counts [38, 39]; `complete_tutorial_intro` also skips the active tutorial list when the intro flag stays set [40]; budget bounds from real costs [41]; `place_service` cap from the prefab's construction cost [42]; launch-safety restrictions withdrawn by owner decision [43]; planner passability fixed for road starts [44].
 
 ## 8. Known gaps / needs improvement
 
@@ -181,25 +206,25 @@ Derived from `git log` (26 commits) and FAILURES.md (numbers in brackets).
 - **Traffic-aware routing.** Edges expose raw traffic counters; the harness does not read or use them.
 - **Wind direction for industry.** Industry is placed by distance only; wind is not modelled.
 - **District and policy management.** `create_district` / `edit_district` exist; policies are not exposed. Naming can report an EntityCommandBuffer error after success (RELEASE-NOTES.md).
-- **Service coverage model.** `services.ps1` counts buildings against population; it does not measure real coverage.
+- **Service capacity and response time.** DONE for coverage: fire and service placement use the mod's native `coverage_gaps` where a rule has a coverage category, and escalated `needs` (FAILURES #38, #39). Capacity and response time are still not modelled (FAILURES #39).
 - **Upgrade buildings.** Extensions and wings are ignored (`Upgrade|Extension|Wing` filter in services.ps1); no command places them.
-- **Road hierarchy upgrades.** `upgrade_network` exists but nothing triggers it when a road is congested.
-- **Water and power capacity planning.** The harness checks headroom only (capacity against last production, electricity import or export). It does not forecast or plan plants before growth.
+- **Road hierarchy upgrades.** `upgrade_network` and the `upgrade_road` tool exist, but nothing triggers them when a road is congested.
+- **Water and power capacity planning.** DONE for signals: snapshot `util` (power, water and sewage capacity against use, plus electricity import or export) is read. Open: the harness does not forecast demand or plan plants before growth.
 - **Medium and high density rezoning of existing blocks.** Not designed (FAILURES open issues); autoplay only zones empty land.
 - **Editor tutorials.** Out of scope; the bridge requires a loaded city.
 - **Signature-building placement.** Popups are read and dismissed; placing signature buildings is not supported.
 - **Budget tuning per service.** Only taxes are adjusted; `set_service_budget` is unused by the harness.
 - **Terrain- and water-aware large site search.** Large-lot placement uses the occupancy raster, not terrain.
-- **Occupancy raster in PowerShell.** Slow on big maps; a mod-side query would be faster.
+- **Occupancy raster in PowerShell.** DONE: mod-side `find_free_lots`, `find_roadside_lots` and `grid_connectors` replace the raster on current mods; the PowerShell raster remains as a fallback for older mods.
 - **Milestone reward and unlock reading.** Milestone state is read for blockers only; unlock lists are not used for planning.
 - **Landfill01 placement.** Large footprint rejected at geometric candidate sites (FAILURES #17, still open in part).
 
 ## 9. Feature roadmap (proposed)
 
 - **P1 Transit.** Mod `create_transit_line` / `add_stop` using the game's TransportLine tool systems. Harness `transit` verb that runs bus lines along arterials at about 2k population.
-- **P1 Capacity planning.** Read water and power capacity and projected demand; have `grow` build a plant first when headroom is short, instead of only reporting it.
-- **P1 Mod-side occupancy.** Move the lot and road raster into a mod query (`get_free_lots` by footprint). Speeds `grow`, `place` and `link`, and is the likely fix for the Landfill01 open issue.
-- **P1 Service coverage.** Read the game's service coverage per building, not counts. `services.ps1` then places where coverage is missing.
+- **P1 Capacity planning.** Signals are read (section 8, DONE). Still open: read water and power capacity and projected demand; have `grow` build a plant first when headroom is short, instead of only reporting it.
+- **P1 Mod-side occupancy.** DONE: `find_free_lots`, `find_roadside_lots` and `grid_connectors` run in the mod (section 4).
+- **P1 Service coverage.** DONE: `coverage_gaps` reads the game's native coverage at each home; `services.ps1` places where coverage is missing (section 4).
 - **P2 Densify.** Mod support for medium/high rezoning of existing empty or new blocks only; harness `densify` verb along arterials once unlocked.
 - **P2 Traffic-aware links.** Expose edge traffic counters in `get_network_edges`; `link` and `grid` prefer low-traffic corridors and trigger `upgrade_network` on congested roads.
 - **P2 Wind-aware industry.** Read wind direction from the game's wind data; add a downwind penalty to the industry score in `Find-Sites`.

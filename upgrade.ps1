@@ -10,6 +10,7 @@ param(
     [string]$GamePath = 'Z:\Games\Cities - Skylines II',
     [switch]$Build,          # run package.ps1 + PackageTests first
     [switch]$NoInstall,      # restart only
+    [switch]$QuitOnly,       # verified save + clean quit, no install, no launch
     [ValidateRange(60, 1800)][int]$LoadTimeoutSeconds = 600
 )
 $ErrorActionPreference = 'Stop'
@@ -17,9 +18,9 @@ $H = $PSScriptRoot
 Import-Module (Join-Path $H 'lib\BridgeClient.psm1') -Force
 $mailbox = Join-Path $env:LOCALAPPDATA 'CitiesIIAgentBridge'
 function Step($text) { "[{0:HH:mm:ss}] $text" -f (Get-Date) }
-
 # Package first, while the game still runs (no downtime if the build fails).
 $package = $null
+if ($QuitOnly) { $NoInstall = $true }
 if (!$NoInstall) {
     if ($Build) {
         $out = & (Join-Path $H 'package.ps1') -GamePath $GamePath 2>&1 | ForEach-Object { "$_" }
@@ -53,6 +54,7 @@ if ($game) {
     if (!$game.WaitForExit(180000)) { throw 'Game did not exit within 3 minutes. It was NOT force-closed; check the screen.' }
     Step 'game exited cleanly'
 }
+if ($QuitOnly) { Step 'quit only: not launching'; return }
 
 if ($package) {
     $inst = & (Join-Path $package 'install.ps1') -GamePath $GamePath 2>&1 | ForEach-Object { "$_" }
@@ -86,7 +88,8 @@ while ($clock.Elapsed.TotalSeconds -lt $LoadTimeoutSeconds) {
         $v = (Invoke-Bridge ping).modVersion
         $c = Invoke-Bridge get_city_state
         Step ("city ready in {0:N0} s: {1}, pop {2}, money {3:N0}, mod {4}" -f $clock.Elapsed.TotalSeconds, $c.cityName, $c.population, $c.money, $v)
+        if ($s.display) { Step "display: $($s.display)" }   # informational (reported by the mod)
         return
     }
 }
-throw "City not ready after $LoadTimeoutSeconds s (last status: $($s.status) / $($s.gameMode) / loading=$($s.loading)). Check the screen."
+throw "City not ready after $LoadTimeoutSeconds s (last status: $($s.status) / $($s.gameMode) / loading=$($s.loading)). Check the screen. If the game hung or the GPU driver reset: save if possible, quit and report."

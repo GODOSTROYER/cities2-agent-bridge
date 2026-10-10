@@ -51,13 +51,18 @@ namespace CitiesIIAgentBridge
             if (batch != null && (string)batch["status"] == "running") throw new InvalidOperationException("batch_in_progress");
             if (ConstructionAccess.Active != null) throw new InvalidOperationException("operation_in_progress");
             var steps = args["steps"] as JArray;
-            if (steps == null || steps.Count < 1 || steps.Count > 64) throw new ArgumentException("batch_requires_1_to_64_steps");
+            int limit = (bool?)args["internal"] == true ? 512 : 64;
+            if (steps == null || steps.Count < 1 || steps.Count > limit) throw new ArgumentException("batch_requires_1_to_64_steps");
             foreach (var item in steps) if (!(item is JObject s) || Array.IndexOf(batchCommands, (string)s["command"]) < 0 || !(s["args"] is JObject)) throw new ArgumentException("invalid_batch_step");
             batchSteps = (JArray)steps.DeepClone(); batchIndex = 0; waitingOperation = null;
             batchStartMoney = (long)CityState()["money"]; batchReserve=(long?)args["reserve"]??0;
             if(batchReserve<0 || batchReserve>batchStartMoney) throw new ArgumentException("invalid_cash_reserve");
             batchDeadline=DateTime.UtcNow.AddSeconds(600);
             batch = new JObject { ["id"] = Guid.NewGuid().ToString("N"), ["citySession"] = citySession, ["status"] = "running", ["steps"] = steps.Count, ["completed"] = 0, ["results"] = new JArray() };
+            // compact: keep only failed step results (polls stay small); continueOnBenign: a zone
+            // rectangle with no zonable cells is a proven no-op, not a failure.
+            if ((bool?)args["compact"] == true) batch["compact"] = true;
+            if ((bool?)args["continueOnBenign"] == true) { batch["continueOnBenign"] = true; batch["noop"] = 0; }
             return (JObject)batch.DeepClone();
         }
         private JObject CancelBatch()
@@ -108,8 +113,11 @@ namespace CitiesIIAgentBridge
                     var operation = ConstructionAccess.Status(waitingOperation);
                     string status = (string)operation["status"];
                     if (status == "queued" || status == "validating" || status == "applying") return;
-                    ((JArray)batch["results"]).Add(operation); waitingOperation = null;
-                    if (status != "complete") throw new InvalidOperationException("batch_step_failed");
+                    bool benign = status != "complete" && (bool?)batch["continueOnBenign"] == true && ((string)operation["error"] ?? "").Contains("no_zone_cells_in_rectangle");
+                    if ((bool?)batch["compact"] != true || (status != "complete" && !benign)) ((JArray)batch["results"]).Add(operation);
+                    waitingOperation = null;
+                    if (benign) batch["noop"] = (int)batch["noop"] + 1;
+                    else if (status != "complete") throw new InvalidOperationException("batch_step_failed");
                     ++batchIndex; batch["completed"] = batchIndex;
                 }
                 if (batchIndex == batchSteps.Count) { batch["status"] = "complete"; batch["moneySpent"]=batchStartMoney-(long)CityState()["money"]; return; }
@@ -123,9 +131,12 @@ namespace CitiesIIAgentBridge
                 }
                 JObject result;
                 dispatchingBatch=true;
-                try {result = Dispatch((string)step["command"], stepArgs);} finally {dispatchingBatch=false;}
+                try {result = Dispatch((string)step["command"], stepArgs);}
+                catch (Exception stepError) when ((bool?)batch["continueOnBenign"] == true && stepError.Message.Contains("no_zone_cells_in_rectangle"))
+                { batch["noop"] = (int)batch["noop"] + 1; ++batchIndex; batch["completed"] = batchIndex; return; }
+                finally {dispatchingBatch=false;}
                 if (result["id"] != null && result["status"] != null) waitingOperation = (string)result["id"];
-                else { ((JArray)batch["results"]).Add(result); ++batchIndex; batch["completed"] = batchIndex; }
+                else { if ((bool?)batch["compact"] != true) ((JArray)batch["results"]).Add(result); ++batchIndex; batch["completed"] = batchIndex; }
             }
             catch (Exception e) { batch["status"] = "failed"; batch["error"] = e.Message; batch["failedStep"] = batchIndex; InterruptBatchOperation(); }
         }

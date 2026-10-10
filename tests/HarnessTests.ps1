@@ -147,6 +147,25 @@ foreach ($target in $parseTargets) {
     }
 }
 
+# 8. upgrade.ps1 launch behaviour (static only; upgrade.ps1 is read, never run)
+$upgradePath = Join-Path $repo 'upgrade.ps1'
+$upgradeText = Get-Content -LiteralPath $upgradePath -Raw
+
+Invoke-HarnessTest 'upgrade: QuitOnly never launches' {
+    $early = [regex]::Match($upgradeText, '(?m)^if\s*\(\$QuitOnly\)\s*\{[^}\r\n]*quit only: not launching[^}\r\n]*\breturn\b')
+    Assert-That ($early.Success) 'no if ($QuitOnly) { ... quit only: not launching ... return } statement found'
+    $start = [regex]::Match($upgradeText, 'Start-Process\s+-FilePath')
+    Assert-That ($start.Success) 'no Start-Process launch found'
+    Assert-That ($early.Index -lt $start.Index) "QuitOnly return at char $($early.Index) is not before Start-Process at char $($start.Index)"
+}
+
+Invoke-HarnessTest 'upgrade: launches exactly as before' {
+    Assert-That ($upgradeText.Contains("-ArgumentList '-continuelastsave'")) "upgrade.ps1 lacks -ArgumentList '-continuelastsave'"
+    Assert-That (-not $upgradeText.Contains('-popupwindow')) 'upgrade.ps1 still contains -popupwindow'
+    Assert-That (-not $upgradeText.Contains('CooldownSeconds')) 'upgrade.ps1 still contains CooldownSeconds'
+    Assert-That (-not $upgradeText.Contains('AllowRelaunch')) 'upgrade.ps1 still contains AllowRelaunch'
+}
+
 Write-Output ("{0} tests: {1} passed, {2} failed" -f $script:Ran, ($script:Ran - $script:Failed), $script:Failed)
 if ($script:Failed) { exit 1 }
 exit 0

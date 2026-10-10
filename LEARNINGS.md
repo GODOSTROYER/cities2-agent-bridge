@@ -37,6 +37,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - `bridge.ps1` needs a heartbeat newer than 10 s in `%LOCALAPPDATA%\CitiesIIAgentBridge\session.json`. If `session.json` looks fresh but the client says "stale", suspect date parsing (fixed here).
 - Requests over **16384 bytes** are rejected with `request_too_large` and **nothing is applied**. The response file says so, but the client used to print it in a way that was easy to miss.
 - Every response is `{ok, result | error}`. Always check `ok`. For async work, `status: queued` only means accepted: poll `get_operation` or `get_batch`.
+- JSON piped into Python on Windows: use `python -X utf8` (or node). Windows Python reads piped stdin as cp1252 and mangles correct UTF-8. Check the raw bytes before blaming the producer (FAILURES #35).
 
 ### Reading the city
 - Paginated arrays are named per command: `prefabs`, `buildings`, `cells`, `edges`, `facilities`. Use `Get-BridgePaged` rather than assuming `items`.
@@ -88,6 +89,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - `play.ps1 fix` loops these up to 10 times. `run-session.ps1 -ResolveTutorials` (used by `play.ps1 run`) does it automatically.
 - Field case: completing the commercial-zone tutorial step via bridge zoning queued the next tutorial card (Industrial Zones 1/4), which paused the game. Turning tutorials off in game options avoids it entirely.
 - Settings: `Keep bridge controls enabled across city loads` (owner opt-in, default off, persisted in `ModsSettings/CitiesIIAgentBridge`). When off, "Allow local bridge controls" resets on every city load as before. The STOP latch still wins.
+- Tutorial intro cards are service requests: CemeteryTutorialIntro = deathcare, FireTutorialIntro = fire. The game waits on the card. AutoResolve clears it while controls are on, but the need stays until a service is built (FAILURES #37, #38).
 
 ## Live view (mod 0.5.1-local + MCP)
 
@@ -96,6 +98,8 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Read `demandWhy` before zoning or changing taxes. Taxes C13/I15 gave native factor Taxes -240 (C) and -450 (I) (FAILURES #34).
 - Frame rate: ~130 frames/s at speed 4 after a fresh launch, versus ~228/s in earlier sessions. The old `run-session.ps1` showed the same drop, so it is the environment, not the snapshot (~2 ms per build).
 - `events` `seq` restarts with each game process. Across restarts, filter with `since` as a UTC timestamp, not a seq number.
+- Coverage is not capacity. Native coverage showed every home covered by a fire house (range 5000), yet three fires burned in about 70 minutes with one fire house. Watch fire events and `needs`, not coverage alone (FAILURES #39).
+- Tax per occupied cell (monthly, from the `project` query on the live city): industry ~80, commercial ~110-150, office ~52-57, residential ~12-20. Compare zones with these before zoning.
 
 ## Harness bugs fixed in this copy (see `git log`)
 1. **Culture-dependent heartbeat parse.** PS7 `ConvertFrom-Json` turns `heartbeatUtc` into a `DateTime`. `[DateTimeOffset]::Parse()` then re-parsed its string form in the user's culture (en-IN read 10/09 as 10 Sep), so every command failed with "heartbeat stale". Fixed by using the DateTime directly and parsing strings with InvariantCulture.
@@ -110,3 +114,4 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Save a checkpoint and wait for `complete` before major changes. Never replay a mutation after a timeout; inspect state first.
 - Never clear the STOP latch without fresh permission. The "Allow local bridge controls" checkbox resets on every city load.
 - Leave the city paused and saved at the end.
+- GPU/driver trouble or a hang (FAILURES #43): save, quit, report; do not keep relaunching. The trigger is not established.

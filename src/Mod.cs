@@ -27,7 +27,7 @@ namespace CitiesIIAgentBridge
         private BridgeSettings settings;
         private Func<bool> updater;
         private string citySession;
-        private DateTime nextTick;
+        private DateTime nextTick, nextPublish, busyUntil;
         private bool disposed;
         private bool faulted;
         private bool mailboxContended;
@@ -90,23 +90,29 @@ namespace CitiesIIAgentBridge
         private bool Tick()
         {
             if (disposed) return true; // MainThreadDispatcher removes a callback returning true.
-            if (DateTime.UtcNow < nextTick) return false;
-            nextTick = DateTime.UtcNow.AddMilliseconds(250);
+            var tickNow = DateTime.UtcNow;
+            if (tickNow < nextTick) return false;
+            // Adaptive tick (harness latency): every ~15 ms while a request was just served or an
+            // operation/batch/save is in flight, so batch steps and replies do not wait a 250 ms
+            // tick each; 100 ms when idle. The heartbeat file is still written every 250 ms only.
+            bool busy = tickNow < busyUntil || ConstructionAccess.Active != null || (string)batch?["status"] == "running" || saveTask != null;
+            nextTick = tickNow.AddMilliseconds(busy ? 15 : 100);
             try
             {
                 bool communicated = BridgeTick.Run(
                     () => { if (File.Exists(Path.Combine(mailbox.Root, "STOP"))) settings.AllowControl = false; },
                     SimulationTick,
-                    () => mailbox.Publish(new JObject
+                    () => { if (tickNow < nextPublish) return; nextPublish = tickNow.AddMilliseconds(250); mailbox.Publish(new JObject
                 {
                     ["status"] = "ready", ["modVersion"] = ModVersion,
                     ["gameVersion"] = Application.version,
                     ["gameMode"] = GameManager.instance.gameMode.ToString(),
                     ["loading"] = GameManager.instance.isGameLoading,
                     ["controlEnabled"] = settings.AllowControl,
+                    ["display"] = Screen.fullScreenMode + " " + Screen.width + "x" + Screen.height,
                     ["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id
-                }),
-                    () => mailbox.Pump(), WorkflowTick, MailboxContention);
+                }); },
+                    () => { if (mailbox.Pump() > 0) busyUntil = DateTime.UtcNow.AddSeconds(3); }, WorkflowTick, MailboxContention);
                 if (communicated && mailboxContended)
                 {
                     log.Info("Mailbox access recovered; control permission was not changed by recovery.");
@@ -147,10 +153,34 @@ namespace CitiesIIAgentBridge
                 throw new InvalidOperationException("control_disabled: enable it in Options > Cities II Agent Bridge");
         }
 
+        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "service_buildings", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
+
+        // multi {commands:[{command,args}]}: up to 16 non-pausing reads in one mailbox round trip.
+        private JObject Multi(JObject args)
+        {
+            var list = args["commands"] as JArray; if (list == null || list.Count < 1 || list.Count > 16) throw new ArgumentException("multi_requires_1_to_16_commands");
+            var results = new JArray();
+            foreach (var item in list)
+            {
+                string name = (string)item["command"]; var row = new JObject { ["command"] = name };
+                try
+                {
+                    if (name == "multi" || (Array.IndexOf(NonPausingReads, name) < 0 && name != "get_snapshot" && name != "get_ui_state" && name != "get_operation" && name != "get_batch")) throw new ArgumentException("multi_allows_non_pausing_reads_only");
+                    row["result"] = Dispatch(name, item["args"] as JObject ?? new JObject()); row["ok"] = true;
+                }
+                catch (Exception e) { row["ok"] = false; row["error"] = e.GetType().Name + ": " + e.Message; }
+                results.Add(row);
+            }
+            return new JObject { ["results"] = results };
+        }
+
         private JObject Dispatch(string command, JObject args)
         {
             // These status polls must not terminate an active bounded simulation step.
-            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state" || command == "get_snapshot" || command == "load_save" || command == "quit_game";
+            bool statusOnly = command == "ping" || command == "get_capabilities" || command == "get_operation" || command == "get_batch" || command == "get_simulation_step" || command == "get_pause_state" || command == "resolve_pause_blocker" || command == "get_ui_state" || command == "get_snapshot" || command == "load_save" || command == "quit_game"
+                // Planning reads run inside one main-thread tick, so they are consistent without
+                // pausing: the simulation keeps running while the agent plans.
+                || Array.IndexOf(NonPausingReads, command) >= 0;
             if(!statusOnly && command != "simulate_step" && command != "cancel_simulation_step" && command != "set_simulation_speed" && command != "set_camera")
             {
                 if(settings.AllowControl) PauseAnalysis();
@@ -184,7 +214,7 @@ namespace CitiesIIAgentBridge
                         .Select(a => new JObject { ["name"] = a.GetName().Name, ["version"] = a.GetName().Version.ToString(), ["status"] = "assembly_loaded_not_health_verified" })),
                     ["planning"] = new JArray("find_free_lots","corridor","grid_connectors","find_roadside_lots","coverage_gaps","traffic_hotspots","project","get_district_atlas","get_city_map","get_city_diagnostics","find_building_sites","preview_building","plan_neighborhood","execute_neighborhood","get_neighborhood_plan"),
                     ["simulation"] = new JArray("pause_for_analysis","simulate_step","get_simulation_step","cancel_simulation_step","cancel_batch","get_pause_state","get_ui_state","resolve_pause_blocker","quit_game","load_save"),
-                    ["analysisPausesGame"] = true, ["snapshot"] = "non_pausing_cached_256_frames", ["events"] = "events.jsonl", ["prefabCosts"] = true, ["autoResolvePopups"] = true, ["roadPreview"] = true, ["placementErrorReasons"] = true,
+                    ["analysisPausesGame"] = true, ["snapshot"] = "non_pausing_cached_256_frames", ["events"] = "events.jsonl", ["prefabCosts"] = true, ["autoResolvePopups"] = true, ["nonPausingReads"] = new JArray(NonPausingReads), ["adaptiveTickMs"] = 15, ["roadPreview"] = true, ["placementErrorReasons"] = true,
                     ["construction"] = "native_preview_and_apply", ["controlEnabled"] = settings.AllowControl
                 };
                 case "get_snapshot": return GetSnapshot();
@@ -192,6 +222,12 @@ namespace CitiesIIAgentBridge
                 case "corridor": return FindCorridor(args);
                 case "grid_connectors": return GridConnectors(args);
                 case "find_roadside_lots": return FindRoadsideLots(args);
+                case "multi": return Multi(args);
+                case "plan_grid": return PlanGrid(args);
+                case "zone_area": return ZoneArea(args, false);
+                case "zone_area_count": return ZoneArea(args, true);
+                case "connected": return RoadsConnected(args);
+                case "service_buildings": return ServiceBuildings();
                 case "coverage_gaps": return CoverageGaps(args);
                 case "traffic_hotspots": return TrafficHotspots(args);
                 case "project": return Project(args);

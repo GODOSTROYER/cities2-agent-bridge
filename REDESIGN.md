@@ -1,9 +1,9 @@
 # Harness redesign: live play through an MCP server
 
-Status: Phase 1 complete (2026-10-10, verified live). Phase 2 in progress.
+Status: Phase 1 and Phase 2 implemented and verified live (2026-10-10). Phase 3 not started.
 
 ## Why
-The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (36 entries):
+The script harness (play.ps1, autoplay.ps1 and friends) works but is the wrong architecture for live play. Evidence is in FAILURES.md (44 entries):
 - **The agent is blind while the game runs.** Every bridge read except a few status calls runs `PauseAnalysis()` (Mod.cs Dispatch). So the agent either watches or plays, and problems (24% unemployment, a -₡113k/period budget) surfaced late.
 - **Decisions are hard-coded thresholds in scripts**, so the agent patches rules instead of reasoning about the city.
 - **It's slow.** Spatial work happens in PowerShell: the occupancy raster, site search and connector search take 1–4 minutes per cycle.
@@ -87,6 +87,12 @@ Haiku (operator, routine events)     ──MCP tools──▶        │  mailbo
 - `corridor(from, to)` for arterials.
 - `traffic_hotspots(top)` from edge traffic counters.
 - Upkeep and income projection per proposed action.
+
+## Phase 2 results (2026-10-10, live)
+- Timings in the mod: `free_lots` 120-480 ms, `coverage_gaps` 1-15 ms, `traffic_hotspots` 5 ms, `grid_connectors` 59 ms for 1,245 links, `corridor` 28-78 ms, `project` under 10 ms.
+- Grow plan: 20 s end to end (was minutes).
+- Extras beyond the spec: `grid_connectors`, `find_roadside_lots`, service-need escalation (snapshot `needs`, services.ps1), popup auto-resolve (`src/AutoResolve.cs`).
+- City progress (Round Rock): pop 1,427 -> 3,319; net -62k -> +128k per period; unemployment 18% -> 7.9%; milestone 5 reached.
 
 ## Phase 3: strategist and operator
 - The strategist (Claude, fresh session) reads `snapshot` + `CITYPLAN.md` every few game months and issues a small plan of typed actions.

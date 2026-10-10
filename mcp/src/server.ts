@@ -3,9 +3,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear } from './bridge.ts';
+import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state } from './bridge.ts';
+import { buildGrid, grow, zoneArea, link, placeService } from './city.ts';
+import { fixServices } from './services.ts';
+import { instrument, registerTimingsTool } from './timing.ts';
 
 const server = new McpServer({ name: 'cs2', version: '0.1.0' });
+instrument(server);          // every tool: wall-clock ms in the result and in journals/mcp-timings.jsonl
+registerTimingsTool(server, z);
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
@@ -57,11 +62,15 @@ const zoneEnum = z.enum(['res', 'resmed', 'com', 'ind', 'off']);
 const growZoneEnum = z.enum(['res', 'resmed', 'com', 'ind', 'off']);
 
 server.registerTool('snapshot', {
-  description: 'Returns the cached city state (about 1 s old) without pausing the game; safe during a run.',
-  inputSchema: {},
-}, async () => {
+  description: 'Cached city state (about 1 s old) without pausing the game; safe during a run. brief=true returns only the decision fields (~1/3 of the tokens): money, net, pop, demand, unemployment, vacancies, utilities %, escalated needs, milestone, blocker.',
+  inputSchema: { brief: z.boolean().optional() },
+}, async (a) => {
   try {
-    return ok(await callOk('get_snapshot', {}, 10));
+    const d = await callOk('get_snapshot', {}, 10);
+    if (!a.brief) return ok(d);
+    const needs = Object.fromEntries(Object.entries(d.needs ?? {}).filter(([k]) => k !== 'iconsTop').map(([k, v]: [string, any]) => [k, `${v.score} ${v.action}`]));
+    return ok({ money: d.city?.money, net: d.city?.net, pop: d.city?.pop, moveIn: d.city?.moveIn, happy: d.happy, health: d.health, demand: d.demand, unemp: d.jobs?.unemp, vacant: d.jobs?.vacantByEdu,
+      why: d.demandWhy, worst: d.worstHappy, util: [d.util?.power?.pct, d.util?.water?.pct, d.util?.sewage?.pct], needs, xp: `${d.milestone?.xp}/${d.milestone?.nextXp}`, ms: d.milestone?.achieved, blocker: d.ui?.blocker, speed: d.liveSpeed, frame: d.liveFrame, fire: d.buildings?.onFire, errors: d.errors });
   } catch (e) { return fail(e); }
 });
 
@@ -101,149 +110,115 @@ server.registerTool('fix_popup', {
 });
 
 server.registerTool('run', {
-  description: 'Runs a bounded simulation for the given seconds at speed 1, 2 or 4, passing popups and stopping early on new shortages or the cash floor.',
+  description: 'Bounded simulation at speed 1, 2 or 4. Default: blocks until done and returns a one-line summary. background=true returns at once and keeps the simulation running for `seconds` while you plan and build (planning reads never pause; a build pauses only for itself and the run resumes). seconds=0 with background=true stops it.',
   inputSchema: {
-    seconds: z.number().int().min(1).max(1800),
+    seconds: z.number().int().min(0).max(7200),
     speed: z.union([z.literal(1), z.literal(2), z.literal(4)]).default(4),
     cashFloor: z.number().int().min(0).default(0),
+    background: z.boolean().optional(),
   },
 }, async (a) => {
   try {
+    if (a.background) {
+      if (a.seconds === 0) { stopBackground(); return ok({ background: 'stopping' }); }
+      startBackground(a.seconds, a.speed);
+      return ok({ background: 'running', seconds: a.seconds, speed: a.speed });
+    }
     return ok({ summary: await run(a.seconds, a.speed, a.cashFloor) });
   } catch (e) { return fail(e); }
 });
 
+server.registerTool('run_status', {
+  description: 'Background run state and how much of the wall-clock time the simulation actually ran since this server started (non-pausing).',
+  inputSchema: {},
+}, async () => {
+  try {
+    const wall = (Date.now() - stats.startedAt) / 1000;
+    return ok({ background: background.active, remainingSec: Math.max(0, Math.round((background.until - Date.now()) / 1000)), lastStop: background.lastStop, mutating: state.mutating,
+      simSeconds: Math.round(stats.simSeconds), wallSeconds: Math.round(wall), simSharePct: Math.round(100 * stats.simSeconds / Math.max(1, wall)), bridgeCalls: stats.calls, avgCallMs: Math.round(stats.callMs / Math.max(1, stats.calls)) });
+  } catch (e) { return fail(e); }
+});
+
 server.registerTool('build_grid', {
-  description: 'Places a grid of zoned lots or roads at x,z; pauses the game. Use plan=true to preview the cost without building.',
+  description: 'Road grid (110 m blocks) at min corner x,z with a lot-free connector, zoned and connectivity-checked, all through mod queries (seconds, no PowerShell). Every road is previewed by the game before anything is built. plan=true previews only. Pauses the game only while building.',
   inputSchema: {
-    x: z.number(),
-    z: z.number(),
-    cols: z.number().int().min(1).max(6).default(3),
-    rows: z.number().int().min(1).max(6).default(2),
-    zone: zoneEnum.default('res'),
-    plan: z.boolean().default(false),
+    x: z.number(), z: z.number(),
+    cols: z.number().int().min(1).max(6).default(3), rows: z.number().int().min(1).max(6).default(2),
+    zone: zoneEnum.default('res'), plan: z.boolean().default(false),
+    legacy: z.boolean().optional().describe('use the old PowerShell path (for timing comparison only)'),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const m0 = await money();
-    const r = await runPwsh('play.ps1', [
-      'grid', '-X', String(a.x), '-Z', String(a.z), '-Cols', String(a.cols), '-Rows', String(a.rows),
-      '-Zone', a.zone, ...(a.plan ? ['-Plan'] : []),
-    ]);
-    const m1 = await money();
-    return ok(withCleared({
-      cost: m0 - m1,
-      monthlyUpkeep: null,
-      upkeepNote: 'road upkeep shows in snapshot expense after the next budget period',
-      exit: r.code,
-      lines: tail(r.lines),
-    }, cleared));
+    if (a.legacy) {
+      const m0 = await money();
+      const r = await runPwsh('play.ps1', ['grid', '-X', String(a.x), '-Z', String(a.z), '-Cols', String(a.cols), '-Rows', String(a.rows), '-Zone', a.zone, ...(a.plan ? ['-Plan'] : [])]);
+      return ok(withCleared({ legacy: true, cost: m0 - (await money()), exit: r.code, lines: tail(r.lines) }, cleared));
+    }
+    return ok(withCleared(await buildGrid({ x: a.x, z: a.z, cols: a.cols, rows: a.rows, zone: a.zone, plan: a.plan }), cleared));
   } catch (e) { return fail(e); }
 });
 
 server.registerTool('grow', {
-  description: 'Picks a zone by demand (or the given zone, demand >= 20), finds free owned land, builds a road grid, zones and connects it (play.ps1 grow); pauses the game. Use plan=true first.',
+  description: 'Picks a zone by demand (jobs first above 10% unemployment; or the given zone, demand >= 20), finds free owned land with the mod (stepping the grid size down when land is short), then builds, zones and connects it. plan=true validates only. Seconds, no PowerShell.',
   inputSchema: {
     zone: growZoneEnum.optional(),
-    cols: z.number().int().min(1).max(6).optional(),
-    rows: z.number().int().min(1).max(6).optional(),
+    cols: z.number().int().min(1).max(6).optional(), rows: z.number().int().min(1).max(6).optional(),
     plan: z.boolean().optional(),
-    buyTiles: z.boolean().optional(),
+    legacy: z.boolean().optional().describe('use the old PowerShell path (for timing comparison only)'),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const m0 = await money();
-    const r = await runPwsh('play.ps1', [
-      'grow',
-      ...(a.zone ? ['-Zone', a.zone] : []),
-      ...(a.cols ? ['-Cols', String(a.cols)] : []),
-      ...(a.rows ? ['-Rows', String(a.rows)] : []),
-      ...(a.plan ? ['-Plan'] : []),
-      ...(a.buyTiles ? ['-BuyTiles'] : []),
-    ]);
-    const m1 = await money();
-    return ok(withCleared({
-      cost: m0 - m1,
-      monthlyUpkeep: null,
-      upkeepNote: 'road upkeep shows in snapshot expense after the next budget period',
-      exit: r.code,
-      lines: tail(r.lines, 15),
-    }, cleared));
+    if (a.legacy) {
+      const m0 = await money();
+      const r = await runPwsh('play.ps1', ['grow', ...(a.zone ? ['-Zone', a.zone] : []), ...(a.cols ? ['-Cols', String(a.cols)] : []), ...(a.rows ? ['-Rows', String(a.rows)] : []), ...(a.plan ? ['-Plan'] : [])]);
+      return ok(withCleared({ legacy: true, cost: m0 - (await money()), exit: r.code, lines: tail(r.lines, 15) }, cleared));
+    }
+    return ok(withCleared(await grow({ zone: a.zone, cols: a.cols, rows: a.rows, plan: a.plan }), cleared));
   } catch (e) { return fail(e); }
 });
 
 server.registerTool('link', {
-  description: 'Builds a straight road from the nearest existing road to (x,z) that crosses no lot, checked by the game (play.ps1 link); connects grids or adds arterials. Pauses the game.',
+  description: 'Shortest lot-free straight road from the existing network to (x,z), previewed by the game and then built; connects grids or adds arterials. plan=true previews only.',
   inputSchema: { x: z.number(), z: z.number(), road: z.string().optional(), max: z.number().int().optional(), plan: z.boolean().optional() },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const m0 = await money();
-    const r = await runPwsh('play.ps1', ['link', '-X', String(a.x), '-Z', String(a.z), '-Road', a.road ?? 'Small Road', '-Max', String(a.max ?? 60000), ...(a.plan ? ['-Plan'] : [])]);
-    const m1 = await money();
-    return ok(withCleared({ cost: m0 - m1, monthlyUpkeep: null, exit: r.code, lines: tail(r.lines, 6) }, cleared));
+    return ok(withCleared(await link(a.x, a.z, a.road ?? 'Small Road', a.max ?? 60000, !!a.plan), cleared));
   } catch (e) { return fail(e); }
 });
 
 server.registerTool('zone', {
-  description: 'Zones every zonable empty cell within radius of (x,z) with the zone type (play.ps1 zone); free. Pauses the game.',
+  description: 'Zones every zonable empty cell within radius of (x,z) in one mod-side batch; free.',
   inputSchema: { x: z.number(), z: z.number(), radius: z.number().min(20).max(500).optional(), zone: zoneEnum },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const r = await runPwsh('play.ps1', ['zone', '-X', String(a.x), '-Z', String(a.z), '-R', String(a.radius ?? 300), '-Zone', a.zone]);
-    return ok(withCleared({ cost: 0, monthlyUpkeep: 0, exit: r.code, lines: tail(r.lines, 4) }, cleared));
+    return ok(withCleared(await zoneArea(a.x, a.z, a.radius ?? 300, a.zone), cleared));
   } catch (e) { return fail(e); }
 });
 
 server.registerTool('place_service', {
-  description: 'Places a building prefab by exact name near x,z; pauses the game. Use plan=true to check cost and upkeep without placing.',
+  description: 'Places a building by exact prefab name near (x,z): the mod finds rotated roadside lots clear of lots, roads and unowned land, then the game places it. Returns cost and monthly upkeep. plan=true reports cost, upkeep and whether a site exists without building.',
   inputSchema: {
-    prefab: z.string(),
-    x: z.number(),
-    z: z.number(),
-    radius: z.number().default(300),
-    maxCost: z.number().int().optional(),
-    plan: z.boolean().default(false),
+    prefab: z.string(), x: z.number(), z: z.number(),
+    radius: z.number().default(400), maxCost: z.number().int().optional(), plan: z.boolean().default(false),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const info = await prefabInfo(a.prefab, 'building');
-    if (!info.found) return ok(withCleared({ found: false, similar: info.similar }, cleared));
-    if (info.locked) return fail('prefab_locked: ' + a.prefab);
-    if (a.plan) {
-      return ok(withCleared({
-        plan: true,
-        construction: info.construction,
-        monthlyUpkeep: info.monthlyUpkeep,
-        consumptionUpkeep: info.consumptionUpkeep,
-      }, cleared));
-    }
-    const m0 = await money();
-    const r = await runPwsh('play.ps1', [
-      'place', a.prefab, '-X', String(a.x), '-Z', String(a.z), '-R', String(a.radius), '-Max', String(a.maxCost ?? Math.max(150000, Math.ceil(Number(info.construction ?? 0) * 1.2))),
-    ]);
-    const m1 = await money();
-    return ok(withCleared({
-      cost: m0 - m1,
-      construction: info.construction,
-      monthlyUpkeep: info.monthlyUpkeep ?? info.consumptionUpkeep ?? null,
-      exit: r.code,
-      lines: tail(r.lines, 8),
-    }, cleared));
+    return ok(withCleared(await placeService(a.prefab, a.x, a.z, a.radius, a.maxCost, a.plan), cleared));
   } catch (e) { return fail(e); }
 });
 
 server.registerTool('prefabs', {
-  description: 'Searches build prefabs by name (unlocked first) with construction and upkeep costs for the top matches; pauses the game.',
+  description: 'Searches build prefabs by name (unlocked first) with construction and upkeep costs for the top matches.',
   inputSchema: {
     filter: z.string(),
     kind: z.enum(['building', 'network', 'zone', 'service', 'all']).default('building'),
@@ -253,7 +228,6 @@ server.registerTool('prefabs', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     const page = await callOk('get_build_prefabs', { kind: a.kind, filter: a.filter, limit: 400 }, 20);
     const list: any[] = page.prefabs ?? [];
     list.sort((x, y) => Number(x.locked) - Number(y.locked) || String(x.name).localeCompare(String(y.name)));
@@ -315,12 +289,11 @@ server.registerTool('set_service_budget', {
 });
 
 server.registerTool('services', {
-  description: 'Lists city services with budget, building count, workers and workplaces; pauses the game.',
+  description: 'Lists city services with budget, building count, workers and workplaces.',
   inputSchema: {},
 }, async () => {
   try {
     await ensureClear(); // result is an array; popups cleared here are not reported
-    assertIdle();
     const list: any[] = (await callOk('get_services', {}, 20)).services ?? [];
     return ok(list.map(s => ({
       name: s.name,
@@ -333,19 +306,13 @@ server.registerTool('services', {
 });
 
 server.registerTool('fix_services', {
-  description: 'Builds city services that are missing or escalated (snapshot needs with action=build, native coverage gaps, utility capacity) before growth; places large lots with the mod\'s roadside finder. Pauses the game.',
-  inputSchema: {
-    maxPlacements: z.number().int().min(1).max(4).default(2),
-    plan: z.boolean().optional(),
-  },
+  description: 'Builds city services that are escalated (snapshot needs with action=build), missing, or uncovered by native coverage, plus utilities near capacity, before growth. Escalated needs override the cash floor and upkeep discipline. plan=true lists what it would build.',
+  inputSchema: { maxPlacements: z.number().int().min(1).max(4).default(2), plan: z.boolean().optional() },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    const m0 = await money();
-    const r = await runPwsh('services.ps1', ['-MaxPlacements', String(a.maxPlacements), ...(a.plan ? ['-Plan'] : [])], 900000);
-    const m1 = await money();
-    return ok(withCleared({ cost: m0 - m1, exit: r.code, lines: tail(r.lines, 10) }, cleared));
+    return ok(withCleared(await fixServices({ maxPlacements: a.maxPlacements, plan: a.plan }), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -389,7 +356,7 @@ server.registerTool('save', {
 });
 
 server.registerTool('restart', {
-  description: 'Saves (verified), quits safely, optionally rebuilds and installs, relaunches and loads the newest autosave; pauses the game.',
+  description: 'Saves (verified), quits safely, optionally rebuilds and installs, relaunches and loads the newest autosave; pauses the game. Takes a few minutes.',
   inputSchema: {
     build: z.boolean().default(false),
     noInstall: z.boolean().default(false),
@@ -399,8 +366,37 @@ server.registerTool('restart', {
     const cleared = await ensureClear();
     assertIdle();
     const args = a.build ? ['-Build'] : (a.noInstall ? ['-NoInstall'] : []);
-    const r = await runPwsh('upgrade.ps1', args, 1800000);
+    const r = await runPwsh('upgrade.ps1', args, 2400000);
     return ok(withCleared({ exit: r.code, lines: tail(r.lines, 12) }, cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('upgrade_road', {
+  description: 'Replaces one road edge (index/version from traffic_hotspots) with another road prefab, e.g. Medium Road -> Large Road, for congested arterials. Pauses the game; returns the cost.',
+  inputSchema: { index: z.number().int(), version: z.number().int(), road: z.string(), maxCost: z.number().int().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const info = await prefabInfo(a.road, 'network');
+    if (!info.found) return ok({ found: false, similar: info.similar });
+    if (info.locked) return fail('prefab_locked: ' + a.road);
+    const m0 = await money();
+    const started = await callOk('upgrade_network', { index: a.index, version: a.version, prefabIndex: info.index, prefabVersion: info.version, maxCost: a.maxCost ?? 60000 }, 20);
+    const done = started.id ? await waitOperation(started.id, 60) : started;
+    const m1 = await money();
+    return ok({ status: done.status, error: done.error, reasons: (done.placementErrors ?? []).flatMap((e: any) => e.reasons ?? []).slice(0, 6), cost: m0 - m1, monthlyUpkeep: null, ...(cleared.length ? { cleared } : {}) });
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('quit', {
+  description: 'Verified rolling save, then a clean quit through the mod (never force-kills). Use it instead of leaving the game idle during long offline work.',
+  inputSchema: {},
+}, async () => {
+  try {
+    assertIdle();
+    const r = await runPwsh('upgrade.ps1', ['-QuitOnly'], 600000);
+    return ok({ exit: r.code, lines: tail(r.lines, 8) });
   } catch (e) { return fail(e); }
 });
 
@@ -435,7 +431,7 @@ function pick(o: Record<string, unknown>): Record<string, unknown> {
 }
 
 server.registerTool('free_lots', {
-  description: 'Free, owned, dry, flat land for a width x depth rectangle (metres; x,z = min corner), ranked by link length and land use, with a lot-free connector from the nearest road. Computed in the mod in milliseconds. Pauses the game.',
+  description: 'Free, owned, dry, flat land for a width x depth rectangle (metres; x,z = min corner), ranked by link length and land use, with a lot-free connector from the nearest road. Computed in the mod in milliseconds.',
   inputSchema: {
     width: z.number().min(16).max(1500),
     depth: z.number().min(16).max(1500),
@@ -451,7 +447,6 @@ server.registerTool('free_lots', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     return ok(withCleared(await callOk('find_free_lots', pick({
       width: a.width, depth: a.depth, count: a.count, zone: a.zone, x: a.x, z: a.z,
       radius: a.radius, step: a.step, margin: a.margin, maxLink: a.maxLink,
@@ -471,7 +466,6 @@ server.registerTool('roadside_lots', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     return ok(withCleared(await callOk('find_roadside_lots', pick({
       prefab: a.prefab, x: a.x, z: a.z, radius: a.radius, count: a.count,
     }), 60), cleared));
@@ -479,7 +473,7 @@ server.registerTool('roadside_lots', {
 });
 
 server.registerTool('corridor', {
-  description: 'Lot-free road route on owned land (straight if possible, else A* waypoints); build each segment with link/build tools after a preview. Pauses the game.',
+  description: 'Lot-free road route on owned land (straight if possible, else A* waypoints); build each segment with link/build tools after a preview.',
   inputSchema: {
     fromX: z.number(),
     fromZ: z.number(),
@@ -490,7 +484,6 @@ server.registerTool('corridor', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     return ok(withCleared(await callOk('corridor', pick({
       from: { x: a.fromX, z: a.fromZ },
       to: { x: a.toX, z: a.toZ },
@@ -500,7 +493,7 @@ server.registerTool('corridor', {
 });
 
 server.registerTool('coverage_gaps', {
-  description: 'Homes whose road has low native service coverage, clustered; place the new facility at the densest cluster. Pauses the game.',
+  description: 'Homes whose road has low native service coverage, clustered; place the new facility at the densest cluster.',
   inputSchema: {
     service: z.enum(['Healthcare', 'FireRescue', 'Police', 'Park', 'PostService', 'Education', 'EmergencyShelter', 'Welfare']),
     threshold: z.number().optional(),
@@ -510,7 +503,6 @@ server.registerTool('coverage_gaps', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     return ok(withCleared(await callOk('coverage_gaps', pick({
       service: a.service, threshold: a.threshold, cell: a.cell, top: a.top,
     }), 60), cleared));
@@ -518,7 +510,7 @@ server.registerTool('coverage_gaps', {
 });
 
 server.registerTool('traffic_hotspots', {
-  description: 'Road edges with the lowest native traffic flow (flowPct 100 = free flow). Pauses the game.',
+  description: 'Road edges with the lowest native traffic flow (flowPct 100 = free flow).',
   inputSchema: {
     top: z.number().int().min(1).max(30).optional(),
     minLength: z.number().optional(),
@@ -526,13 +518,12 @@ server.registerTool('traffic_hotspots', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     return ok(withCleared(await callOk('traffic_hotspots', pick({ top: a.top, minLength: a.minLength }), 60), cleared));
   } catch (e) { return fail(e); }
 });
 
 server.registerTool('project', {
-  description: 'Projected construction cost, monthly upkeep, zone income and net per period for a list of proposed actions, from live city data. Call before building. Pauses the game.',
+  description: 'Projected construction cost, monthly upkeep, zone income and net per period for a list of proposed actions, from live city data. Call before building.',
   inputSchema: {
     actions: z.array(z.object({
       prefab: z.string().optional(),
@@ -544,7 +535,6 @@ server.registerTool('project', {
 }, async (a) => {
   try {
     const cleared = await ensureClear();
-    assertIdle();
     return ok(withCleared(await callOk('project', { actions: a.actions }, 60), cleared));
   } catch (e) { return fail(e); }
 });
