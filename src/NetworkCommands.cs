@@ -30,6 +30,7 @@ namespace CitiesIIAgentBridge
                 if (em.HasComponent<Game.Net.Road>(e))
                 {
                     var r = em.GetComponentData<Game.Net.Road>(e);
+                    if (em.HasComponent<Game.Net.Upgraded>(e)) info["upgraded"] = em.GetComponentData<Game.Net.Upgraded>(e).m_Flags.m_General.ToString() + " | L:" + em.GetComponentData<Game.Net.Upgraded>(e).m_Flags.m_Left + " | R:" + em.GetComponentData<Game.Net.Upgraded>(e).m_Flags.m_Right;
                     info["trafficDistanceRaw"] = new JArray(r.m_TrafficFlowDistance0.x,r.m_TrafficFlowDistance0.y,r.m_TrafficFlowDistance0.z,r.m_TrafficFlowDistance0.w,r.m_TrafficFlowDistance1.x,r.m_TrafficFlowDistance1.y,r.m_TrafficFlowDistance1.z,r.m_TrafficFlowDistance1.w);
                     info["trafficDurationRaw"] = new JArray(r.m_TrafficFlowDuration0.x,r.m_TrafficFlowDuration0.y,r.m_TrafficFlowDuration0.z,r.m_TrafficFlowDuration0.w,r.m_TrafficFlowDuration1.x,r.m_TrafficFlowDuration1.y,r.m_TrafficFlowDuration1.z,r.m_TrafficFlowDuration1.w);
                 }

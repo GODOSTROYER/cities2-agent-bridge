@@ -161,6 +161,20 @@ namespace CitiesIIAgentBridge
                 if (em.HasComponent<RouteNumber>(e)) row["number"] = em.GetComponentData<RouteNumber>(e).m_Number;
                 row["ticketPrice"] = t.m_TicketPrice; row["vehicleInterval"] = Math.Round(t.m_VehicleInterval, 1); row["flags"] = t.m_Flags.ToString();
                 row["vehicles"] = em.HasBuffer<RouteVehicle>(e) ? em.GetBuffer<RouteVehicle>(e, true).Length : 0;
+                // Riders: passengers aboard the line's vehicles now, against the seats of those vehicles.
+                int aboard = 0, seats = 0;
+                if (em.HasBuffer<RouteVehicle>(e)) foreach (var rv in em.GetBuffer<RouteVehicle>(e, true))
+                {
+                    void Count(Entity v)
+                    {
+                        if (!em.Exists(v)) return;
+                        if (em.HasBuffer<Game.Vehicles.Passenger>(v)) aboard += em.GetBuffer<Game.Vehicles.Passenger>(v, true).Length;
+                        if (em.HasComponent<PrefabRef>(v)) { var vp = em.GetComponentData<PrefabRef>(v).m_Prefab; if (em.HasComponent<PublicTransportVehicleData>(vp)) seats += em.GetComponentData<PublicTransportVehicleData>(vp).m_PassengerCapacity; }
+                    }
+                    if (em.HasBuffer<Game.Vehicles.LayoutElement>(rv.m_Vehicle) && em.GetBuffer<Game.Vehicles.LayoutElement>(rv.m_Vehicle, true).Length > 0) { foreach (var le in em.GetBuffer<Game.Vehicles.LayoutElement>(rv.m_Vehicle, true)) Count(le.m_Vehicle); }
+                    else Count(rv.m_Vehicle);
+                }
+                row["aboard"] = aboard; row["seats"] = seats;
                 int waiting = 0, n = 0, badPaths = 0; var paths = new JArray();
                 if (em.HasBuffer<RouteWaypoint>(e)) foreach (var wp in em.GetBuffer<RouteWaypoint>(e, true)) { n++; if (em.HasComponent<WaitingPassengers>(wp.m_Waypoint)) waiting += em.GetComponentData<WaitingPassengers>(wp.m_Waypoint).m_Count; }
                 if (em.HasBuffer<RouteSegment>(e)) foreach (var sg in em.GetBuffer<RouteSegment>(e, true)) if (em.HasComponent<Game.Pathfind.PathInformation>(sg.m_Segment)) { var pi = em.GetComponentData<Game.Pathfind.PathInformation>(sg.m_Segment); bool bad = pi.m_Distance <= 0 || (pi.m_State & (Game.Pathfind.PathFlags.Pending | Game.Pathfind.PathFlags.Failed)) != 0; if (bad) badPaths++; paths.Add(bad ? -1 : (int)Math.Round(pi.m_Distance)); }

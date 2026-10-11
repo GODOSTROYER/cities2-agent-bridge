@@ -1,6 +1,7 @@
 // Native build path: grids, zoning, links and service placement driven directly from the
 // MCP server through the mod's planning queries. No PowerShell, no cell dumps: planning is
 // non-pausing (the simulation keeps running), and the game is paused only inside mutate().
+import { planRefusal, invalidatePlanCache } from './design-live.ts';
 import { loadPolicy, forbiddenBy } from './policy.ts';
 import { call, callOk, multi, mutate, waitBatch, waitOperation, readSession } from './bridge.ts';
 import type { Json } from './bridge.ts';
@@ -351,6 +352,9 @@ export async function link(x: number, z: number, roadName = 'Small Road', maxCos
       const pv = await call('build_road', { ...args, previewOnly: true }, 15);
       const pvDone = pv.ok ? await waitOperation(pv.result.id, 30) : { status: 'failed', error: pv.error };
       if (pvDone.status !== 'complete') { tried.push(`${Math.round(c.d)}m:${pvDone.error ?? 'rejected'}`); continue; }
+      // Design standard: no steep ramp, no crossing of a railway or highway at grade, no lane drop (a link ends free by design).
+      const design = await planRefusal(roadName, connectorStart(c) as any, { x, z }, ['creates_dead_end', 'creates_double_junction']);
+      if (design.length) { tried.push(`${Math.round(c.d)}m:design(${design.join(',')})`); continue; }
       const water = await waterUnder(connectorStart(c), { x, z });
       if (water.wet && water.deepest > 2 && !overWater) { tried.push(`${Math.round(c.d)}m:crosses_water(${water.metres}m, ${water.deepest}m deep)`); continue; }
       if (plan) return { ok: true, plan: true, length: Math.round(c.d), previewCost: pvDone.previewCost, from: c.from, phases: { plan: planMs, preview: now() - t1 } };
@@ -662,6 +666,8 @@ export async function addConnections(x0: number, z0: number, x1: number, z1: num
       const pv = await call('build_road', { ...args, previewOnly: true }, 15);
       const pvDone = pv.ok ? await waitOperation(pv.result.id, 30) : { status: 'failed', error: pv.error };
       if (pvDone.status !== 'complete') { tried.push(`${Math.round(l.to.x)},${Math.round(l.to.z)}:${pvDone.error ?? 'rejected'}`); continue; }
+      const design = await planRefusal(String((road as any).name ?? 'Small Road'), connectorStart(l) as any, l.to, []);
+      if (design.length) { tried.push(`${Math.round(l.to.x)},${Math.round(l.to.z)}:design(${design.join(',')})`); continue; }
       if (plan) { built.push({ to: l.to, length: Math.round(l.d), previewCost: pvDone.previewCost }); continue; }
       const op = await call('build_road', args, 15); const done = op.ok ? await waitOperation(op.result.id, 60) : { status: 'failed', error: op.error };
       if (done.status === 'complete') built.push({ to: l.to, length: Math.round(l.d), cost: Number(done.previewCost ?? 0) }); else tried.push(`${Math.round(l.to.x)},${Math.round(l.to.z)}:${done.error}`);

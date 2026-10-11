@@ -54,11 +54,30 @@ namespace CitiesIIAgentBridge
             {
                 if (!em.HasComponent<Game.Buildings.ParkingFacility>(e) || em.HasComponent<PrefabData>(e)) continue;
                 var pos = em.GetComponentData<Game.Objects.Transform>(e).m_Position; int cap = 0, used = 0, lanes = 0, lanesFull = 0; float feeNow = 0; bool paid = false;
-                if (em.HasBuffer<Game.Net.SubLane>(e)) foreach (var sl in em.GetBuffer<Game.Net.SubLane>(e, true))
+                // The places of a hall or lot are lanes of its own sub-nets and sub-objects, not of the building itself
+                // (capacity read 0 for every hall): walk the building, its sub-nets and its sub-objects.
+                void Walk(Entity owner, int depth)
                 {
-                    if (em.HasComponent<Game.Net.GarageLane>(sl.m_SubLane)) { var g = em.GetComponentData<Game.Net.GarageLane>(sl.m_SubLane); cap += g.m_VehicleCapacity; used += g.m_VehicleCount; }
-                    else if (em.HasComponent<Game.Net.ParkingLane>(sl.m_SubLane)) { var l = em.GetComponentData<Game.Net.ParkingLane>(sl.m_SubLane); if ((l.m_Flags & (Game.Net.ParkingLaneFlags.VirtualLane | Game.Net.ParkingLaneFlags.ParkingDisabled)) != 0) continue; lanes++; if (l.m_FreeSpace < 5f) lanesFull++; }
+                    if (depth > 4 || !em.Exists(owner)) return;
+                    if (em.HasBuffer<Game.Net.SubLane>(owner)) foreach (var sl in em.GetBuffer<Game.Net.SubLane>(owner, true))
+                    {
+                        var lane = sl.m_SubLane;
+                        if (em.HasComponent<Game.Net.GarageLane>(lane)) { var g = em.GetComponentData<Game.Net.GarageLane>(lane); cap += g.m_VehicleCapacity; used += g.m_VehicleCount; }
+                        else if (em.HasComponent<Game.Net.ParkingLane>(lane))
+                        {
+                            var l = em.GetComponentData<Game.Net.ParkingLane>(lane); if ((l.m_Flags & (Game.Net.ParkingLaneFlags.VirtualLane | Game.Net.ParkingLaneFlags.ParkingDisabled)) != 0) continue;
+                            lanes++; if (l.m_FreeSpace < 5f) lanesFull++;
+                            // Slots of an open-air lane: its length over the slot interval of the lane prefab; parked cars are its lane objects.
+                            float len = em.HasComponent<Game.Net.Curve>(lane) ? em.GetComponentData<Game.Net.Curve>(lane).m_Length : 0f; float interval = 0f;
+                            if (em.HasComponent<PrefabRef>(lane)) { var lp = em.GetComponentData<PrefabRef>(lane).m_Prefab; if (em.HasComponent<ParkingLaneData>(lp)) { var d = em.GetComponentData<ParkingLaneData>(lp); interval = d.m_SlotInterval > 0.1f ? d.m_SlotInterval : Math.Max(d.m_SlotSize.x, d.m_SlotSize.y); } }
+                            if (interval > 0.5f && len > 0) cap += (int)Math.Floor(len / interval + 0.01f);
+                            if (em.HasBuffer<Game.Net.LaneObject>(lane)) foreach (var lo in em.GetBuffer<Game.Net.LaneObject>(lane, true)) if (em.HasComponent<Game.Vehicles.ParkedCar>(lo.m_LaneObject)) used++;
+                        }
+                    }
+                    if (em.HasBuffer<Game.Net.SubNet>(owner)) foreach (var sn in em.GetBuffer<Game.Net.SubNet>(owner, true)) Walk(sn.m_SubNet, depth + 1);
+                    if (em.HasBuffer<Game.Objects.SubObject>(owner)) foreach (var so in em.GetBuffer<Game.Objects.SubObject>(owner, true)) Walk(so.m_SubObject, depth + 1);
                 }
+                Walk(e, 0);
                 if (em.HasBuffer<Game.Policies.Policy>(e)) foreach (var p in em.GetBuffer<Game.Policies.Policy>(e, true)) if (p.m_Policy == policy && (p.m_Flags & Game.Policies.PolicyFlags.Active) != 0) { paid = true; feeNow = p.m_Adjustment; }
                 var row = NativeBuild.Id(e); row["prefab"] = ps.GetPrefabName(em.GetComponentData<PrefabRef>(e).m_Prefab); row["x"] = Math.Round(pos.x); row["z"] = Math.Round(pos.z);
                 row["capacity"] = cap; row["parked"] = used; row["lanes"] = lanes; row["lanesFull"] = lanesFull; row["paid"] = paid; row["fee"] = Math.Round(feeNow, 2); sites.Add(row);
