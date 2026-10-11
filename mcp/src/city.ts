@@ -115,6 +115,9 @@ export async function recheckDistricts(): Promise<Json[]> {
     const u = await call('utility_check', { x: d.x, z: d.z, radius: d.radius }, 20); if (!u.ok) continue;
     const verdict = u.result.verdict;
     if (verdict === 'served') pendingDistricts.splice(pendingDistricts.indexOf(d), 1);
+    // One building short among dozens is a single lot problem (a park without a road), not an
+    // unserved district: it must not stop growth (FAILURES #104). Three or 10% of the buildings do.
+    else if (verdict === 'unserved' && Math.max(Number(u.result.buildings?.electricity ?? 0), Number(u.result.buildings?.water ?? 0), Number(u.result.buildings?.sewage ?? 0)) < Math.max(3, Number(u.result.buildings?.total ?? 0) * 0.1)) continue;
     else if (verdict === 'unserved' || verdict === 'not_connected') bad.push({ x: Math.round(d.x), z: Math.round(d.z), verdict, buildings: u.result.buildings, linked: { road: u.result.road?.linked, power: u.result.power?.linked, water: u.result.water?.linked } });
   }
   return bad;
