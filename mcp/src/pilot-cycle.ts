@@ -32,7 +32,11 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   try { snap.devTree = await tool('dev_tree', {}); } catch { /* optional */ }
   try { const hot = await tool('traffic_hotspots', { top: 1 }); snap.cityFlow = Number(hot.cityFlow ?? NaN); } catch { /* optional */ }
 
-  try { snap.pilotMode = JSON.parse(await fs.readFile(join(dir, 'mode.json'), 'utf8')).mode; } catch { /* normal mode */ }
+  // Bank mode ends by itself when the cash target is reached (journals/pilot/mode.json).
+  try {
+    const mode = JSON.parse(await fs.readFile(join(dir, 'mode.json'), 'utf8')); snap.pilotMode = mode.mode;
+    if (mode.mode === 'bank' && Number(snap.city.money) >= Number(mode.target ?? 5_000_000)) { await fs.unlink(join(dir, 'mode.json')); snap.pilotMode = undefined; st.did.push(`${hhmm()} BANK TARGET ${mode.target} reached: growth resumes`); }
+  } catch { /* normal mode */ }
   const now = Date.now(); const { memo } = st;
   const stuck = selfCheck(snap, memo, now);
   for (const line of stuck) await log({ event: 'self_check', line });

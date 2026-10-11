@@ -91,7 +91,7 @@ export function selfCheck(snap: Record<string, any>, memo: PilotMemo, now: numbe
   for (const [kind, value] of Object.entries(demandOf)) {
     const recently = now - (memo.zoned?.[kind] ?? 0) < 10 * MIN;
     memo.starved[kind] = value >= 60 && !recently ? (memo.starved[kind] ?? 0) + 1 : 0;
-    if (memo.starved[kind] >= 5) out.push(`${kind} demand ${value} for ${memo.starved[kind]} cycles and nothing zoned: ${memo.lastGrowReason ?? 'no growth step was planned'}`);
+    if (memo.starved[kind] >= 5 && snap.pilotMode !== 'bank') out.push(`${kind} demand ${value} for ${memo.starved[kind]} cycles and nothing zoned: ${memo.lastGrowReason ?? 'no growth step was planned'}`);
   }
   memo.needTrend = memo.needTrend ?? {};
   for (const [k, n] of Object.entries(snap.needs ?? {}) as [string, any][]) {

@@ -72,3 +72,28 @@ Decisions:
   4. North district junction at (-519,1371): four Large Road arms at 1% flow with traffic data: inspect lane connections, try a roundabout (RoundaboutsNode is bought).
 - Power: 81% of capacity at 19k residents. Wind turbines need 190 m clearance and roadside sites are scarce: buy GasPowerPlantNode or place a second coal plant on the east road (no homes downwind) before 90%.
 - Bank mode (owner): no districts, tiles or amenities until cash reaches 5,000,000; only over-capacity and very-high needs are paid.
+
+## Traffic engineering rules and results (2026-10-11)
+
+Diagnosis of the highway congestion (the only highway: mainline north-south at x about -1300..-1650, one spur into the city):
+- Queue origin: the spur ENDS at (-877,33) directly into a city street with three junctions inside 190 m ((-800,17), (-664,8)/(-660,8) 4 m apart, (-622,6)/(-615,10)); the queue backs up the spur to the interchange ramps (1 lane, flow 1-2%). Classes: one interchange for the whole city (missing links), junction spacing at the terminus, missing hierarchy (local grid streets on the entry road).
+- The five north-district segments around (-519,1371) at 1% flow: junction capacity (four Large Road arms meeting at one signal), and the district had one river crossing (missing link).
+
+Rules used:
+- Hierarchy highway -> arterial -> collector -> local. A ramp feeds an arterial; the arterial runs continuously to the centre.
+- A highway is entered and left only by one-way ramps that diverge or merge at a shallow angle at carriageway nodes, preferably where a lane is added or dropped. Never a crossing at grade; the other carriageway is reached by an underpass.
+- Every district needs two independent ways out. Roads cross water as bridges, cables as overhead lines.
+- Measure flow per changed segment only after a game day: a new or upgraded road starts with empty counters and reads low.
+
+Built in the push (cost about 20,000 in total):
+| change | where | class addressed |
+|---|---|---|
+| Large Road corridor | highway entry (-800,17) -> centre -> east (110,-139), 15 edges | hierarchy |
+| Large Road corridor | centre -> south (-559,-1428), 15 edges; centre -> north (-720,1132), 12 edges | hierarchy |
+| Second river crossing | north district to (-355,1100), 297 m bridge | missing link |
+| Half interchange (southbound exit and entry) | off-ramp from the lane-drop node (-1311,-224) to (-1158,-175); on-ramp (-1158,-285) -> (-1318,-362); collector and corridor to (-664,-120) upgraded to Large Road | one interchange for the whole city |
+| Southbound exit for the south | off-ramp (-1471,-1924) -> (-1405,-2085) into the south-west grid, linked to the south district | missing link |
+| West arterial | (-1612,219) -> (-1650,1750) Medium Road | access to new land |
+
+Still to do: northbound ramps (west carriageway) with an underpass; an entry ramp for the south (city limit in the way: buy the tile west of x=-1558 first); merge the double nodes at the spur terminus; a roundabout at (-519,1371); move the bus depot if a ramp needs its site.
+Before: flow 53-55%, TrafficPenalty -4.3, 24 bottleneck icons. After-numbers go into progress.md once a game day has passed.
