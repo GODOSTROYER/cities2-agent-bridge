@@ -33,7 +33,7 @@ const police = r4.rows.find(x => x.system === 'Police')!;
 check(police.cause === 'access_traffic' && r4.markdown.includes('| Police | bad | access_traffic |'), 'DIAGNOSIS: police with every station busy and traffic flow at 50% is an access problem, not a capacity one');
 check(r4.markdown.indexOf('**Traffic**') < r4.markdown.indexOf('**Police**') && /Traffic\*\* \([^)]*root of [^)]*Police/.test(r4.markdown), 'root causes rank first: Traffic is listed before Police and named as its root');
 check(NOT_READ.every(n => r.rows.some(x => x.system === n && x.status === 'unknown')), 'infoviews the bridge cannot read yet are listed as unknown, not left out');
-check(r.markdown.includes('## Top problems and what is being done') && r.markdown.includes('1. **Fire and rescue** (critical'), 'the report lists the top problems');
+check(r.markdown.includes('## Top problems and what is being done') && r.markdown.includes('**Fire and rescue** (critical; cause: capacity'), 'the report lists the top problems with their cause');
 const r3 = buildReport({ snap, table, netFloor: 1_100_000, mode: 'improve', when: 'x' });
 check(r3.markdown.includes('## Definition of done') && r3.markdown.includes('- [ ] every happiness factor except Tax at 0 or better: TrafficPenalty -3.8') && r3.markdown.includes('- [ ] net at or above the floor: net 1050000, floor 1100000') && r3.rows.find(x => x.system === 'Budget')!.status === 'critical', 'the definition of done is a checklist; net under the floor fails it and makes the budget critical');
 check(buildReport({ snap: { ...snap, happiness: { Tax: -5, Leisure: 2 }, icons: {}, cityFlow: 80 }, netFloor: 1_000_000, when: 'x' }).markdown.includes('- [x] every happiness factor except Tax at 0 or better'), 'Tax is exempt in the checklist');
