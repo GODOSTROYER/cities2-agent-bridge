@@ -14,9 +14,11 @@ const side = (s: number) => { const seen = new Set([s]), q = [s]; while (q.lengt
 const A = side(cut.startNode), B = side(cut.endNode); if (A.has(cut.endNode)) { console.log('not a cut edge any more'); process.exit(0); }
 const inside = A.size <= B.size ? A : B, outside = A.size <= B.size ? B : A;
 const cross = (p: any, q: any, r: any, s: any) => { const d = (q.x - p.x) * (s.z - r.z) - (q.z - p.z) * (s.x - r.x); if (Math.abs(d) < 1e-9) return false; const t = ((r.x - p.x) * (s.z - r.z) - (r.z - p.z) * (s.x - r.x)) / d, u = ((r.x - p.x) * (q.z - p.z) - (r.z - p.z) * (q.x - p.x)) / d; return t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98; };
+const hw = new Set<number>(); for (const e of es) if (roadClass(e.prefab) === 'highway') { hw.add(e.startNode); hw.add(e.endNode); }   // a street never joins a highway node
 const out: any[] = [];
 for (const i of inside) for (const o of outside) {
   const p = pos.get(i)!, q = pos.get(o)!; const L = Math.hypot(p.x - q.x, p.z - q.z); if (L > max || L < 20) continue;
+  if (hw.has(i) || hw.has(o)) continue;
   if (all.some(e => roadClass(e.prefab) !== 'other' && cross(p, q, e.a, e.d))) continue;
   const skew = Math.min(Math.abs(p.x - q.x), Math.abs(p.z - q.z)); out.push({ L: Math.round(L), skew: Math.round(skew), from: [Math.round(p.x), Math.round(p.z)], to: [Math.round(q.x), Math.round(q.z)], arms: [deg.get(i), deg.get(o)], score: L + skew * 3 });
 }

@@ -45,6 +45,9 @@ export async function planRefusal(prefab: string, from: { x: number; z: number }
     // An end on a node the railway also uses would put a junction on the tracks (a street was joined to a level-crossing node once).
     const railNodes = new Set<number>(); for (const e of cache.edges) if (/Train Track/.test(e.prefab)) { railNodes.add(e.startNode); railNodes.add(e.endNode); }
     if ((n0 && railNodes.has(n0.id)) || (n1 && railNodes.has(n1.id))) r.reasons.push('joins_level_crossing');
+    // A city street never joins a highway carriageway (two residential streets were joined to highway nodes once): only ramps do.
+    const hwNodes = new Set<number>(); for (const e of cache.edges) if (/Highway/.test(e.prefab)) { hwNodes.add(e.startNode); hwNodes.add(e.endNode); }
+    if (!/Highway/.test(prefab) && ((n0 && hwNodes.has(n0.id)) || (n1 && hwNodes.has(n1.id)))) r.reasons.push('joins_highway');
     return r.reasons.filter(x => !ignore.includes(x));
   } catch { return []; }   // the check never blocks building when the read fails
 }
