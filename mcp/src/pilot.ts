@@ -130,7 +130,9 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   const servicesAt = actions.length;
   const pressing = [...(snap.happinessPriority?.priority ?? []), ...(snap.happinessPriority?.very_high ?? [])];
   const flow = Number(snap.cityFlow ?? NaN); // citywide traffic flow, target above 75%
-  if ((pressing.includes('TrafficPenalty') || needs.traffic?.action === 'build' || (Number.isFinite(flow) && flow < 75)) && due(memo, 'traffic', now, 6)) push('traffic', 'fix_traffic', { max: 4 }, `traffic ${needs.traffic?.score ?? ''} factor ${snap.happiness?.TrafficPenalty ?? '?'} flow ${Number.isFinite(flow) ? flow + '%' : '?'}`);
+  // Widening is OFF in improve mode: the effects table judged it ineffective (4 of 34 fixes, 0 of 9
+  // corridors). Traffic needs junction and link work chosen by failure class, not wider roads.
+  if (snap.pilotMode !== 'improve' && (pressing.includes('TrafficPenalty') || needs.traffic?.action === 'build' || (Number.isFinite(flow) && flow < 75)) && due(memo, 'traffic', now, 6)) push('traffic', 'fix_traffic', { max: 4 }, `traffic ${needs.traffic?.score ?? ''} factor ${snap.happiness?.TrafficPenalty ?? '?'} flow ${Number.isFinite(flow) ? flow + '%' : '?'}`);
   if (due(memo, 'tax', now, 10)) push('tax', 'tax_autopilot', { apply: true }, 'owner pins: one step inside the ranges');
 
   // 3. Growth follows the demand bars. Only a broken utility stops it; the reserve rule is

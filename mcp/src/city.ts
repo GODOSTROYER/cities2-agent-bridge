@@ -303,6 +303,9 @@ async function growInner(o: GrowOptions): Promise<Json> {
       // Quality floor for housing: never next to industry or on polluted ground (the score only
       // ranks what is free; when everything free is bad, buy land elsewhere instead).
       if (HOUSING.includes(pick.k) && (Number(site.toIndustry) < 250 || Number(site.pollution) > 8000)) { tried.push(`${cols}x${rows}@${site.x},${site.z}:polluted_or_near_industry`); continue; }
+      // Industry keeps its distance from homes too (FAILURES #110: an industrial district was zoned
+      // 90 m from existing homes and gave them 80 noise icons).
+      if (pick.k === 'ind' && Number(site.toHomes) < 350) { tried.push(`${cols}x${rows}@${site.x},${site.z}:industry_too_close_to_homes`); continue; }
       const estimate = Math.round((cols * (rows + 1) + rows * (cols + 1)) * 110 * 5);
       const spend = spendVerdict({ cash, cost: estimate, cls, reserve: o.reserve });
       if (!spend.ok && !o.plan) return { ok: false, reason: spend.reason, cls, cash, estimate, reserve: spend.reserve, zone: pick.k, hint: 'owner policy: bank cash to the reserve before new districts; pass reserve or cls to override for a flagged need' };
