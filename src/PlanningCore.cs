@@ -326,4 +326,34 @@ namespace CitiesIIAgentBridge
             return null;
         }
     }
+
+    // Pure traffic-engineering classifier (FAILURES #111): volume says where demand is, flow where
+    // capacity fails; together with the segment they name the failure class, which picks the fix.
+    internal static class TrafficRules
+    {
+        // volumeShare = this edge's volume as a share of the busiest edge (0..1).
+        public static string FailureClass(double flowPct, double volumeShare, double length, bool highway, int junctionArms)
+        {
+            if (flowPct >= 50) return "ok";
+            if (highway) return volumeShare >= 0.5 ? "ramp_or_merge_capacity" : "queue_from_the_street_it_feeds";
+            if (length < 60) return "junction_spacing";
+            if (volumeShare >= 0.5) return junctionArms >= 4 ? "junction_capacity" : "link_capacity";
+            if (volumeShare < 0.15) return "blocked_downstream";
+            return junctionArms >= 4 ? "junction_capacity" : "missing_parallel_link";
+        }
+        public static string FixFor(string failureClass)
+        {
+            switch (failureClass)
+            {
+                case "junction_spacing": return "merge or remove one of the close junctions; make the minor arm one-way or close it";
+                case "junction_capacity": return "roundabout sized to the roads, or grade separation for the through-flow";
+                case "link_capacity": return "a parallel link or the next road class on the whole corridor";
+                case "missing_parallel_link": return "a second route (river crossing, district-to-district link)";
+                case "blocked_downstream": return "follow the queue downstream: the cause is the next junction or ramp";
+                case "ramp_or_merge_capacity": return "longer or second ramp; another interchange";
+                case "queue_from_the_street_it_feeds": return "the arterial the ramp feeds: first junction set back, roundabout";
+                default: return "none";
+            }
+        }
+    }
 }

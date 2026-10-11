@@ -32,6 +32,9 @@ const r4 = buildReport({ snap: { ...snap, cityFlow: 50, happiness: { ...snap.hap
 const police = r4.rows.find(x => x.system === 'Police')!;
 check(police.cause === 'access_traffic' && r4.markdown.includes('| Police | bad | access_traffic |'), 'DIAGNOSIS: police with every station busy and traffic flow at 50% is an access problem, not a capacity one');
 check(r4.markdown.indexOf('**Traffic**') < r4.markdown.indexOf('**Police**') && /Traffic\*\* \([^)]*root of [^)]*Police/.test(r4.markdown), 'root causes rank first: Traffic is listed before Police and named as its root');
+const r5 = buildReport({ snap, outcomes: { power: { mix: { coal: { n: 5, capacity: 700000, production: 600000, heldBack: 0 }, wind: { n: 12, capacity: 700000, production: 690000, heldBack: 0 } }, cleanShareOfUsePct: 91, heldBack: 0 }, sewage: { rawOutlets: 4 } }, when: 'x' });
+check(r5.markdown.includes('- [ ] energy 100% clean and renewable: clean share of use 91%, 5 coal plants left') && r5.markdown.includes('- [ ] zero raw sewage discharge: 4 raw outlets'), 'the energy and sewage targets are lines of the definition of done');
+check(buildReport({ snap, outcomes: { power: { mix: { wind: { n: 20 } }, cleanShareOfUsePct: 140, heldBack: 0 }, sewage: { rawOutlets: 0 } }, when: 'x' }).markdown.includes('- [x] energy 100% clean and renewable'), 'with no coal or gas plant left the energy line passes');
 check(NOT_READ.every(n => r.rows.some(x => x.system === n && x.status === 'unknown')), 'infoviews the bridge cannot read yet are listed as unknown, not left out');
 check(r.markdown.includes('## Top problems and what is being done') && r.markdown.includes('**Fire and rescue** (critical; cause: capacity'), 'the report lists the top problems with their cause');
 const r3 = buildReport({ snap, table, netFloor: 1_100_000, mode: 'improve', when: 'x' });

@@ -375,11 +375,13 @@ namespace CitiesIIAgentBridge
         }
 
         // traffic_hotspots {top?, minLength?}: road edges with the lowest native traffic flow speed.
+        private static int Arms(EntityManager em, Entity node) => node != Entity.Null && em.HasBuffer<Game.Net.ConnectedEdge>(node) ? em.GetBuffer<Game.Net.ConnectedEdge>(node, true).Length : 0;
+
         private JObject TrafficHotspots(JObject args)
         {
             var w = RequireCity(); var em = w.EntityManager; var clock = Stopwatch.StartNew();
             int top = Math.Max(1, Math.Min(30, (int?)args["top"] ?? 10)); double minLength = args["minLength"] == null ? 20 : RequiredFloat(args, "minLength");
-            var rows = new List<JObject>(); double sum = 0; int n = 0, noData = 0;
+            var rows = new List<JObject>(); double sum = 0, maxVolume = 0; int n = 0, noData = 0;
             foreach (var edge in RoadEdges(w))
             {
                 var road = em.GetComponentData<Road>(edge.Entity); var speed = NetUtils.GetTrafficFlowSpeed(road);
@@ -389,17 +391,22 @@ namespace CitiesIIAgentBridge
                 // widening the roads it had just widened).
                 double driven = math.csum(road.m_TrafficFlowDistance0 + road.m_TrafficFlowDistance1);
                 if (driven < 1) { noData++; continue; }
-                sum += flow; n++;
+                sum += flow; n++; double volume = driven / Math.Max(1.0, length); if (volume > maxVolume) maxVolume = volume;
                 if (length < minLength) continue;
                 var mid = BezierAt(edge.Curve, 0.5f);
-                rows.Add(new JObject { ["index"] = edge.Entity.Index, ["version"] = edge.Entity.Version, ["prefab"] = edge.Prefab, ["x"] = Math.Round(mid.x), ["z"] = Math.Round(mid.z), ["length"] = Math.Round(length), ["flowPct"] = Math.Round(flow * 100) });
+                rows.Add(new JObject { ["index"] = edge.Entity.Index, ["version"] = edge.Entity.Version, ["prefab"] = edge.Prefab, ["x"] = Math.Round(mid.x), ["z"] = Math.Round(mid.z), ["length"] = Math.Round(length), ["flowPct"] = Math.Round(flow * 100), ["volume"] = Math.Round(volume, 1), ["highway"] = edge.Highway, ["arms"] = Math.Max(Arms(em, em.GetComponentData<Game.Net.Edge>(edge.Entity).m_Start), Arms(em, em.GetComponentData<Game.Net.Edge>(edge.Entity).m_End)) });
             }
+            // Analysis: the failure class of each slow segment (volume against flow) and the corridors
+            // that carry the most traffic, so the fix is chosen by class instead of widening.
+            foreach (var r in rows) { double share = maxVolume > 0 ? (double)r["volume"] / maxVolume : 0; r["volumePct"] = Math.Round(100 * share); string cls = TrafficRules.FailureClass((double)r["flowPct"], share, (double)r["length"], (bool)r["highway"], (int)r["arms"]); r["class"] = cls; if (cls != "ok") r["fix"] = TrafficRules.FixFor(cls); }
             var tf = w.GetExistingSystemManaged<TrafficFlowSystem>();
             var result = new JObject
             {
                 ["edges"] = n, ["noData"] = noData, ["meanFlowPct"] = n == 0 ? 0 : Math.Round(100 * sum / n),
                 ["hotspots"] = new JArray(rows.OrderBy(r => (double)r["flowPct"]).ThenByDescending(r => (double)r["length"]).Take(top)),
-                ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds), ["note"] = "flowPct = native traffic flow speed (100 = free flow); low values on arterials suggest upgrade_network or a parallel corridor."
+                ["corridors"] = new JArray(rows.OrderByDescending(r => (double)r["volume"]).Take(Math.Min(12, top)).Select(r => new JArray(r["prefab"], r["x"], r["z"], r["volumePct"], r["flowPct"], r["class"]))),
+                ["classes"] = new JObject(rows.Where(r => (string)r["class"] != "ok").GroupBy(r => (string)r["class"]).OrderByDescending(g => g.Count()).Select(g => new JProperty(g.Key, g.Count()))),
+                ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds), ["note"] = "flowPct = flow speed (100 = free); volumePct = traffic volume as a share of the busiest edge; class = failure class with its fix; corridors = [prefab, x, z, volumePct, flowPct, class] of the busiest edges."
             };
             Probe(new JArray(), "cityTraffic", () => { result["cityFlow"] = tf.cityAverageTrafficFlow; result["cityVolume"] = tf.cityAverageTrafficVolume; });
             return result;

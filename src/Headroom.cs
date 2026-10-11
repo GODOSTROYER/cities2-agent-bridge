@@ -82,6 +82,23 @@ namespace CitiesIIAgentBridge
                 if (em.HasComponent<GarbageProducer>(e)) { int g = em.GetComponentData<GarbageProducer>(e).m_Garbage; garbage += g; garbageBuildings++; if (g > garbageLimit) { garbagePiling++; garbageWhere.Add((pos.x, pos.z)); } }
                 if (em.HasComponent<CrimeProducer>(e)) { float c = em.GetComponentData<CrimeProducer>(e).m_Crime; crimeSum += c; crimeBuildings++; if (c > crimeLimit) crimeHigh++; }
             }
+            // Power mix by source: capacity, production, producers held back (production under half
+            // of capacity = no route to consumers), and the clean share of what the city uses.
+            var prefabNames = w.GetExistingSystemManaged<PrefabSystem>(); var mix = new Dictionary<string, (int n, long cap, long prod, int curtailed)>(); int outlets = 0;
+            foreach (var e in NativeBuild.Buildings(em))
+            {
+                if (em.HasComponent<PrefabData>(e) || !em.HasComponent<PrefabRef>(e)) continue;
+                string name = prefabNames.GetPrefabName(em.GetComponentData<PrefabRef>(e).m_Prefab) ?? "";
+                if (name.StartsWith("SewageOutlet", StringComparison.Ordinal)) outlets++;
+                if (!em.HasComponent<ElectricityProducer>(e)) continue;
+                var ep = em.GetComponentData<ElectricityProducer>(e); if (ep.m_Capacity <= 0) continue;
+                string kind = name.Contains("Wind") ? "wind" : name.Contains("Solar") ? "solar" : name.Contains("Hydro") ? "hydro" : name.Contains("Geothermal") ? "geothermal" : name.Contains("Coal") ? "coal" : name.Contains("Gas") ? "gas" : name.Contains("Nuclear") ? "nuclear" : "other";
+                mix.TryGetValue(kind, out var t); mix[kind] = (t.n + 1, t.cap + ep.m_Capacity, t.prod + ep.m_LastProduction, t.curtailed + (ep.m_LastProduction * 2 < ep.m_Capacity ? 1 : 0));
+            }
+            long cleanProd = mix.Where(kv => kv.Key == "wind" || kv.Key == "solar" || kv.Key == "hydro" || kv.Key == "geothermal").Sum(kv => kv.Value.prod), allProd = mix.Sum(kv => kv.Value.prod);
+            long used = 0; var stats = w.GetExistingSystemManaged<ElectricityStatisticsSystem>(); if (stats != null) used = stats.consumption;
+            o["power"] = new JObject { ["mix"] = new JObject(mix.Select(kv => new JProperty(kv.Key, new JObject { ["n"] = kv.Value.n, ["capacity"] = kv.Value.cap, ["production"] = kv.Value.prod, ["heldBack"] = kv.Value.curtailed }))), ["cleanShareOfProductionPct"] = allProd == 0 ? 0 : Math.Round(100.0 * cleanProd / allProd), ["cleanShareOfUsePct"] = used <= 0 ? 0 : Math.Round(100.0 * cleanProd / used), ["heldBack"] = mix.Sum(kv => kv.Value.curtailed) };
+            o["sewage"] = new JObject { ["rawOutlets"] = outlets };
             JArray Worst(List<(double x, double z)> pts) => new JArray(PointClusters.Densest(pts, 400, 3).Select(c => new JArray(Math.Round(c.x), Math.Round(c.z), c.n)));
             o["post"] = new JObject { ["avgMail"] = mailBuildings == 0 ? 0 : Math.Round((double)mail / mailBuildings, 1), ["buildingsWaiting"] = mailWaiting, ["sharePct"] = mailBuildings == 0 ? 0 : Math.Round(100.0 * mailWaiting / mailBuildings, 1), ["worst"] = Worst(mailWhere) };
             o["garbage"] = new JObject { ["avg"] = garbageBuildings == 0 ? 0 : Math.Round((double)garbage / garbageBuildings), ["buildingsPiling"] = garbagePiling, ["sharePct"] = garbageBuildings == 0 ? 0 : Math.Round(100.0 * garbagePiling / garbageBuildings, 1), ["worst"] = Worst(garbageWhere) };

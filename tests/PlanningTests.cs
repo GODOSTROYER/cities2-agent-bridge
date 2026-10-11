@@ -179,6 +179,14 @@ internal static class PlanningTests
         Check(hw.SegmentFree(20, 100, 20, 350), "a link road may still cross an ordinary road");
         Check(hw.SegmentFree(20, 100, 150, 100), "a link road on one side of the highway is free");
 
+        Check(TrafficRules.FailureClass(80, 0.9, 200, false, 4) == "ok", "a busy road that flows is not a failure");
+        Check(TrafficRules.FailureClass(2, 0.6, 30, false, 4) == "junction_spacing", "the live case: a 30 m segment between two junctions at 2% flow is a spacing failure");
+        Check(TrafficRules.FailureClass(1, 0.8, 112, false, 4) == "junction_capacity", "the north junction: four arms, high volume, 1% flow is junction capacity");
+        Check(TrafficRules.FailureClass(10, 0.7, 300, false, 2) == "link_capacity", "high volume on a long two-arm link is link capacity");
+        Check(TrafficRules.FailureClass(5, 0.05, 150, false, 3) == "blocked_downstream", "low volume with low flow is a queue from further down");
+        Check(TrafficRules.FailureClass(2, 0.3, 140, true, 2) == "queue_from_the_street_it_feeds" && TrafficRules.FailureClass(2, 0.8, 140, true, 2) == "ramp_or_merge_capacity", "highway segments: a ramp queue comes from the street it feeds unless the ramp itself is at capacity");
+        Check(TrafficRules.FixFor("junction_capacity").StartsWith("roundabout") && TrafficRules.FixFor("ok") == "none", "each class names its fix; widening is not among them");
+
         return count;
     }
 }
