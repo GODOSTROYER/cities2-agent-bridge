@@ -21,7 +21,7 @@ export const RULES: Rule[] = [
   { t: 'highschool', need: 'education_high', rx: /^HighSchool/, prefabs: ['HighSchool02', 'HighSchool01'], minPop: 2500, spacing: 2000 },
   { t: 'college', need: 'education_college', rx: /College/, prefabs: ['College01'], minPop: 6000, spacing: 3000 },
   { t: 'university', need: 'education_university', rx: /University/, prefabs: ['RS_University01', 'TechnicalUniversity01'], minPop: 9000, spacing: 3000 },
-  { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice02', 'PostOffice01'], cov: 'PostService', minPop: 1500, spacing: 1500 },
+  { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice01', 'PostOffice02'], cov: 'PostService', minPop: 1500, spacing: 1500 },
   { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['RecyclingCenter01', 'Landfill01', 'IncinerationPlant01'], minPop: 1000, spacing: 3000 },
   { t: 'entertainment', need: 'entertainment', rx: /Park|Playground|Plaza/, prefabs: ['ChirperPark01', 'Playground01', 'CityPark05', 'CityPark01'], cov: 'Park', minPop: 300, spacing: 350 },
   { t: 'telecom', need: 'telecom', rx: /RadioMast|ServerFarm|Telecom/, prefabs: ['RadioMast01'], minPop: 1000, spacing: 1500 },

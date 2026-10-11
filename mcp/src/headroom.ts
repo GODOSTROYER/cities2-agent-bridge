@@ -36,21 +36,32 @@ export function serviceTable(h: Record<string, any>, snap: Record<string, any>, 
   const util = snap?.util ?? {}; const e = h?.education ?? {}; const people = h?.people ?? {};
   // Enrolment can lag behind the children who should be in school, so the larger number counts.
   const eligible = (students: number, cohort: number, share: number) => Math.max(Number(students ?? 0), Number(cohort ?? 0) * share);
+  // The game's own usage of the service buildings (0-100%, average) is the real load: when it
+  // is known it is compared with the norm and the WORSE of the two decides (FAILURES #107).
+  const u = h?.usage ?? {};
+  // Capacity services (schools, clinics): the game's usage. Vehicle services: the share of
+  // facilities with no vehicle free, scaled so that "every station busy" reads 100%.
+  const v = h?.vehicles ?? {};
+  const worse = (r: Row, key: string): Row => {
+    const veh = v[key]; const g = u[key];
+    const cand = veh && Number(veh.buildings) > 0 ? row(Number(veh.busyPct), 100, growth, 'stations with no vehicle free %') : (g && Number(g.buildings) > 0 && ['school', 'highschool', 'college', 'university', 'health'].includes(key) ? row(Number(g.avgPct), 100, growth, 'usage %') : null);
+    return cand && (cand.projected ?? 0) > (r.projected ?? 0) ? cand : r;
+  };
   return {
     power: row(Number(util.power?.use ?? 0), Number(util.power?.prod ?? 0), growth, 'kW'),
     water: row(Number(util.water?.use ?? 0), Number(util.water?.cap ?? 0), growth, 'm3'),
     sewage: row(Number(util.sewage?.use ?? 0), Number(util.sewage?.cap ?? 0), growth, 'm3'),
-    school: row(eligible(e.elementary?.students, people.children, 0.9), Number(e.elementary?.capacity ?? 0), growth, 'pupils'),
-    highschool: row(eligible(e.high?.students, people.teens, 0.6), Number(e.high?.capacity ?? 0), growth, 'students'),
-    college: row(Math.max(Number(e.college?.students ?? 0), Number(people.adults ?? 0) * 0.03), Number(e.college?.capacity ?? 0), growth, 'students'),
-    university: row(Math.max(Number(e.university?.students ?? 0), Number(people.adults ?? 0) * 0.015), Number(e.university?.capacity ?? 0), growth, 'students'),
-    health: row(Math.max(Number(h?.health?.patients ?? 0), Number(snap?.needs?.health?.sick ?? 0)), Number(h?.health?.capacity ?? 0), growth, 'patients'),
-    ambulances: row(per10k * NORMS.health, Number(h?.health?.ambulances ?? 0), growth, 'vehicles'),
-    deathcare: row(per10k * NORMS.deathcare + Number(snap?.needs?.deathcare?.dead ?? 0) / 5, Number(h?.deathcare?.hearses ?? 0), growth, 'hearses'),
-    garbage: row(per10k * NORMS.garbage, Number(h?.garbage?.trucks ?? 0), growth, 'trucks'),
-    fire: row(per10k * NORMS.fire, Number(h?.fire?.engines ?? 0), growth, 'engines'),
-    police: row(per10k * NORMS.police, Number(h?.police?.cars ?? 0), growth, 'cars'),
-    post: row(per10k * NORMS.post, Number(h?.post?.vans ?? 0), growth, 'vans'),
+    school: worse(row(eligible(e.elementary?.students, people.children, 0.9), Number(e.elementary?.capacity ?? 0), growth, 'pupils'), 'school'),
+    highschool: worse(row(eligible(e.high?.students, people.teens, 0.6), Number(e.high?.capacity ?? 0), growth, 'students'), 'highschool'),
+    college: worse(row(Math.max(Number(e.college?.students ?? 0), Number(people.adults ?? 0) * 0.03), Number(e.college?.capacity ?? 0), growth, 'students'), 'college'),
+    university: worse(row(Math.max(Number(e.university?.students ?? 0), Number(people.adults ?? 0) * 0.015), Number(e.university?.capacity ?? 0), growth, 'students'), 'university'),
+    health: worse(row(Math.max(Number(h?.health?.patients ?? 0), Number(snap?.needs?.health?.sick ?? 0)), Number(h?.health?.capacity ?? 0), growth, 'patients'), 'health'),
+    ambulances: worse(row(per10k * NORMS.health, Number(h?.health?.ambulances ?? 0), growth, 'vehicles'), 'ambulances'),
+    deathcare: worse(row(per10k * NORMS.deathcare + Number(snap?.needs?.deathcare?.dead ?? 0) / 5, Number(h?.deathcare?.hearses ?? 0), growth, 'hearses'), 'deathcare'),
+    garbage: worse(row(per10k * NORMS.garbage, Number(h?.garbage?.trucks ?? 0), growth, 'trucks'), 'garbage'),
+    fire: worse(row(per10k * NORMS.fire, Number(h?.fire?.engines ?? 0), growth, 'engines'), 'fire'),
+    police: worse(row(per10k * NORMS.police, Number(h?.police?.cars ?? 0), growth, 'cars'), 'police'),
+    post: worse(row(per10k * NORMS.post, Number(h?.post?.vans ?? 0), growth, 'vans'), 'post'),
   };
 }
 

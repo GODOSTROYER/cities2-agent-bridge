@@ -127,6 +127,17 @@ namespace CitiesIIAgentBridge
             long garbageCap = 0; int garbageTrucks = 0, garbageSites = 0, garbageSpeed = 0;
             int fireEngines = 0, fireHouses = 0, patrolCars = 0, jail = 0, policeStations = 0;
             int postVans = 0, mailCap = 0, postOffices = 0, telecom = 0; double telecomCap = 0;
+            // The game's own usage figure per service building (ServiceUsage.m_Usage, what the
+            // building panel shows): vans out, beds taken, cells used. A norm per resident said
+            // "post 31%" while every post office was at 100% (FAILURES #107).
+            var usage = new Dictionary<string, (double sum, int n, int full)>();
+            void Use(string k, Entity b) { if (!em.HasComponent<ServiceUsage>(b)) return; float u = em.GetComponentData<ServiceUsage>(b).m_Usage; usage.TryGetValue(k, out var t); usage[k] = (t.sum + u, t.n + 1, t.full + (u >= 0.95f ? 1 : 0)); }
+            var busy = new Dictionary<string, (int n, int noVehicle, double eff)>();
+            void Busy(string k, Entity b, bool vehicleAvailable)
+            {
+                double eff = 1; if (em.HasBuffer<Efficiency>(b)) foreach (var f in em.GetBuffer<Efficiency>(b, true)) eff *= Math.Max(0f, f.m_Efficiency);
+                busy.TryGetValue(k, out var t); busy[k] = (t.n + 1, t.noVehicle + (vehicleAvailable ? 0 : 1), t.eff + eff);
+            }
             foreach (var e in NativeBuild.Buildings(em))
             {
                 if (em.HasComponent<PrefabData>(e) || em.HasComponent<Game.Objects.UnderConstruction>(e)) continue;
@@ -146,6 +157,17 @@ namespace CitiesIIAgentBridge
                 if (hospital) { clinics++; if (em.HasBuffer<Patient>(e)) patients += em.GetBuffer<Patient>(e, true).Length; }
                 if (death) { deathcare++; if (em.HasComponent<Game.Buildings.DeathcareFacility>(e)) bodiesStored += em.GetComponentData<Game.Buildings.DeathcareFacility>(e).m_LongTermStoredCount; if (em.HasBuffer<Patient>(e)) bodiesStored += em.GetBuffer<Patient>(e, true).Length; }
                 if (garbage) garbageSites++; if (fire) fireHouses++; if (police) policeStations++; if (post) postOffices++; if (tele) telecom++;
+                if (school) Use(level == 1 ? "school" : level == 2 ? "highschool" : level == 3 ? "college" : "university", e);
+                if (hospital) Use("health", e);
+                // Vehicle services: ServiceUsage reads a constant 100% there, so the facility's own
+                // flags decide: a station with no vehicle available is busy; efficiency says whether
+                // it works at all (staff, power, road).
+                if (fire) Busy("fire", e, em.HasComponent<Game.Buildings.FireStation>(e) && (em.GetComponentData<Game.Buildings.FireStation>(e).m_Flags & FireStationFlags.HasAvailableFireEngines) != 0);
+                if (police) Busy("police", e, em.HasComponent<Game.Buildings.PoliceStation>(e) && (em.GetComponentData<Game.Buildings.PoliceStation>(e).m_Flags & PoliceStationFlags.HasAvailablePatrolCars) != 0);
+                if (post) Busy("post", e, em.HasComponent<Game.Buildings.PostFacility>(e) && (em.GetComponentData<Game.Buildings.PostFacility>(e).m_Flags & (PostFacilityFlags.CanDeliverMailWithVan | PostFacilityFlags.CanCollectMailWithVan | PostFacilityFlags.HasAvailableTrucks)) != 0);
+                if (death) Busy("deathcare", e, em.HasComponent<Game.Buildings.DeathcareFacility>(e) && (em.GetComponentData<Game.Buildings.DeathcareFacility>(e).m_Flags & DeathcareFacilityFlags.HasAvailableHearses) != 0);
+                if (garbage) Busy("garbage", e, em.HasComponent<Game.Buildings.GarbageFacility>(e) && (em.GetComponentData<Game.Buildings.GarbageFacility>(e).m_Flags & GarbageFacilityFlags.HasAvailableGarbageTrucks) != 0);
+                if (hospital) Busy("ambulances", e, em.HasComponent<Game.Buildings.Hospital>(e) && (em.GetComponentData<Game.Buildings.Hospital>(e).m_Flags & HospitalFlags.HasAvailableAmbulances) != 0);
             }
             // People by age (residents only), for the eligible counts of each school level.
             int children = 0, teens = 0, adults = 0, elderly = 0;
@@ -159,6 +181,8 @@ namespace CitiesIIAgentBridge
             JObject Level(int i) => new JObject { ["students"] = schoolStudents[i], ["capacity"] = schoolCap[i], ["schools"] = schools[i] };
             return new JObject
             {
+                ["usage"] = new JObject(usage.Select(kv => new JProperty(kv.Key, new JObject { ["avgPct"] = Math.Round(100 * kv.Value.sum / Math.Max(1, kv.Value.n)), ["buildings"] = kv.Value.n, ["full"] = kv.Value.full }))),
+                ["vehicles"] = new JObject(busy.Select(kv => new JProperty(kv.Key, new JObject { ["buildings"] = kv.Value.n, ["noVehicleFree"] = kv.Value.noVehicle, ["busyPct"] = Math.Round(100.0 * kv.Value.noVehicle / Math.Max(1, kv.Value.n)), ["efficiencyPct"] = Math.Round(100 * kv.Value.eff / Math.Max(1, kv.Value.n)) }))),
                 ["people"] = new JObject { ["children"] = children, ["teens"] = teens, ["adults"] = adults, ["elderly"] = elderly },
                 ["education"] = new JObject { ["elementary"] = Level(1), ["high"] = Level(2), ["college"] = Level(3), ["university"] = Level(4) },
                 ["health"] = new JObject { ["patients"] = patients, ["capacity"] = patientCap, ["ambulances"] = ambulances, ["buildings"] = clinics },
