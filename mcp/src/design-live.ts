@@ -42,6 +42,9 @@ export async function planRefusal(prefab: string, from: { x: number; z: number }
     const nodeAt = (p: { x: number; z: number }) => { for (const e of cache!.edges) { if (Math.hypot(e.a.x - p.x, e.a.z - p.z) < 2.5) return { id: e.startNode, y: e.a.y }; if (Math.hypot(e.d.x - p.x, e.d.z - p.z) < 2.5) return { id: e.endNode, y: e.d.y }; } return null; };
     const n0 = nodeAt(from), n1 = nodeAt(to); const y = (i: number) => Number(s[i]?.position?.y ?? 0);
     const r = checkRoadPlan({ prefab, from: { x: from.x, y: n0?.y ?? y(0), z: from.z }, to: { x: to.x, y: n1?.y ?? y(1), z: to.z }, ...(n0 ? { fromNode: n0.id } : {}), ...(n1 ? { toNode: n1.id } : {}) }, { edges: cache.edges });
+    // An end on a node the railway also uses would put a junction on the tracks (a street was joined to a level-crossing node once).
+    const railNodes = new Set<number>(); for (const e of cache.edges) if (/Train Track/.test(e.prefab)) { railNodes.add(e.startNode); railNodes.add(e.endNode); }
+    if ((n0 && railNodes.has(n0.id)) || (n1 && railNodes.has(n1.id))) r.reasons.push('joins_level_crossing');
     return r.reasons.filter(x => !ignore.includes(x));
   } catch { return []; }   // the check never blocks building when the read fails
 }
