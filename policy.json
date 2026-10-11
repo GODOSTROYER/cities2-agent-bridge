@@ -53,5 +53,9 @@
   "GeothermalPowerPlant",
   "HydroelectricPowerPlant"
  ],
- "sewagePolicy": "export only through the outside pipe connection at (1470,7168); no raw outlet and no treatment plant may be placed"
+ "sewagePolicy": "export only through the outside pipe connection at (1470,7168); no raw outlet and no treatment plant may be placed",
+ "devPointsFor": [
+  "TramNode"
+ ],
+ "devPointsNote": "owner: the next development points go to Tram; nothing else is bought until it is"
 }

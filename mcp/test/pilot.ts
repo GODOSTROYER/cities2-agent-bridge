@@ -97,6 +97,9 @@ check(jb.length === 1 && jb[0].key === 'jobs' && jb[0].args.zone === 'com' && jb
 check(!decide({ ...jobless, happiness: { Tax: -5, Unemployment: -0.4 } }, fresh(), T).actions.some(a => a.tool === 'grow') && !decide({ ...jobless, demand: { rL: 100, c: 30, i: 40, o: 0 } }, fresh(), T).actions.some(a => a.tool === 'grow'), 'no job district without the negative factor or without job demand of 50');
 check(!decide(jobless, (() => { const m = fresh(); m.last.jobs = T - 5 * MIN; return m; })(), T).actions.some(a => a.tool === 'grow'), 'one job district per 12 minutes, so its effect can be measured');
 check(JSON.stringify(decide({ ...jobless, stopRepeating: ['entertainment'] }, fresh(), T).actions.find(a => a.key === 'services')!.args.skip) === '["entertainment"]', 'fix types judged ineffective are handed to the service planner as a stop list');
+const treeT = { points: 1, nodes: [{ name: 'TramNode', cost: 2, bought: false, service: 'Transportation', canBuy: false }, { name: 'LargeParksNode', cost: 1, bought: false, service: 'Parks & Recreation', canBuy: true }] };
+check(!decide({ ...base, devTree: treeT, policy: { devPointsFor: ['TramNode'] } }, fresh(), T).actions.some(a => a.key === 'unlock'), 'THE LIVE CASE: with Tram reserved and 1 point of the 2 it costs, nothing else is bought');
+check(decide({ ...base, devTree: { ...treeT, points: 2, nodes: [{ ...treeT.nodes[0], canBuy: true }, treeT.nodes[1]] }, policy: { devPointsFor: ['TramNode'] } }, fresh(), T).actions.find(a => a.key === 'unlock')?.args.unlock === 'TramNode', 'when the points are there the reserved node is bought first');
 check(selfCheck({ ...base, pilotMode: 'improve' }, (() => { const m = fresh(); m.starved = { housing: 9 }; return m; })(), T).length === 0, 'in improve mode unmet housing demand is not a fault (expansion is off by policy)');
 
 // Milestone -> save at once.

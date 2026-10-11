@@ -178,7 +178,11 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
   const tree = snap.devTree;
   if (tree && Number(tree.points ?? 0) > 0 && due(memo, 'unlock', now, 1)) {
-    const want = wishedNode(tree.nodes ?? [], Number(tree.points));
+    // Points the owner has reserved (policy.json devPointsFor, in order): the first node of that list that is
+    // not bought yet is the only thing bought, and nothing else is bought while its cost is being saved up (FAILURES #117).
+    const reservedName = ((snap.policy?.devPointsFor ?? []) as string[]).find(n => (tree.nodes ?? []).some((q: any) => q.name === n && !q.bought));
+    const reservedNode = reservedName ? (tree.nodes ?? []).find((q: any) => q.name === reservedName) : null;
+    const want = reservedNode ? (Number(tree.points) >= Number(reservedNode.cost) && reservedNode.canBuy !== false ? reservedNode : null) : wishedNode(tree.nodes ?? [], Number(tree.points));
     if (want) push('unlock', 'dev_tree', { unlock: want.name }, `development points ${tree.points}: ${want.name} (${want.service}) costs ${want.cost}`);
   }
 
