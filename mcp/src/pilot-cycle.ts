@@ -10,10 +10,11 @@ import { promises as fs, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
+import { sustainedNet, netFloor } from './budget.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
-interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
+interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; netRecent?: number[]; netSustainedMax?: number; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
 
 const hhmm = () => new Date().toISOString().slice(11, 16);
 const short = (n: number) => Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -32,11 +33,17 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   try { snap.devTree = await tool('dev_tree', {}); } catch { /* optional */ }
   try { const hot = await tool('traffic_hotspots', { top: 1 }); snap.cityFlow = Number(hot.cityFlow ?? NaN); } catch { /* optional */ }
 
-  // Bank mode ends by itself when the cash target is reached (journals/pilot/mode.json).
-  try {
-    const mode = JSON.parse(await fs.readFile(join(dir, 'mode.json'), 'utf8')); snap.pilotMode = mode.mode;
-    if (mode.mode === 'bank' && Number(snap.city.money) >= Number(mode.target ?? 5_000_000)) { await fs.unlink(join(dir, 'mode.json')); snap.pilotMode = undefined; st.did.push(`${hhmm()} BANK TARGET ${mode.target} reached: growth resumes`); }
-  } catch { /* normal mode */ }
+  // Policy: the owner's goals as data (policy.json at the repository root; journals/pilot/mode.json
+  // still overrides the mode for a quick switch). Bank mode ends by itself at its cash target.
+  let policy: Record<string, any> = {};
+  try { policy = JSON.parse(await fs.readFile(join(repo, 'policy.json'), 'utf8')); } catch { /* defaults */ }
+  try { const mode = JSON.parse(await fs.readFile(join(dir, 'mode.json'), 'utf8')); policy = { ...policy, ...mode }; } catch { /* no override */ }
+  if (policy.mode === 'bank' && Number(snap.city.money) >= Number(policy.bankTarget ?? policy.target ?? 5_000_000)) { policy.mode = 'grow'; await fs.unlink(join(dir, 'mode.json')).catch(() => {}); st.did.push(`${hhmm()} BANK TARGET reached: growth resumes`); }
+  snap.pilotMode = policy.mode; snap.policy = policy;
+  // Net floor: max(baseline, highest sustained net) minus the noise margin; tracked every cycle.
+  st.netRecent = [...(st.netRecent ?? []), Number(snap.city.net)].slice(-12);
+  const sustained = sustainedNet(st.netRecent); if (sustained !== null) st.netSustainedMax = Math.max(Number(st.netSustainedMax ?? 0), sustained);
+  snap.netFloor = netFloor(Number(policy.netFloorBaseline ?? 0), st.netSustainedMax, Number(policy.netFloorMarginPct ?? 2));
   const now = Date.now(); const { memo } = st;
   const stuck = selfCheck(snap, memo, now);
   for (const line of stuck) await log({ event: 'self_check', line });
@@ -64,7 +71,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   while (st.did.length > 40) st.did.shift(); while (st.sticky.length > 6) st.sticky.shift();
   const attention = [...plan.attention, ...stuck, ...st.sticky]; st.cycles++;
 
-  const status = { utc: new Date().toISOString(), flow: snap.cityFlow, pop: snap.city.pop, cash: snap.city.money, net: snap.city.net, milestone, xp: `${snap.milestone?.xp}/${snap.milestone?.nextXp}`, unemp: snap.jobs?.unemp, happy: snap.happy, demand: snap.demand, attention, last: st.did.slice(-3) };
+  const status = { utc: new Date().toISOString(), mode: snap.pilotMode, netFloor: snap.netFloor, flow: snap.cityFlow, pop: snap.city.pop, cash: snap.city.money, net: snap.city.net, milestone, xp: `${snap.milestone?.xp}/${snap.milestone?.nextXp}`, unemp: snap.jobs?.unemp, happy: snap.happy, demand: snap.demand, attention, last: st.did.slice(-3) };
   await fs.writeFile(join(dir, 'status.json'), JSON.stringify(status));
   // Checkpoint every 15 minutes, at each milestone and after each district or tile.
   if (reached || Date.now() - st.lastProgress > 15 * 60_000 || done.some(n => n.startsWith('built ') || n.startsWith('bought'))) {
@@ -75,7 +82,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     // Only CHANGES of status and blocked items are surfaced (progress.md, the status line).
     try {
       let outcomes: Record<string, any> | undefined; try { outcomes = (await tool('query', { command: 'get_metrics', args: {}, fields: ['outcomes', 'perfMs'], maxChars: 6000 })).outcomes; } catch { /* older mod */ }
-      const rep = buildReport({ snap, outcomes, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
+      const rep = buildReport({ snap, outcomes, netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
       const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
       st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);
       st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));
@@ -88,6 +95,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
-  const line = `pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
+  const floorNote = snap.pilotMode === 'improve' ? ` floor ${short(Number(snap.netFloor))}` : '';
+  const line = `[${snap.pilotMode ?? 'grow'}] pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))}${floorNote} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
   return { line, attention, milestone, reached };
 }

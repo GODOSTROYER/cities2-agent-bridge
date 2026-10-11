@@ -140,3 +140,39 @@ Plan, from reflection on the game assembly (not yet verified in code):
 - Demolition is opt-in and limited to ordinary growables.
 - Build only into `rebuilt/` or `artifacts/releases/`. DLL backups never go under Mods (FAILURES #26).
 - Token efficiency: compact outputs, event-driven wake-ups, fresh sessions.
+
+## Phase 4: city manager
+
+**Problem.** Until now the owner spotted each issue (cemetery, unpowered district, housing hold, post, parking, highway) and a rule was patched in. The harness must notice, diagnose, fix and verify every system by itself, and get better over time, at near-zero token cost.
+
+**Shape.** One loop, five layers, all in code (`mcp/src`), driven by one policy file. A model is called only when the code cannot decide.
+
+| layer | what it does | where | state today |
+|---|---|---|---|
+| Policy | Owner goals and hard constraints as data: mode (grow / bank / improve), targets per system, net floor, reserve, tax pins, "never" list. A change of mind is an edit to `policy.json` | `policy.json`, read every cycle by `pilot-cycle.ts` | live (mode, floor, reserve); targets still partly constants |
+| Sense | For every system three views plus trend: capacity (headroom), coverage, outcome. One cached pass in the mod, the game's own values | mod `get_metrics` (`service_headroom`, outcomes, traffic, icon clusters, infoview names), snapshot; `metrics-history.jsonl` | live for 27 systems; unknown: transit, bicycles, disaster control, administration, outside connections, wealth, level, extractors, water pollution |
+| Diagnose | For a bad row, name the cause class: capacity, coverage, access/traffic, staffing, budget, siting/pollution, locked, knock-on. Cross-system links rank root causes first (traffic -> fire, police, ambulance, garbage, post; pollution and garbage -> health; education -> jobs) | `diagnose.ts` (pure) | to build (increment 2) |
+| Plan | Candidate actions per cause with predicted effect, one-off cost, monthly upkeep, risk. Filter by constraints (net floor by upkeep projection, reserve, site rules, never-list), choose by benefit per upkeep, zero-upkeep fixes first, native preview before commit | `pilot.ts` `decide`, `budget.ts` (`spendVerdict`, `floorVerdict`), tools | live as fixed rules; candidate ranking to build (increment 3) |
+| Act, verify, learn | Every action records expected effect and a check-back time. Moved -> effective; not moved -> ineffective, undone when it costs upkeep, next hypothesis. Effects table per action type and context feeds planning. Mistakes become guards | `happiness.ts` verdicts, `actions.jsonl`; `effects.jsonl` | verdicts live for happiness factors; effects table and undo to build (increment 3) |
+
+**Cadence (event-driven).** Fast tick every cycle (60 s): critical only - utilities, network warnings, fires, cash, net floor. Review every checkpoint (15 min, about a game day): full metrics, ranked `REPORT.md`, act on the top items. Strategic review at each milestone or hourly: Opus reads `REPORT.md` and the trends, records decisions in `CITYPLAN.md`. Events wake the review early: a status change for the worse, a new icon cluster, net under the floor.
+
+**Escalation ladder (cost).** 1. Code rules: zero tokens. 2. Haiku operator: ambiguous cases from a compact case file (`journals/pilot/last-line.txt`, `REPORT.md`), about 8k tokens per look. 3. Opus: strategy, new failure classes, mod internals. 4. Owner: only a real trade-off, as one question with options. Every escalation that recurs is turned into a code rule and a test.
+
+**Self-audit (every review, in `REPORT.md`).** The definition-of-done checklist (factors at 0 or better except Tax, every system good, flow 75%+, no icons, net at or above the floor); stuck items (a need unresolved for N reviews, demand unmet, an action that keeps failing); unread systems; rules that contradict the game's signals ("Rule conflicts" in progress.md).
+
+**Choices and trade-offs.**
+- Rules in code, not a model in the loop: a cycle costs nothing and is testable; the cost is that every new failure class needs one Opus session to encode. Accepted: each of the 107 logged failures became a rule or a guard.
+- Score on the WORSE of capacity, coverage and outcome, and take thresholds from the game's own configuration (mail tolerance, garbage warning limit, crime tolerance, station flags). Planning norms and guessed thresholds misled three times (#99, #105, #107).
+- Policy as presets, not free-form: modes are small sets of switches (expansion on/off, floor on/off, reserve) so a mode change cannot leave the loop in an untested combination. Each mode has tests.
+- Net floor by projection with a measured factor (listed upkeep x 2.7) rather than waiting for the budget to show it: slower growth of services, but revenue cannot be spent twice.
+- Spatial tools return worst clusters with positions, never maps (tokens), and every builder previews natively.
+
+**Order of work (most valuable first).**
+1. Policy file, improve mode, net floor, definition of done - DONE 2026-10-11.
+2. Diagnosis layer with cross-system links; `REPORT.md` shows the cause and ranks root causes first.
+3. Verify-and-learn: effects table per action type, automatic undo of ineffective upkeep, guards from mistakes.
+4. Traffic and transit tools: volume-against-flow analysis with failure class, junction choice by class, transit planner (bus lines are locked in this city: reader first).
+5. Remaining readers (nothing unknown), scenario tests replayed from saved snapshots, daemon watchdog.
+
+**Robustness.** Full suites after every mod edit (C#, HarnessTests, MCP); scenario fixtures (district without power, post failing with capacity fine, maxed demand with an education mismatch, net under the floor); the daemon stops and says so after five failed cycles and never launches or kills the game; no hard gate on a single indicator (audit in FAILURES #91).

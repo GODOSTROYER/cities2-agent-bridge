@@ -43,6 +43,7 @@ const arrow = (now: number | null, before: number | undefined) => now === null |
 export interface ReportInput {
   snap: Record<string, any>; table?: Record<string, { pct: number | null; projected: number | null; status: string }>; coverage?: Record<string, number>;
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
+  netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
   outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
 }
 
@@ -91,12 +92,25 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   add({ system: 'Workplaces and jobs', status: unemp >= 20 ? 'bad' : unemp >= 10 ? 'ok' : 'good', outcome: `unemployment ${unemp}%, vacancies by education ${JSON.stringify(snap.jobs?.vacantByEdu ?? [])}`, capacity: '-', coverage: '-', trend: '', action: i.diagnosis ?? 'diagnose: no jobs or education mismatch', blocked: '', value: -unemp / 5 });
   add({ system: 'Population and happiness', status: Number(snap.happy ?? 0) >= 65 ? 'good' : Number(snap.happy ?? 0) >= 50 ? 'ok' : 'bad', outcome: `pop ${snap.city?.pop}, happiness ${snap.happy}, health ${snap.health}`, capacity: '-', coverage: '-', trend: '', action: '-', blocked: '', value: Number(snap.happy ?? 0) / 10 });
   const cash = Number(snap.city?.money ?? 0), net = Number(snap.city?.net ?? 0);
-  add({ system: 'Budget', status: net < 0 ? 'critical' : cash < 1_000_000 ? 'ok' : 'good', outcome: `cash ${cash}, net ${net}/month, taxes ${JSON.stringify(snap.tax ?? {})}, Tax factor ${factors.Tax ?? '-'} (exempt)`, capacity: '-', coverage: '-', trend: '', action: 'reserve 1,000,000; taxes pinned', blocked: '', value: net / 100000 });
+  const floor = Number(i.netFloor ?? 0);
+  add({ system: 'Budget', status: net < 0 || (floor > 0 && net < floor) ? 'critical' : cash < 1_000_000 ? 'ok' : 'good', outcome: `${floor > 0 ? `net floor ${floor}, margin ${net - floor}; ` : ''}cash ${cash}, net ${net}/month, taxes ${JSON.stringify(snap.tax ?? {})}, Tax factor ${factors.Tax ?? '-'} (exempt)`, capacity: '-', coverage: '-', trend: '', action: 'reserve 1,000,000; taxes pinned', blocked: '', value: net / 100000 });
   add({ system: 'Milestone', status: 'ok', outcome: `milestone ${snap.milestone?.achieved}, XP ${snap.milestone?.xp}/${snap.milestone?.nextXp}`, capacity: '-', coverage: '-', trend: '', action: 'grow population and happiness', blocked: '', value: Number(snap.milestone?.xp ?? 0) / 1000 });
   for (const n of NOT_READ) rows.push({ system: n, status: 'unknown', outcome: 'not read by the bridge yet', capacity: '-', coverage: '-', trend: '', action: 'add a reader', blocked: 'harness', value: null });
   rows.sort((a, b) => rank[a.status] - rank[b.status] || (a.value ?? 0) - (b.value ?? 0));
   const top = rows.filter(r => r.status === 'critical' || r.status === 'bad').slice(0, 5);
-  const md = [`# City report ${i.when}`, '', '## Top problems and what is being done',
+  // Definition of done (owner): checked at every review.
+  const negative = Object.entries(factors).filter(([k, v]) => k !== 'Tax' && Number(v) < 0).map(([k, v]) => `${k} ${v}`);
+  const notGood = rows.filter(r => r.status !== 'good' && r.status !== 'unknown' && !['Zones: housing (demand low/medium/high)', 'Zones: commercial/industrial/office (demand)', 'Milestone', 'LandValue', 'Tourism'].includes(r.system)).map(r => r.system);
+  const iconTotal = Object.values(icons).reduce((a: number, v: any) => a + Number(v), 0);
+  const flowNow = Number(snap.cityFlow ?? NaN);
+  const done: [string, boolean, string][] = [
+    ['every happiness factor except Tax at 0 or better', negative.length === 0, negative.join(', ') || 'all at 0 or better'],
+    ['every system good', notGood.length === 0, notGood.length ? `${notGood.length} not good: ${notGood.slice(0, 8).join(', ')}` : 'all good'],
+    ['traffic flow 75% or better', Number.isFinite(flowNow) && flowNow >= 75, `${Number.isFinite(flowNow) ? flowNow : '?'}%`],
+    ['no problem icons', iconTotal === 0, `${iconTotal} icons`],
+    ['net at or above the floor', floor <= 0 || net >= floor, floor > 0 ? `net ${net}, floor ${floor}` : 'no floor set'],
+  ];
+  const md = [`# City report ${i.when}${i.mode ? ' (mode ' + i.mode + ')' : ''}`, '', '## Definition of done', ...done.map(([name, pass, detail]) => `- [${pass ? 'x' : ' '}] ${name}: ${detail}`), '', '## Top problems and what is being done',
     ...(top.length ? top.map((r, k) => `${k + 1}. **${r.system}** (${r.status}): ${r.outcome}${r.capacity !== '-' ? ', capacity ' + r.capacity : ''}. ${r.action}${r.blocked ? '. Blocked by: ' + r.blocked : ''}`) : ['Nothing critical or bad.']),
     '', `Last actions: ${(i.did ?? []).slice(-6).join('; ') || '-'}`, '',
     '| system | status | outcome | use / capacity | coverage | trend | action | blocked by |', '|---|---|---|---|---|---|---|---|',

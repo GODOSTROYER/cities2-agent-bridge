@@ -91,7 +91,7 @@ export function selfCheck(snap: Record<string, any>, memo: PilotMemo, now: numbe
   for (const [kind, value] of Object.entries(demandOf)) {
     const recently = now - (memo.zoned?.[kind] ?? 0) < 10 * MIN;
     memo.starved[kind] = value >= 60 && !recently ? (memo.starved[kind] ?? 0) + 1 : 0;
-    if (memo.starved[kind] >= 5) out.push(`${kind} demand ${value} for ${memo.starved[kind]} cycles and nothing zoned: ${memo.lastGrowReason ?? 'no growth step was planned'}`);
+    if (memo.starved[kind] >= 5 && snap.pilotMode !== 'improve') out.push(`${kind} demand ${value} for ${memo.starved[kind]} cycles and nothing zoned: ${memo.lastGrowReason ?? 'no growth step was planned'}`);
   }
   memo.needTrend = memo.needTrend ?? {};
   for (const [k, n] of Object.entries(snap.needs ?? {}) as [string, any][]) {
@@ -147,6 +147,11 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
 
   // BANK mode (owner: save money for the next expansion): only critical and very-high needs are
   // paid for - no districts, no tiles, no amenities. journals/pilot/mode.json {"mode":"bank"}.
+  // IMPROVE mode (owner goal: maximum happiness, no expansion, net never below the floor): no
+  // districts and no tiles; every upkeep-adding placement is checked against the net floor.
+  const improve = snap.pilotMode === 'improve'; const floor = Number(snap.netFloor ?? 0); const netNow = Number(snap.city?.net ?? 0);
+  if (improve) { for (let k = actions.length - 1; k >= 0; k--) if (actions[k].key === 'grow' || actions[k].key === 'tile') actions.splice(k, 1); }
+  if (improve && floor > 0 && netNow < floor) attention.push(`net ${netNow} is under the floor ${floor}: upkeep-adding actions are stopped; find the cause, trim over-provisioned services`);
   const bank = snap.pilotMode === 'bank';
   // Owner: zoning (and its cheap roads) continues while banking; only tile purchases, large
   // amenities and plants beyond headroom are held back. At most two districts per cycle.
@@ -157,7 +162,7 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   const planned = actions.filter(a => a.key === 'grow').map(a => ({ zone: String(a.args.zone), cols: Number(a.args.cols), rows: Number(a.args.rows) }));
   const people = plannedPeople(planned);
   if (due(memo, 'services', now, 3) || people > 0)
-    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
+    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: improve ? { maxPlacements: 3, netFloor: floor, upkeepFactor: Number(snap.policy?.upkeepRealFactor ?? 2.7) } : bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: improve ? `improve mode: services by condition, net floor ${floor}` : bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
 
   // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
   const tree = snap.devTree;
@@ -211,6 +216,7 @@ export function progressBlock(snap: Record<string, any>, did: string[], next: st
   const icons = Object.entries(snap.icons ?? {}).map(([k, v]) => `${k.replace(/ Notification$/, '')} ${v}`).join(', ') || 'none';
   const lines = [
     `# Progress ${when}`,
+    `- MODE ${snap.pilotMode ?? 'grow'}${snap.pilotMode === 'improve' ? `: net floor ${snap.netFloor} (baseline ${snap.policy?.netFloorBaseline}), margin ${Number(snap.city?.net ?? 0) - Number(snap.netFloor ?? 0)}` : ''}`,
     `- pop ${snap.city?.pop}, cash ${snap.city?.money}, net ${snap.city?.net}, milestone ${snap.milestone?.achieved} (XP ${snap.milestone?.xp}/${snap.milestone?.nextXp})`,
     `- unemployment ${snap.jobs?.unemp}%, vacancies by education ${JSON.stringify(snap.jobs?.vacantByEdu ?? [])}, demand ${JSON.stringify(snap.demand ?? {})}`,
     ...(diagnosis ? [`- jobs: ${diagnosis}`] : []),

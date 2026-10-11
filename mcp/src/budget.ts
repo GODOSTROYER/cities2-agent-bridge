@@ -87,3 +87,25 @@ export function wetSpan(points: { x: number; z: number }[], depths: (number | nu
 }
 // Overhead lines span water on pylons; everything laid in or on the ground must not cross it.
 export const spansWater = (prefabName: string): boolean => /(^|\s)Line$/.test(prefabName) || /Bridge/i.test(prefabName);
+
+// ---- Net floor (owner, improve mode): monthly net must never fall. ----
+// floor = max(baseline, highest SUSTAINED net) minus a noise margin (2%). "Sustained" is the
+// lowest of the last readings, so one lucky month does not raise the floor.
+// An action that adds upkeep is allowed only when net minus its real running cost stays at or
+// above the floor. Real cost = prefab upkeep x a factor (measured live: wages and consumption make
+// a building cost about 2.7x its listed upkeep).
+export function sustainedNet(recent: number[], window = 8): number | null {
+  const r = recent.slice(-window); return r.length >= Math.min(window, 6) ? Math.min(...r) : null;
+}
+export function netFloor(baseline: number, highestSustained: number | null | undefined, marginPct = 2): number {
+  return Math.round(Math.max(baseline, Number(highestSustained ?? 0)) * (1 - marginPct / 100));
+}
+export interface FloorVerdict { ok: boolean; projected: number; floor: number; margin: number; reason?: string }
+export function floorVerdict(i: { net: number; floor: number; monthlyUpkeep: number; factor?: number; critical?: boolean }): FloorVerdict {
+  const cost = Math.max(0, Number(i.monthlyUpkeep) || 0) * (i.factor ?? 2.7); const projected = Math.round(Number(i.net) - cost);
+  const margin = Math.round(Number(i.net) - i.floor);
+  if (projected >= i.floor) return { ok: true, projected, floor: i.floor, margin };
+  // A critical fix (a service over capacity, an unserved district) goes ahead; the breach is reported.
+  if (i.critical) return { ok: true, projected, floor: i.floor, margin, reason: 'critical_despite_floor' };
+  return { ok: false, projected, floor: i.floor, margin, reason: 'net_floor' };
+}

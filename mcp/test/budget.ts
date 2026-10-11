@@ -1,5 +1,5 @@
 // Offline checks: the owner's reserve rule, the growth blockers and the utility postcondition.
-import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, RESERVE } from '../src/budget.ts';
+import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, sustainedNet, netFloor, floorVerdict, RESERVE } from '../src/budget.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 
 check(RESERVE === 1_000_000, 'the working reserve is 1,000,000');
@@ -40,4 +40,14 @@ check(w.wet && w.metres > 150 && w.metres < 230 && w.deepest === 13.5, 'the live
 check(!wetSpan(pts, pts.map(() => null)).wet && !wetSpan(pts, pts.map(() => 0.2)).wet, 'dry ground and puddles under 0.3 m are not water');
 check(spansWater('High-voltage Line') && spansWater('Low-voltage Line') && !spansWater('High-voltage Ground Cable') && !spansWater('Small Water Pipe') && !spansWater('Small Road'), 'only overhead lines (and bridges) may cross water');
 check(linePoints({ x: 0, z: 0 }, { x: 5000, z: 0 }).length === 61, 'a very long line is capped at 60 steps');
+check(netFloor(1_600_000, null) === 1_568_000, 'the floor starts at the owner baseline minus the 2% noise margin');
+check(netFloor(1_600_000, 2_000_000) === 1_960_000, 'the floor rises with the highest sustained net');
+check(netFloor(1_600_000, 1_200_000) === 1_568_000, 'and never drops below the baseline');
+check(sustainedNet([2.0e6, 2.1e6, 1.9e6, 2.2e6, 2.0e6, 2.05e6]) === 1.9e6 && sustainedNet([2e6, 2.1e6]) === null, 'sustained net is the lowest of the recent readings and needs at least six of them');
+let fv = floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 11_250 });
+check(fv.ok && fv.projected === 1_969_625 && fv.margin === 40_000, 'a high school (11,250 listed, about 30,000 real) fits a 40,000 margin');
+fv = floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 75_000 });
+check(!fv.ok && fv.reason === 'net_floor' && fv.projected === 1_797_500, 'a college (75,000 listed) would take net under the floor and is refused');
+check(floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 75_000, critical: true }).reason === 'critical_despite_floor', 'a critical fix goes ahead and the breach is named');
+check(floorVerdict({ net: 1_900_000, floor: 1_960_000, monthlyUpkeep: 0 }).ok === false, 'with net already under the floor nothing that is not critical is added, even at zero upkeep');
 process.exit(failed ? 1 : 0);

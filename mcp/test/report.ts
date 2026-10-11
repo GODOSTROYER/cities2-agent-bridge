@@ -29,6 +29,9 @@ check(row2('Parking').status === 'critical' && row2('Parking').capacity === 'no 
 check(row2('Police').outcome.startsWith('high crime in 35% of buildings') && row2('Roads').status === 'good' && row2('Profitability').status === 'good' && row2('LandValue').outcome === 'average 61.5', 'crime share, road wear, profitability and land value are in the report');
 check(buildReport({ snap, when: 'x' }).rows.some(x => x.system === 'Parking' && x.status === 'unknown'), 'without the reader parking is listed as unknown');
 check(NOT_READ.every(n => r.rows.some(x => x.system === n && x.status === 'unknown')), 'infoviews the bridge cannot read yet are listed as unknown, not left out');
-check(r.markdown.includes('## Top problems and what is being done') && r.markdown.split('\n')[3].startsWith('1. **Fire and rescue** (critical)'), 'the report opens with the top problems');
+check(r.markdown.includes('## Top problems and what is being done') && r.markdown.includes('1. **Fire and rescue** (critical)'), 'the report lists the top problems');
+const r3 = buildReport({ snap, table, netFloor: 1_100_000, mode: 'improve', when: 'x' });
+check(r3.markdown.includes('## Definition of done') && r3.markdown.includes('- [ ] every happiness factor except Tax at 0 or better: TrafficPenalty -3.8') && r3.markdown.includes('- [ ] net at or above the floor: net 1050000, floor 1100000') && r3.rows.find(x => x.system === 'Budget')!.status === 'critical', 'the definition of done is a checklist; net under the floor fails it and makes the budget critical');
+check(buildReport({ snap: { ...snap, happiness: { Tax: -5, Leisure: 2 }, icons: {}, cityFlow: 80 }, netFloor: 1_000_000, when: 'x' }).markdown.includes('- [x] every happiness factor except Tax at 0 or better'), 'Tax is exempt in the checklist');
 check(r.markdown.includes('| system | status | outcome |') && Object.keys(r.values).length > 10, 'one table, and the values for the next trend are returned');
 process.exit(failed ? 1 : 0);

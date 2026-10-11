@@ -2,7 +2,7 @@
 // decideServices() is pure and fed with snapshot/building/gap data; fixServices() is the only
 // part that talks to the game (non-pausing reads, then placeService() for the chosen needs).
 import { serviceTable, headroomFor, tableLine, utilityAlerts } from './headroom.ts';
-import { RESERVE } from './budget.ts';
+import { RESERVE, floorVerdict } from './budget.ts';
 import { recordFactors, recordAction, assess, readJsonl, HISTORY_PATH, ACTIONS_PATH } from './happiness.ts';
 import { promises as fs } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -237,7 +237,7 @@ function parseClusters(res: Json): Cluster[] | undefined {
     .map((c: Json): Cluster => [Number(c[0]), Number(c[1]), Number(c[2])]);
 }
 
-export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number } = {}): Promise<Json> {
+export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number; netFloor?: number; upkeepFactor?: number } = {}): Promise<Json> {
   const t0 = Date.now();
   const [snap, buildings, homeClusters] = await multi([
     { command: 'get_snapshot' }, { command: 'service_buildings' },
@@ -292,7 +292,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   // Cash reserve (owner rule: bank about 1,000,000 before discretionary spending): a need that is neither a critical utility nor a
   // very_high factor is deferred when its construction cost would take cash below the reserve.
   const reserve = Number.isFinite(opts.reserve) ? Number(opts.reserve) : RESERVE;
-  let cash = Number(snap?.city?.money ?? 0); const deferred: Json[] = []; let placedCount = 0;
+  let cash = Number(snap?.city?.money ?? 0); let net = Number(snap?.city?.net ?? 0); const deferred: Json[] = []; let placedCount = 0;
   for (const n of needs) {
     if (placedCount >= maxPlacements) break;
     let settled = false; let lastPrefab = n.prefabs[0]; let lastReason = 'no_prefab_tried';
@@ -301,13 +301,18 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
       lastPrefab = prefab;
       if (!mustAct) {
         const quote = await placeService(prefab, n.x, n.z, 600, undefined, true);
+        // Net floor (improve mode): the real running cost of the building must leave net at or above the floor.
+        if (quote.ok && Number.isFinite(opts.netFloor)) {
+          const fv = floorVerdict({ net, floor: Number(opts.netFloor), monthlyUpkeep: Number(quote.monthlyUpkeep ?? 0), factor: opts.upkeepFactor });
+          if (!fv.ok) { deferred.push({ t: n.t, prefab, monthlyUpkeep: quote.monthlyUpkeep, why: `net floor: projected net ${fv.projected} would be under ${fv.floor}` }); settled = true; break; }
+        }
         if (quote.ok && cash - Number(quote.construction ?? 0) < reserve) { deferred.push({ t: n.t, prefab, construction: quote.construction, why: `would leave ${cash - Number(quote.construction ?? 0)} cash, reserve is ${reserve}` }); settled = true; break; }
       }
       // No free roadside near the target (a built-up centre): take the nearest site within 1,500 m
       // rather than give up (FAILURES #101: police was "blocked by no_roadside_site" at crime -4.5).
       let r = await placeService(prefab, n.x, n.z, 600);
       if (!r.ok && r.reason === 'no_roadside_site') r = await placeService(prefab, n.x, n.z, 1500);
-      if (r.ok) { cash -= Number(r.cost ?? r.construction ?? 0); placedCount++; }
+      if (r.ok) { cash -= Number(r.cost ?? r.construction ?? 0); placedCount++; net -= Number(r.monthlyUpkeep ?? 0) * (opts.upkeepFactor ?? 2.7); }
       if (r.ok) {
         placed.push({ t: n.t, prefab, cost: r.cost, monthlyUpkeep: r.monthlyUpkeep, at: r.at });
         await recordAction({ need: n.need, tool: 'fix_services', detail: `${prefab}@${r.at?.x},${r.at?.z}`, ...(typeof snap?.needs?.[n.need]?.factor === 'number' ? { factor: snap.needs[n.need].factor } : {}) });

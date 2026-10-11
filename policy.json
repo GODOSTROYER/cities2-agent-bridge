@@ -1,0 +1,35 @@
+{
+ "_comment": "Owner goals and constraints as data (REDESIGN Phase 4). The loop reads this file every cycle; a change of mind is an edit here, not a code change. mode: grow | bank | improve.",
+ "mode": "improve",
+ "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 75%+, no problem icons, net at or above the floor",
+ "expansion": false,
+ "expansionException": "only the minimum for a very-high-priority need (land for a facility that fixes a critical service, jobs if unemployment cannot be fixed otherwise, a milestone that unlocks transit); justify in progress.md",
+ "netFloorBaseline": 1600000,
+ "netFloorMarginPct": 2,
+ "upkeepRealFactor": 2.7,
+ "cashReserve": 1000000,
+ "bankTarget": 5000000,
+ "taxPins": "journals/tax-pins.json (Residential 15, business 10-11); never cut",
+ "targets": {
+  "factorMin": 0,
+  "factorExempt": [
+   "Tax"
+  ],
+  "trafficFlowPct": 75,
+  "headroomUsagePct": 78,
+  "coverageGapPct": 8,
+  "problemIcons": 0
+ },
+ "never": [
+  "ground cable, pipe or ground road across water",
+  "highway crossing at grade",
+  "buying a tile no road can reach",
+  "housing beside noise or in a pollution plume"
+ ],
+ "priority": [
+  "critical: utilities, network warnings, fires, dead or sick waiting",
+  "happiness factors worst first (Tax exempt)",
+  "services by the worse of capacity, coverage and outcome",
+  "quality upgrades with little or no upkeep"
+ ]
+}

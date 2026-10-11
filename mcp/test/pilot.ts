@@ -86,6 +86,11 @@ const pw = fresh(); pw.utilityAlerts = ['power at 81% of capacity (projected 85%
 const pwPlan = decide({ ...base, pilotMode: 'bank' }, pw, T);
 check(pwPlan.actions.some(a => a.tool === 'add_power') && pwPlan.attention.some(a => a.startsWith('water')) && !pwPlan.attention.some(a => a.startsWith('power')), 'power past the target is added by the loop itself (even in bank mode); water is raised for the agent');
 
+const im = decide({ ...base, pilotMode: 'improve', netFloor: 960_000, policy: { upkeepRealFactor: 2.7 } }, fresh(), T);
+check(!im.actions.some(a => a.key === 'grow' || a.key === 'tile') && im.actions.find(a => a.key === 'services')!.args.netFloor === 960_000, 'IMPROVE mode: no districts, no tiles; the service planner gets the net floor');
+check(decide({ ...base, pilotMode: 'improve', netFloor: 1_200_000 }, fresh(), T).attention.some(a => a.includes('under the floor')), 'net under the floor is raised and stops upkeep-adding actions');
+check(selfCheck({ ...base, pilotMode: 'improve' }, (() => { const m = fresh(); m.starved = { housing: 9 }; return m; })(), T).length === 0, 'in improve mode unmet housing demand is not a fault (expansion is off by policy)');
+
 // Milestone -> save at once.
 const m2 = fresh(); m2.last = { services: T, traffic: T, tax: T, save: T, grow: T }; m2.milestone = 8;
 check(keys({ ...base, milestone: { achieved: 9 } }, m2, T + MIN).includes('save'), 'a new milestone is saved at once');
