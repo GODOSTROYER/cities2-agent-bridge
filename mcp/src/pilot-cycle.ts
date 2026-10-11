@@ -29,6 +29,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   const snap = await tool('snapshot', {});
   if (snap.error || !snap.city) throw new Error(`snapshot_failed:${snap.error ?? 'no city'}`);
   try { snap.devTree = await tool('dev_tree', {}); } catch { /* optional */ }
+  try { const hot = await tool('traffic_hotspots', { top: 1 }); snap.cityFlow = Number(hot.cityFlow ?? NaN); } catch { /* optional */ }
 
   const now = Date.now(); const { memo } = st;
   const stuck = selfCheck(snap, memo, now);
@@ -57,7 +58,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   while (st.did.length > 40) st.did.shift(); while (st.sticky.length > 6) st.sticky.shift();
   const attention = [...plan.attention, ...stuck, ...st.sticky]; st.cycles++;
 
-  const status = { utc: new Date().toISOString(), pop: snap.city.pop, cash: snap.city.money, net: snap.city.net, milestone, xp: `${snap.milestone?.xp}/${snap.milestone?.nextXp}`, unemp: snap.jobs?.unemp, happy: snap.happy, demand: snap.demand, attention, last: st.did.slice(-3) };
+  const status = { utc: new Date().toISOString(), flow: snap.cityFlow, pop: snap.city.pop, cash: snap.city.money, net: snap.city.net, milestone, xp: `${snap.milestone?.xp}/${snap.milestone?.nextXp}`, unemp: snap.jobs?.unemp, happy: snap.happy, demand: snap.demand, attention, last: st.did.slice(-3) };
   await fs.writeFile(join(dir, 'status.json'), JSON.stringify(status));
   // Checkpoint every 15 minutes, at each milestone and after each district or tile.
   if (reached || Date.now() - st.lastProgress > 15 * 60_000 || done.some(n => n.startsWith('built ') || n.startsWith('bought'))) {
@@ -65,7 +66,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     const grows = plan.actions.find(a => a.key === 'grow');
     const next = [grows ? `grow ${grows.args.zone} by demand` : 'no zone has demand 20+ (or growth is backing off)', 'services, traffic, taxes and development points by the rules'];
     let notes = ''; try { notes = (await fs.readFile(join(dir, 'notes.md'), 'utf8')).split('\n').slice(0, 14).join('\n'); } catch { /* none */ }
-    await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis) + (notes ? notes + '\n' : ''));
+    await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   const line = `pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;

@@ -8,6 +8,7 @@
 // indicator may hold a zone type back. Unemployment is first diagnosed (no jobs, or an education
 // mismatch with vacancies open) and only shifts the ORDER when jobs are truly missing.
 import { blockingNeeds, RESERVE } from './budget.ts';
+import { plannedPeople } from './headroom.ts';
 
 export interface PilotAction { tool: string; args: Record<string, any>; why: string; key: string }
 export interface PilotPlan { actions: PilotAction[]; attention: string[]; diagnosis?: string }
@@ -16,6 +17,7 @@ export interface PilotMemo {
   zoned?: Record<string, number>;            // kind (housing | com | off | ind) -> time of the last successful district
   starved?: Record<string, number>;          // kind -> cycles in a row with demand 60+ and nothing zoned
   lastGrowReason?: string;                   // why the last growth step was refused
+  servicesLine?: string; utilityAlerts?: string[]; // last headroom table (one line) and utilities past the target
   needTrend?: Record<string, { count: number; rises: number }>; // need -> icon/people count and rises in a row while "watch"
 }
 
@@ -71,7 +73,9 @@ export function growthSet(demand: Record<string, any> | undefined, jobsState: 'o
 // services whose needs escalate most (health, deathcare, garbage, fire, police), then anything.
 export const WISH: RegExp[] = [/college/i, /universit/i, /bus/i, /road|highway|roundabout|bridge/i, /hospital|health|clinic/i, /cremat|death/i, /recycl|incinerat|garbage/i, /fire/i, /police/i, /park|transport|train|tram|subway|taxi/i, /telecom|server|post|welfare/i, /./];
 export function wishedNode(nodes: Record<string, any>[], points: number): Record<string, any> | null {
-  const open = nodes.filter(n => n.canBuy && Number(n.cost ?? 0) <= points);
+  // Parking nodes cost many points and unblock nothing: only when nothing else is left.
+  const fits = nodes.filter(n => n.canBuy && Number(n.cost ?? 0) <= points); const useful = fits.filter(n => !/parking/i.test(String(n.name)));
+  const open = useful.length ? useful : fits;
   for (const rx of WISH) { const hit = open.filter(n => rx.test(String(n.name)) || rx.test(String(n.service ?? ''))).sort((a, b) => Number(a.cost) - Number(b.cost))[0]; if (hit) return hit; }
   return null;
 }
@@ -113,12 +117,15 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   if (!['none', 'paused_by_player_or_bridge', 'tutorial_phase', 'milestone_popup', 'signature_popup'].includes(blocker)) attention.push(`ui blocker ${blocker}`);
   for (const p of snap.happinessPriority?.very_high ?? []) attention.push(`factor ${p} is worse than -5 (very high)`);
   if (cash < reserve) attention.push(`cash ${cash} is under the reserve ${reserve}`);
+  for (const u of memo.utilityAlerts ?? []) attention.push(u);
 
   // 2. Services by escalation (the planner itself applies scores, coverage and the reserve).
   if ((Number(needs.ruins?.icons ?? 0) > 0 || Number(snap.buildings?.abandoned ?? 0) > 20) && due(memo, 'ruins', now, 5)) push('ruins', 'clear_ruins', {}, 'ruin icons on the map');
-  if (due(memo, 'services', now, 4)) push('services', 'fix_services', { maxPlacements: 3 }, 'escalated service needs and coverage gaps');
+  // Headroom rule: every cycle that grows also sizes the services for the people about to arrive.
+  const servicesAt = actions.length;
   const pressing = [...(snap.happinessPriority?.priority ?? []), ...(snap.happinessPriority?.very_high ?? [])];
-  if ((pressing.includes('TrafficPenalty') || needs.traffic?.action === 'build') && due(memo, 'traffic', now, 8)) push('traffic', 'fix_traffic', { max: 3 }, `traffic ${needs.traffic?.score ?? ''} factor ${snap.happiness?.TrafficPenalty ?? '?'}`);
+  const flow = Number(snap.cityFlow ?? NaN); // citywide traffic flow, target above 75%
+  if ((pressing.includes('TrafficPenalty') || needs.traffic?.action === 'build' || (Number.isFinite(flow) && flow < 75)) && due(memo, 'traffic', now, 6)) push('traffic', 'fix_traffic', { max: 4 }, `traffic ${needs.traffic?.score ?? ''} factor ${snap.happiness?.TrafficPenalty ?? '?'} flow ${Number.isFinite(flow) ? flow + '%' : '?'}`);
   if (due(memo, 'tax', now, 10)) push('tax', 'tax_autopilot', { apply: true }, 'owner pins: one step inside the ranges');
 
   // 3. Growth follows the demand bars. Only a broken utility stops it; the reserve rule is
@@ -133,6 +140,13 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
         push('grow', 'grow', { zone: pick.zone, cols: big ? 4 : 3, rows: big ? 3 : 2 }, `${pick.zone} demand ${pick.demand}; ${diagnosis}`);
     }
   }
+
+  // 2b. Services ahead of need (headroom): every 3 minutes, and in every cycle that zones housing,
+  //     sized for the residents the planned districts will bring.
+  const planned = actions.filter(a => a.key === 'grow').map(a => ({ zone: String(a.args.zone), cols: Number(a.args.cols), rows: Number(a.args.rows) }));
+  const people = plannedPeople(planned);
+  if (due(memo, 'services', now, 3) || people > 0)
+    actions.splice(servicesAt, 0, { key: 'services', tool: 'fix_services', args: { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
 
   // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
   const tree = snap.devTree;
@@ -168,7 +182,7 @@ export function learn(memo: PilotMemo, action: PilotAction, result: Record<strin
     memo.backoff.tile = now + 10 * MIN; memo.lastGrowReason = `no free site and no tile: ${reason}`; return `tile not bought: ${reason}`;
   }
   if (action.key === 'unlock') { if (!result?.ok) memo.backoff.unlock = now + 10 * MIN; return result?.ok ? `unlocked ${result.name} (${result.cost} points)` : `unlock refused: ${reason}`; }
-  if (action.key === 'services') { const placed = (result?.placed ?? []).map((p: any) => p.prefab); return placed.length ? `services placed ${placed.join(', ')}` : ''; }
+  if (action.key === 'services') { memo.servicesLine = result?.services ?? memo.servicesLine; memo.utilityAlerts = result?.utilityAlerts ?? []; const placed = (result?.placed ?? []).map((p: any) => p.prefab); return placed.length ? `services placed ${placed.join(', ')}` : ''; }
   if (action.key === 'traffic') { const n = (result?.jamIcons?.upgraded ?? result?.upgraded ?? []).filter((u: any) => u.status === 'complete').length; return n ? `widened ${n} roads` : ''; }
   if (action.key === 'tax') return result?.applied ? `tax ${result.area} ${result.from}->${result.to}` : '';
   if (action.key === 'ruins') return result?.cleared ? `cleared ${result.cleared} ruins` : '';
@@ -177,7 +191,7 @@ export function learn(memo: PilotMemo, action: PilotAction, result: Record<strin
 }
 
 // PURE. The short block the coordinator reads (journals/progress.md), under 25 lines.
-export function progressBlock(snap: Record<string, any>, did: string[], next: string[], attention: string[], when: string, diagnosis?: string): string {
+export function progressBlock(snap: Record<string, any>, did: string[], next: string[], attention: string[], when: string, diagnosis?: string, services?: string): string {
   const f = Object.entries(snap.happiness ?? {}).filter(([k, v]) => Number(v) < -3).map(([k, v]) => `${k} ${v}${k === 'Tax' ? ' (exempt)' : ''}`).join(', ') || 'none';
   const icons = Object.entries(snap.icons ?? {}).map(([k, v]) => `${k.replace(/ Notification$/, '')} ${v}`).join(', ') || 'none';
   const lines = [
@@ -185,9 +199,12 @@ export function progressBlock(snap: Record<string, any>, did: string[], next: st
     `- pop ${snap.city?.pop}, cash ${snap.city?.money}, net ${snap.city?.net}, milestone ${snap.milestone?.achieved} (XP ${snap.milestone?.xp}/${snap.milestone?.nextXp})`,
     `- unemployment ${snap.jobs?.unemp}%, vacancies by education ${JSON.stringify(snap.jobs?.vacantByEdu ?? [])}, demand ${JSON.stringify(snap.demand ?? {})}`,
     ...(diagnosis ? [`- jobs: ${diagnosis}`] : []),
+    `- scorecard: traffic flow ${snap.cityFlow ?? '?'}% (target 75+), happiness ${snap.happy}, health ${snap.health ?? '?'}, power ${snap.util?.power?.pct ?? '?'}% water ${snap.util?.water?.pct ?? '?'}% sewage ${snap.util?.sewage?.pct ?? '?'}%`,
     `- happiness ${snap.happy}, factors worse than -3: ${f}`,
     `- icons: ${icons}`,
     `- shortages: ${JSON.stringify(snap.shortages ?? {})}`,
+    ...(services ? [`- services (use % of capacity -> with planned growth): ${services}`] : []),
+    `- education levels of citizens ${JSON.stringify(snap.jobs?.eduCitizens ?? [])}`,
     `- did: ${did.slice(-8).join('; ') || 'nothing yet'}`,
     `- next: ${next.join('; ') || 'keep the loop running'}`,
     ...(attention.length ? [`- ATTENTION: ${[...new Set(attention)].slice(0, 6).join(' | ')}`] : []),

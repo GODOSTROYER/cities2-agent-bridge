@@ -1,6 +1,7 @@
 // Native city-services planner: the TypeScript port of services.ps1 (same intent, same rules).
 // decideServices() is pure and fed with snapshot/building/gap data; fixServices() is the only
 // part that talks to the game (non-pausing reads, then placeService() for the chosen needs).
+import { serviceTable, headroomFor, tableLine, utilityAlerts } from './headroom.ts';
 import { RESERVE } from './budget.ts';
 import { recordFactors, recordAction, assess, readJsonl, HISTORY_PATH, ACTIONS_PATH } from './happiness.ts';
 import { promises as fs } from 'node:fs';
@@ -18,6 +19,8 @@ export const RULES: Rule[] = [
   { t: 'police', need: 'police', rx: /^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)/, prefabs: ['PoliceStation02', 'PoliceStation01'], cov: 'Police', minPop: 800, spacing: 900 },
   { t: 'school', need: 'education', rx: /^ElementarySchool/, prefabs: ['ElementarySchool01', 'ElementarySchool02'], cov: 'Education', minPop: 600, spacing: 900 },
   { t: 'highschool', need: 'education_high', rx: /^HighSchool/, prefabs: ['HighSchool02', 'HighSchool01'], minPop: 2500, spacing: 2000 },
+  { t: 'college', need: 'education_college', rx: /College/, prefabs: ['College01'], minPop: 6000, spacing: 3000 },
+  { t: 'university', need: 'education_university', rx: /University/, prefabs: ['RS_University01', 'TechnicalUniversity01'], minPop: 9000, spacing: 3000 },
   { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice02', 'PostOffice01'], cov: 'PostService', minPop: 1500, spacing: 1500 },
   { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['Landfill01', 'IncinerationPlant01'], minPop: 1000, spacing: 3000 },
   { t: 'entertainment', need: 'entertainment', rx: /Park|Playground|Plaza/, prefabs: ['ChirperPark01', 'Playground01', 'CityPark05', 'CityPark01'], cov: 'Park', minPop: 300, spacing: 350 },
@@ -31,6 +34,9 @@ export interface Buildings { services: [string, number, number][]; homes: Center
 export type Cluster = [number, number, number];
 
 export interface ServicesInput {
+  // Headroom per rule type (headroom.ts): low/over/none means capacity is added this cycle,
+  // ahead of complaints; over/none is critical (the reserve does not hold it back).
+  headroom?: Record<string, { status: string; pct: number | null; projected: number | null }>;
   snap: Json;
   buildings: Buildings;
   gaps: Record<string, Gap>;
@@ -118,7 +124,7 @@ function placement(rule: Rule, existing: Pt[], planned: Pt[], gap: Gap | undefin
 export function decideServices(input: ServicesInput): Need[] {
   const { snap, buildings, gaps, cooldown, nowMs } = input;
   const cashFloor = input.cashFloor ?? 250000;
-  const uncoveredShare = input.uncoveredShare ?? 0.15;
+  const uncoveredShare = input.uncoveredShare ?? 0.08; // full coverage is the target: a gap above 8% of homes is unmet need
   const perRule = Math.max(1, Math.floor(Number(input.perRule ?? 1)) || 1);
   const needs: Json = snap?.needs ?? {};
   const pop = Number(snap?.city?.pop ?? 0);
@@ -144,11 +150,13 @@ export function decideServices(input: ServicesInput): Need[] {
       || Number(sig.factor ?? 0) <= -2;
     isEsc = isEsc && (have.length === 0 || sustained);
     if (pop < rule.minPop && !isEsc) continue;
+    if ((rule.t === 'college' || rule.t === 'university') && have.length > 0 && !(input.headroom?.[rule.t] && input.headroom[rule.t].status !== 'ok')) continue; // one each until capacity says more
     const gap = rule.cov ? gaps?.[rule.cov] : undefined;
     const share = gap ? Number(gap.uncoveredPct ?? 0) / 100 : 0;
-    const missing = isEsc || have.length === 0 || (!!rule.cov && share > uncoveredShare);
+    const room = input.headroom?.[rule.t]; const short = !!room && room.status !== 'ok';
+    const missing = isEsc || have.length === 0 || (!!rule.cov && share > uncoveredShare) || short;
     if (!missing) continue;
-    if (net < 0 && !isEsc) continue; // upkeep discipline: no new permanent upkeep while losing money
+    if (net < 0 && !isEsc && !short) continue; // upkeep discipline: no new permanent upkeep while losing money
 
     const pct = Math.round(share * 100);
     const existing: Pt[] = have.map(s => ({ x: Number(s[1]), z: Number(s[2]) }));
@@ -161,13 +169,14 @@ export function decideServices(input: ServicesInput): Need[] {
       planned.push(pick.at);
       // Park variety: rotate the prefab list so successive parks differ.
       const prefabs = rule.t === 'entertainment' ? rotate(rule.prefabs, have.length + i) : rule.prefabs;
-      const base = isEsc ? `escalated ${needs[rule.need]?.score ?? ''}`.trim()
+      const base = short && !isEsc ? `capacity ${room!.pct ?? '-'}% now, ${room!.projected ?? '-'}% with planned growth (target under 78%)`
+        : isEsc ? `escalated ${needs[rule.need]?.score ?? ''}`.trim()
         : have.length === 0 && i === 0 ? 'none built'
         : pct > 0 ? `${pct}% homes uncovered`
         : 'spread further';
       const why = pick.distance === null ? base : `${base}, nearest ${pick.distance} m`;
       out.push({ t: rule.t, need: rule.need, prefabs, x: pick.at.x, z: pick.at.z, have: have.length,
-        uncoveredPct: pct, escalated: isEsc, critical: false, why, distance: pick.distance });
+        uncoveredPct: pct, escalated: isEsc, critical: !!room && (room.status === 'over' || room.status === 'none'), why, distance: pick.distance });
     }
   }
 
@@ -228,7 +237,7 @@ function parseClusters(res: Json): Cluster[] | undefined {
     .map((c: Json): Cluster => [Number(c[0]), Number(c[1]), Number(c[2])]);
 }
 
-export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number } = {}): Promise<Json> {
+export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number } = {}): Promise<Json> {
   const t0 = Date.now();
   const [snap, buildings, homeClusters] = await multi([
     { command: 'get_snapshot' }, { command: 'service_buildings' },
@@ -254,7 +263,11 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   const verdictOf = (need: string) => verdicts.filter(v => v.need === need).sort((a, b) => a.value - b.value)[0];
   // A very_high factor keeps being acted on every cycle (its own settle time replaces the cooldown).
   const liveCooldown = Object.fromEntries(Object.entries(cooldown).filter(([k]) => snap?.needs?.[k]?.priority !== 'very_high'));
-  const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3 });
+  // Headroom: capacity against use for every service, projected for the districts about to be
+  // zoned. The table is returned as one line; utilities past the target are raised.
+  let table: Record<string, any> = {}; let servicesLine = ''; let alerts: string[] = [];
+  try { table = serviceTable(await callOk('service_headroom', {}, 20), snap, Number(opts.projectPeople ?? 0)); servicesLine = tableLine(table); alerts = utilityAlerts(table); } catch { /* older mod: coverage and escalation only */ }
+  const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3, headroom: Object.keys(table).length ? headroomFor(table) : undefined });
   const held = all.filter(n => ['investigate', 'waiting'].includes(verdictOf(n.need)?.verdict));
   const needs = all.filter(n => !held.includes(n));
   const investigate = verdicts.filter(v => v.verdict === 'investigate').map(v => ({ factor: v.factor, value: v.value, actions: v.actions, delta: v.delta, hint: v.fix }));
@@ -265,7 +278,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
       plan: true,
       happiness,
       needs: needs.map(n => ({ t: n.t, prefab: n.prefabs[0], x: n.x, z: n.z, why: n.why, ...(snap?.needs?.[n.need]?.priority ? { priority: snap.needs[n.need].priority } : {}) })),
-      ...(investigate.length ? { investigate } : {}), ...(waiting.length ? { waiting } : {}),
+      ...(investigate.length ? { investigate } : {}), ...(waiting.length ? { waiting } : {}), ...(servicesLine ? { services: servicesLine } : {}), ...(alerts.length ? { utilityAlerts: alerts } : {}),
       ms: Date.now() - t0,
     };
   }
@@ -312,6 +325,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
 
   const pending = needs.filter(n => !placed.some(p => p.t === n.t) && !failed.some(f => f.t === n.t) && !deferred.some(d => d.t === n.t)).map(n => ({ t: n.t, why: n.why }));
   return {
+    ...(servicesLine ? { services: servicesLine } : {}), ...(alerts.length ? { utilityAlerts: alerts } : {}),
     happiness,
     placed,
     failed,

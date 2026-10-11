@@ -48,7 +48,9 @@ let k = keys(base);
 check(k.includes('services') && k.includes('traffic') && k.includes('tax') && k.includes('save'), 'services, traffic (factor worse than -3), taxes and a save are due on the first cycle');
 const memo = fresh(); memo.last = { services: T, traffic: T, tax: T, save: T, grow: T };
 check(keys(base, memo, T + MIN).length === 0, 'nothing is repeated one minute later');
-check(keys(base, memo, T + 2 * MIN).join() === 'grow,grow,grow', 'growth again after 90 seconds');
+const withGrow = decide(base, fresh(), T).actions; const sv = withGrow.find(a => a.key === 'services')!;
+check(withGrow.findIndex(a => a.key === 'services') < withGrow.findIndex(a => a.key === 'grow') && sv.args.projectPeople > 10000, 'services are sized for the planned districts and placed BEFORE they are zoned');
+check(keys(base, memo, T + 2 * MIN).join() === 'services,grow,grow,grow', 'growth again after 90 seconds, with the services for it first');
 check(decide({ ...base, city: { money: 1_100_000 } }, fresh(), T).actions.find(a => a.key === 'grow')!.args.cols === 3 && decide({ ...base, city: { money: 1_100_000 } }, fresh(), T).actions.filter(a => a.key === 'grow').length === 2, 'near the reserve the districts are 3x2 and two per cycle');
 check(decide({ ...base, city: { money: 600_000 } }, fresh(), T).attention.some(a => a.includes('under the reserve')), 'cash under the reserve is raised');
 

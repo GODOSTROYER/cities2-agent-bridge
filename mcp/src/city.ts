@@ -466,23 +466,35 @@ export async function fixTraffic(o: { max?: number; flowBelow?: number; plan?: b
   const t = now(); const max = Math.max(1, Math.min(8, o.max ?? 3)); const limit = o.flowBelow ?? 35;
   const [hs, city0] = await multi([{ command: 'traffic_hotspots', args: { top: 30, minLength: 40 } }, { command: 'get_city_state' }]);
   const hot: Json[] = (hs.hotspots ?? []).filter((h: Json) => Number(h.flowPct) <= limit);
-  const small = hot.filter(h => /^Small Road/.test(String(h.prefab)));
-  const other = hot.filter(h => !/^Small Road/.test(String(h.prefab))).slice(0, 5).map(h => ({ prefab: h.prefab, x: h.x, z: h.z, flowPct: h.flowPct }));
+  // Road hierarchy ladder (FAILURES #97): a congested Small Road becomes a Medium Road, a congested
+  // Medium Road a Large Road once that is unlocked. Anything else (highways, already large) is
+  // reported as needing a parallel route or a junction redesign.
+  const large = await prefab('Large Road', 'network'); const medium = await prefab('Medium Road', 'network');
+  const step = (h: Json): Json | null => nextRoad(String(h.prefab), medium.found && !medium.locked, large.found && !large.locked) === 'Medium Road' ? medium : nextRoad(String(h.prefab), medium.found && !medium.locked, large.found && !large.locked) === 'Large Road' ? large : null;
+  const small = hot.filter(h => step(h) !== null);
+  const other = hot.filter(h => step(h) === null).slice(0, 5).map(h => ({ prefab: h.prefab, x: h.x, z: h.z, flowPct: h.flowPct }));
   const base = { cityFlow: hs.cityFlow, meanFlowPct: hs.meanFlowPct, congested: hot.length, notUpgradable: other, phases: { plan: now() - t } };
-  if (!small.length) return { ok: true, upgraded: [], note: 'no congested Small Road; remaining hotspots need wider prefabs or a second highway link', ...base };
-  if (o.plan) return { ok: true, plan: true, wouldUpgrade: small.slice(0, max).map(h => ({ x: h.x, z: h.z, length: h.length, flowPct: h.flowPct })), ...base };
-  const medium = await prefab('Medium Road', 'network');
-  if (!medium.found || medium.locked) return { ok: false, reason: 'medium_road_unavailable', ...base };
+  if (!small.length) return { ok: true, upgraded: [], note: 'no congested road with a wider prefab left; the remaining hotspots need a parallel route, another highway link or a junction redesign', ...base };
+  if (o.plan) return { ok: true, plan: true, wouldUpgrade: small.slice(0, max).map(h => ({ x: h.x, z: h.z, length: h.length, flowPct: h.flowPct, from: h.prefab, to: step(h)!.name ?? nextRoad(String(h.prefab), true, true) })), ...base };
   return mutate(async () => {
     const t1 = now(); const upgraded: Json[] = [];
     for (const h of small.slice(0, max)) {
-      const op = await call('upgrade_network', { index: h.index, version: h.version, prefabIndex: medium.index, prefabVersion: medium.version, maxCost: 30000 }, 15);
+      const to = step(h)!;
+      const op = await call('upgrade_network', { index: h.index, version: h.version, prefabIndex: to.index, prefabVersion: to.version, maxCost: 60000 }, 15);
       const done = op.ok ? await waitOperation(op.result.id, 60) : { status: 'failed', error: op.error };
-      upgraded.push({ x: h.x, z: h.z, length: h.length, flowPct: h.flowPct, status: done.status, ...(done.status === 'complete' ? { cost: Number(done.previewCost ?? 0) } : { error: done.error, reasons: (done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []).slice(0, 4) }) });
+      upgraded.push({ x: h.x, z: h.z, length: h.length, flowPct: h.flowPct, from: h.prefab, to: nextRoad(String(h.prefab), true, true), status: done.status, ...(done.status === 'complete' ? { cost: Number(done.previewCost ?? 0) } : { error: done.error, reasons: (done.placementErrors ?? []).flatMap((e: Json) => e.reasons ?? []).slice(0, 4) }) });
     }
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
     return { ok: upgraded.some(u => u.status === 'complete'), ...quotedCost(upgraded.reduce((sum, u) => sum + Number(u.cost ?? 0), 0), Number(city0.money), money1), monthlyUpkeep: null, upgraded, ...base, phases: { plan: base.phases.plan, build: now() - t1 } };
   });
+}
+
+// PURE. The next wider two-way road for a congested one, or null when there is none.
+export function nextRoad(prefabName: string, mediumOpen: boolean, largeOpen: boolean): string | null {
+  if (/Highway|Oneway|Bridge|Divided|Asymmetric|Gravel|Path/i.test(prefabName)) return null;
+  if (/^Small Road/.test(prefabName)) return mediumOpen ? 'Medium Road' : null;
+  if (/^Medium Road/.test(prefabName)) return largeOpen ? 'Large Road' : null;
+  return null;
 }
 
 // PURE. Waypoints -> roads. Where a segment is a short stub (under 60 m: what A* leaves when it

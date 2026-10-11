@@ -1,5 +1,5 @@
 // Offline checks: arterial geometry (kinks become curves) and the quoted-cost rule.
-import { corridorRoads, quotedCost } from '../src/city.ts';
+import { corridorRoads, quotedCost, nextRoad } from '../src/city.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 const P = (x: number, z: number) => ({ x, z });
 const len = (r: any) => Math.hypot(r.b.x - r.a.x, r.b.z - r.a.z);
@@ -31,4 +31,7 @@ check(r.length === 2, 'two long segments whose total exceeds 950 m are not merge
 check(JSON.stringify(quotedCost(5632, 100000, 250000)) === '{"cost":5632,"costSource":"quoted"}', 'quoted cost wins even when cash rose meanwhile (income or a milestone reward)');
 check(JSON.stringify(quotedCost(undefined, 100000, 94000)) === '{"cost":6000,"costSource":"cash_delta"}', 'without a quote the cash delta is used and labelled');
 check(quotedCost(0, 100, 100).costSource === 'quoted', 'a quoted zero is a real zero');
+check(nextRoad('Small Road', true, false) === 'Medium Road' && nextRoad('Medium Road', true, true) === 'Large Road', 'the hierarchy ladder: small -> medium -> large');
+check(nextRoad('Medium Road', true, false) === null && nextRoad('Large Road', true, true) === null, 'no step when the wider road is locked or there is none');
+check(nextRoad('Highway Oneway - 2 lanes', true, true) === null && nextRoad('Small Road Oneway', true, true) === null && nextRoad('Medium Road Divided', true, true) === null, 'highways, one-way and divided roads are never swapped by the ladder');
 process.exit(failed ? 1 : 0);
