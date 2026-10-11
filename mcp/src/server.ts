@@ -1,6 +1,7 @@
 // MCP stdio server for the CitiesIIAgentBridge mod. Thin tool layer over bridge.ts.
 // Logs go to stderr only; stdout belongs to the MCP transport.
 import { tuneFees, feeActions } from './fees-live.ts';
+import { loadPolicy } from './policy.ts';
 import type { FeeState } from './fees-live.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
