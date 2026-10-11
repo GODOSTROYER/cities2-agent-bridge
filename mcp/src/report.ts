@@ -34,7 +34,7 @@ export const SYSTEMS: Spec[] = [
 ];
 // Infoviews the bridge does not read yet: listed so nothing is silently missing.
 // Names are the game's own InfoviewPrefab names (get_metrics.infoviews); parking has no infoview of its own.
-export const NOT_READ = ['Roads', 'Parking (under Roads/Traffic)', 'Transport', 'Bicycles', 'DisasterControl', 'Administration', 'Tourism', 'OutsideConnections', 'LandValue', 'Profitability', 'Wealth', 'Level', 'Extractors', 'WaterPollution'];
+export const NOT_READ = ['Transport (no lines: locked in the game)', 'Bicycles', 'DisasterControl', 'Administration', 'OutsideConnections', 'Wealth', 'Level', 'Extractors', 'WaterPollution'];
 
 const rank: Record<Grade, number> = { critical: 0, bad: 1, ok: 2, good: 3, unknown: 4 };
 const worst = (a: Grade, b: Grade): Grade => rank[a] <= rank[b] ? a : b;
@@ -43,6 +43,7 @@ const arrow = (now: number | null, before: number | undefined) => now === null |
 export interface ReportInput {
   snap: Record<string, any>; table?: Record<string, { pct: number | null; projected: number | null; status: string }>; coverage?: Record<string, number>;
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
+  outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
 }
 
 export function gradeOf(factor: number | null, tableStatus: string | null, uncoveredPct: number | null, extra: Grade = 'good'): Grade {
@@ -67,8 +68,22 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     let value: number | null = factor;
     if (s.system === 'Traffic') { const flow = Number(snap.cityFlow ?? NaN); if (Number.isFinite(flow)) { outcome = `flow ${flow}% (target 75+), ${outcome}`; extra = worst(extra, flow < 50 ? 'critical' : flow < 75 ? 'bad' : 'good'); value = flow / 10; } }
     if (Number(need?.unserved ?? 0) > 0) extra = 'critical';
+    // Outcome measures from the buildings themselves: what is actually waiting.
+    const oc = i.outcomes ?? {};
+    const waitingShare = (label: string, share: number, bad: number, critical: number, where: any) => { outcome = `${label} in ${share}% of buildings${where?.length ? ', worst at ' + where.slice(0, 2).map((c: number[]) => `(${c[0]},${c[1]}) x${c[2]}`).join(' ') : ''}; ${outcome}`; extra = worst(extra, share >= critical ? 'critical' : share >= bad ? 'bad' : 'good'); value = Math.min(value ?? 0, -share / 5); };
+    if (s.system === 'Post' && oc.post) waitingShare('mail waiting', Number(oc.post.sharePct ?? 0), 15, 40, oc.post.worst);
+    if (s.system === 'Garbage' && oc.garbage) waitingShare('garbage piling', Number(oc.garbage.sharePct ?? 0), 10, 30, oc.garbage.worst);
+    if (s.system === 'Police' && oc.crime) { outcome = `high crime in ${oc.crime.highSharePct}% of buildings; ${outcome}`; extra = worst(extra, Number(oc.crime.highSharePct) >= 30 ? 'bad' : 'good'); }
     add({ system: s.system, status: gradeOf(factor, t?.status ?? null, cov, extra), outcome: outcome || '-', capacity: t ? `${t.pct ?? '-'}%${t.projected !== null && t.projected !== t.pct ? ' -> ' + t.projected + '% planned' : ''}` : '-', coverage: cov === null ? '-' : `${cov}% homes uncovered`, trend: '', action: s.action, blocked: i.blocked?.[s.need ?? ''] ?? '', value: value ?? (t?.pct !== null && t?.pct !== undefined ? -t.pct / 20 : null) });
   }
+  const oc = i.outcomes;
+  if (oc?.parking) { const full = Number(oc.parking.kerbLanesFullPct ?? 0); const g = Number(oc.parking.garageCapacity ?? 0) > 0 ? Math.round(100 * Number(oc.parking.garageCars) / Number(oc.parking.garageCapacity)) : null;
+    add({ system: 'Parking (Roads / Traffic infoview)', status: full >= 70 ? 'critical' : full >= 45 ? 'bad' : full >= 25 ? 'ok' : 'good', outcome: `${full}% of kerbside lanes full, ${oc.parking.parkedCars} parked cars`, capacity: g === null ? 'no garages' : `garages ${g}%`, coverage: '-', trend: '', action: 'parking halls near the centre and commercial areas; roads with parking lanes', blocked: i.blocked?.parking ?? '', value: -full / 10 }); }
+  else rows.push({ system: 'Parking', status: 'unknown', outcome: 'not read yet', capacity: '-', coverage: '-', trend: '', action: 'add a reader', blocked: 'harness', value: null });
+  if (oc?.roads) add({ system: 'Roads (condition)', status: Number(oc.roads.wornSharePct) >= 30 ? 'bad' : Number(oc.roads.wornSharePct) >= 10 ? 'ok' : 'good', outcome: `average wear ${oc.roads.avgWear}, ${oc.roads.wornSharePct}% of roads worn`, capacity: '-', coverage: '-', trend: '', action: 'road maintenance depot and budget', blocked: '', value: -Number(oc.roads.wornSharePct) / 10 });
+  if (oc?.landValue) add({ system: 'LandValue', status: 'ok', outcome: `average ${oc.landValue.avg}`, capacity: '-', coverage: '-', trend: '', action: 'services, parks and low pollution raise it', blocked: '', value: Number(oc.landValue.avg) / 100 });
+  if (oc?.profitability) add({ system: 'Profitability (companies)', status: Number(oc.profitability.losingSharePct) >= 40 ? 'bad' : Number(oc.profitability.losingSharePct) >= 20 ? 'ok' : 'good', outcome: `average ${oc.profitability.avg}/255, ${oc.profitability.losingSharePct}% of ${oc.profitability.companies} companies losing`, capacity: '-', coverage: '-', trend: '', action: 'workers (housing, education), customers, traffic for deliveries', blocked: '', value: Number(oc.profitability.avg) / 25 });
+  if (oc?.tourism) add({ system: 'Tourism', status: 'ok', outcome: `${oc.tourism.tourists} tourists, attractiveness ${oc.tourism.attractiveness}`, capacity: '-', coverage: '-', trend: '', action: 'parks and landmarks', blocked: '', value: Number(oc.tourism.attractiveness) / 10 });
   const d = snap.demand ?? {}; const maxRes = Math.max(Number(d.rL ?? 0), Number(d.rM ?? 0), Number(d.rH ?? 0));
   add({ system: 'Zones: housing (demand low/medium/high)', status: maxRes >= 90 ? 'bad' : maxRes >= 50 ? 'ok' : 'good', outcome: `${d.rL ?? 0}/${d.rM ?? 0}/${d.rH ?? 0}`, capacity: '-', coverage: '-', trend: '', action: 'a district for every bar at 50+ each cycle', blocked: i.blocked?.grow ?? '', value: -maxRes / 10 });
   add({ system: 'Zones: commercial/industrial/office (demand)', status: 'ok', outcome: `${d.c ?? 0}/${d.i ?? 0}/${d.o ?? 0}; ${JSON.stringify(snap.demandWhy ?? {}).slice(0, 110)}`, capacity: '-', coverage: '-', trend: '', action: 'zoned when a bar reaches 50', blocked: '', value: null });

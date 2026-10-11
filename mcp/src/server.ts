@@ -354,12 +354,13 @@ server.registerTool('buy_tile', {
     n: z.number().int().min(1).max(3).default(1), max: z.number().int().default(300000),
     x: z.number().optional(), z: z.number().optional(), plan: z.boolean().optional(),
     reserve: z.number().int().min(0).optional().describe('cash to keep (default 1,000,000)'),
+    allowUnreachable: z.boolean().optional().describe('buy a tile no road can reach yet (behind a highway or water); only for road work the agent has planned'),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan, reserve: a.reserve }), cleared));
+    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan, reserve: a.reserve, allowUnreachable: a.allowUnreachable }), cleared));
   } catch (e) { return fail(e); }
 });
 

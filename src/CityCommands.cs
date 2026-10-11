@@ -17,7 +17,8 @@ namespace CitiesIIAgentBridge
         private JObject PlaceBuilding(JObject args)
         {
             var w = RequireCity(); RequireControl(); CheckBuildTool(w);
-            var prefab = BuildPrefab<BuildingPrefab>(w, args);
+            // object:true places any static object prefab (a roundabout onto a junction), not only buildings.
+            ObjectPrefab prefab = (bool?)args["object"] == true ? BuildPrefab<ObjectPrefab>(w, args) : BuildPrefab<BuildingPrefab>(w, args);
             var point = BuildPoint(w, args["position"] as JObject);
             float rotation = args["rotation"] == null ? 0 : RequiredFloat(args, "rotation");
             point.m_Rotation = quaternion.RotateY(math.radians(rotation));

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
@@ -46,6 +47,7 @@ namespace CitiesIIAgentBridge
                 var m = new JObject { ["headroom"] = ServiceHeadroom(new JObject()) };
                 try { var t = TrafficHotspots(new JObject { ["top"] = 5, ["minLength"] = 40 }); m["traffic"] = new JObject { ["cityFlow"] = t["cityFlow"], ["cityVolume"] = t["cityVolume"], ["meanFlowPct"] = t["meanFlowPct"], ["worst"] = t["hotspots"] }; } catch (Exception e) { m["trafficError"] = e.GetBaseException().Message; }
                 try { m["iconClusters"] = Notifications(new JObject { ["top"] = 1 })["clusters"]; } catch (Exception e) { m["iconError"] = e.GetBaseException().Message; }
+                try { m["outcomes"] = ServiceOutcomes(w); } catch (Exception e) { m["outcomeError"] = e.GetBaseException().Message; }
                 var views = new List<string>();
                 using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<InfoviewData>()))
                 using (var es = q.ToEntityArray(Allocator.Temp))
@@ -55,6 +57,65 @@ namespace CitiesIIAgentBridge
                 metricsCache = m; metricsFrame = frame;
             }
             var result = (JObject)metricsCache.DeepClone(); result["ageFrames"] = frame - metricsFrame; return result;
+        }
+
+        // Outcome measures (FAILURES #99): what citizens actually get, read from the same
+        // components the infoviews colour by. One pass over buildings, lanes, edges and companies.
+        private JObject ServiceOutcomes(World w)
+        {
+            var em = w.EntityManager; var o = new JObject();
+            // "Waiting" is judged against the game's own tolerances (the levels at which it starts
+            // to penalise happiness or shows the icon), not against guessed numbers: mail reads in
+            // the tens of thousands per building even when the service is fine (FAILURES #105).
+            int mailLimit = 50, garbageLimit = 1000; float crimeLimit = 15000;
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PostConfigurationData>())) if (!q.IsEmptyIgnoreFilter) mailLimit = Math.Max(1, q.GetSingleton<PostConfigurationData>().m_MailAccumulationTolerance);
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<GarbageParameterData>())) if (!q.IsEmptyIgnoreFilter) garbageLimit = Math.Max(1, q.GetSingleton<GarbageParameterData>().m_WarningGarbageLimit);
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PoliceConfigurationData>())) if (!q.IsEmptyIgnoreFilter) crimeLimit = Math.Max(1, q.GetSingleton<PoliceConfigurationData>().m_CrimeAccumulationTolerance);
+            o["limits"] = new JObject { ["mail"] = mailLimit, ["garbage"] = garbageLimit, ["crime"] = Math.Round(crimeLimit) };
+            long mail = 0, garbage = 0; int mailBuildings = 0, mailWaiting = 0, garbageBuildings = 0, garbagePiling = 0; double crimeSum = 0; int crimeBuildings = 0, crimeHigh = 0;
+            var mailWhere = new List<(double x, double z)>(); var garbageWhere = new List<(double x, double z)>();
+            foreach (var e in NativeBuild.Buildings(em))
+            {
+                if (em.HasComponent<PrefabData>(e) || !em.HasComponent<Game.Objects.Transform>(e)) continue;
+                var pos = em.GetComponentData<Game.Objects.Transform>(e).m_Position;
+                if (em.HasComponent<MailProducer>(e)) { var mp = em.GetComponentData<MailProducer>(e); int total = mp.m_SendingMail + mp.m_ReceivingMail; mail += total; mailBuildings++; if (total > mailLimit) { mailWaiting++; mailWhere.Add((pos.x, pos.z)); } }
+                if (em.HasComponent<GarbageProducer>(e)) { int g = em.GetComponentData<GarbageProducer>(e).m_Garbage; garbage += g; garbageBuildings++; if (g > garbageLimit) { garbagePiling++; garbageWhere.Add((pos.x, pos.z)); } }
+                if (em.HasComponent<CrimeProducer>(e)) { float c = em.GetComponentData<CrimeProducer>(e).m_Crime; crimeSum += c; crimeBuildings++; if (c > crimeLimit) crimeHigh++; }
+            }
+            JArray Worst(List<(double x, double z)> pts) => new JArray(PointClusters.Densest(pts, 400, 3).Select(c => new JArray(Math.Round(c.x), Math.Round(c.z), c.n)));
+            o["post"] = new JObject { ["avgMail"] = mailBuildings == 0 ? 0 : Math.Round((double)mail / mailBuildings, 1), ["buildingsWaiting"] = mailWaiting, ["sharePct"] = mailBuildings == 0 ? 0 : Math.Round(100.0 * mailWaiting / mailBuildings, 1), ["worst"] = Worst(mailWhere) };
+            o["garbage"] = new JObject { ["avg"] = garbageBuildings == 0 ? 0 : Math.Round((double)garbage / garbageBuildings), ["buildingsPiling"] = garbagePiling, ["sharePct"] = garbageBuildings == 0 ? 0 : Math.Round(100.0 * garbagePiling / garbageBuildings, 1), ["worst"] = Worst(garbageWhere) };
+            o["crime"] = new JObject { ["avg"] = crimeBuildings == 0 ? 0 : Math.Round(crimeSum / crimeBuildings), ["highSharePct"] = crimeBuildings == 0 ? 0 : Math.Round(100.0 * crimeHigh / crimeBuildings, 1) };
+            // Parking: garages (vehicles against capacity) and kerbside lanes with no free space left.
+            int garageCars = 0, garageCap = 0, lanes = 0, lanesFull = 0;
+            using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Net.GarageLane>() }, None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() } }))
+            using (var gs = q.ToComponentDataArray<Game.Net.GarageLane>(Allocator.Temp))
+                foreach (var g in gs) { garageCars += g.m_VehicleCount; garageCap += g.m_VehicleCapacity; }
+            using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Net.ParkingLane>() }, None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() } }))
+            using (var ps = q.ToComponentDataArray<Game.Net.ParkingLane>(Allocator.Temp))
+                foreach (var l in ps) { if ((l.m_Flags & (Game.Net.ParkingLaneFlags.VirtualLane | Game.Net.ParkingLaneFlags.ParkingDisabled)) != 0) continue; lanes++; if (l.m_FreeSpace < 5f) lanesFull++; }
+            int parked = 0; using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Vehicles.ParkedCar>() }, None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() } })) parked = q.CalculateEntityCount();
+            o["parking"] = new JObject { ["parkedCars"] = parked, ["kerbLanes"] = lanes, ["kerbLanesFullPct"] = lanes == 0 ? 0 : Math.Round(100.0 * lanesFull / lanes, 1), ["garageCars"] = garageCars, ["garageCapacity"] = garageCap };
+            // Land value and road wear from the road edges.
+            double land = 0, wear = 0; int landN = 0, wearN = 0, worn = 0;
+            using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Net.Edge>(), ComponentType.ReadOnly<Game.Net.Road>() }, None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() } }))
+            using (var es = q.ToEntityArray(Allocator.Temp))
+                foreach (var e in es)
+                {
+                    if (em.HasComponent<Game.Net.LandValue>(e)) { land += em.GetComponentData<Game.Net.LandValue>(e).m_LandValue; landN++; }
+                    if (em.HasComponent<Game.Net.NetCondition>(e)) { var c = em.GetComponentData<Game.Net.NetCondition>(e).m_Wear; float x = Math.Max(c.x, c.y); wear += x; wearN++; if (x >= 5f) worn++; }
+                }
+            o["landValue"] = new JObject { ["avg"] = landN == 0 ? 0 : Math.Round(land / landN, 1) };
+            o["roads"] = new JObject { ["avgWear"] = wearN == 0 ? 0 : Math.Round(wear / wearN, 2), ["wornSharePct"] = wearN == 0 ? 0 : Math.Round(100.0 * worn / wearN, 1) };
+            // Company profitability (0-255 in the game, 127 = break even).
+            double prof = 0; int profN = 0, losing = 0;
+            using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Companies.Profitability>() }, None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() } }))
+            using (var ps = q.ToComponentDataArray<Game.Companies.Profitability>(Allocator.Temp))
+                foreach (var p in ps) { prof += p.m_Profitability; profN++; if (p.m_Profitability < 100) losing++; }
+            o["profitability"] = new JObject { ["avg"] = profN == 0 ? 0 : Math.Round(prof / profN), ["companies"] = profN, ["losingSharePct"] = profN == 0 ? 0 : Math.Round(100.0 * losing / profN, 1) };
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<Game.City.Tourism>()))
+                if (!q.IsEmptyIgnoreFilter) { var t = q.GetSingleton<Game.City.Tourism>(); o["tourism"] = new JObject { ["tourists"] = t.m_CurrentTourists, ["attractiveness"] = t.m_Attractiveness }; }
+            return o;
         }
 
         private JObject ServiceHeadroom(JObject args)

@@ -72,7 +72,7 @@ export function growthSet(demand: Record<string, any> | undefined, jobsState: 'o
 // What to buy with development points, in the order that unblocks growth: education (college for
 // the college-level vacancies), transport (bus lines), roads (wider roads, highways), then the
 // services whose needs escalate most (health, deathcare, garbage, fire, police), then anything.
-export const WISH: RegExp[] = [/college/i, /universit/i, /bus/i, /road|highway|roundabout|bridge/i, /hospital|health|clinic/i, /cremat|death/i, /recycl|incinerat|garbage/i, /fire/i, /police/i, /park|transport|train|tram|subway|taxi/i, /telecom|server|post|welfare/i, /./];
+export const WISH: RegExp[] = [/postsorting/i, /college/i, /universit/i, /bus/i, /road|highway|roundabout|bridge/i, /hospital|health|clinic/i, /cremat|death/i, /recycl|incinerat|garbage/i, /fire/i, /police/i, /park|transport|train|tram|subway|taxi/i, /telecom|server|post|welfare/i, /./];
 export function wishedNode(nodes: Record<string, any>[], points: number): Record<string, any> | null {
   // Parking nodes cost many points and unblock nothing: only when nothing else is left.
   const fits = nodes.filter(n => n.canBuy && Number(n.cost ?? 0) <= points); const useful = fits.filter(n => !/parking/i.test(String(n.name)));

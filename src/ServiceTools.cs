@@ -131,6 +131,15 @@ namespace CitiesIIAgentBridge
                     { var row=NativeBuild.Id(e); row["roadEdge"]=NativeBuild.Id(EntityManager.GetComponentData<Game.Buildings.Building>(e).m_RoadEdge); created.Add(row); }
                 ConstructionAccess.Results[operation]["createdBuildings"] = created;
                 bool movedSuccessfully = moved != Entity.Null && EntityManager.Exists(moved) && EntityManager.HasComponent<PrefabRef>(moved) && EntityManager.GetComponentData<PrefabRef>(moved).m_Prefab == expectedPrefab && EntityManager.HasComponent<Game.Objects.Transform>(moved) && Unity.Mathematics.math.distance(EntityManager.GetComponentData<Game.Objects.Transform>(moved).m_Position, point.m_Position) < 16;
+                // A placed object that is not a building (a roundabout) is confirmed by finding it at the point.
+                if (created.Count == 0 && !movedSuccessfully && !EntityManager.HasComponent<BuildingData>(expectedPrefab))
+                {
+                    using (var q = EntityManager.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<PrefabRef>(), ComponentType.ReadOnly<Game.Objects.Transform>() }, None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() } }))
+                    using (var es = q.ToEntityArray(Allocator.Temp))
+                        foreach (var e in es)
+                            if (EntityManager.GetComponentData<PrefabRef>(e).m_Prefab == expectedPrefab && math.distance(EntityManager.GetComponentData<Game.Objects.Transform>(e).m_Position.xz, point.m_Position.xz) < 16) created.Add(NativeBuild.Id(e));
+                    ConstructionAccess.Results[operation]["createdObjects"] = created;
+                }
                 if (created.Count == 0 && !movedSuccessfully) throw new InvalidOperationException("building_change_not_observed");
                 Finish("complete");
             }
@@ -147,7 +156,8 @@ namespace CitiesIIAgentBridge
                 var temp = EntityManager.GetComponentData<Temp>(entity);
                 var prefabEntity = EntityManager.HasComponent<PrefabRef>(entity) ? EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab : Entity.Null;
                 bool originalBuilding = temp.m_Original != Entity.Null && EntityManager.HasComponent<Game.Buildings.Building>(temp.m_Original);
-                bool building = EntityManager.HasComponent<Game.Buildings.Building>(entity) || EntityManager.HasComponent<BuildingData>(prefabEntity) || originalBuilding;
+                // The object being placed counts as the target whatever its type (a roundabout is a net object, not a building).
+                bool building = EntityManager.HasComponent<Game.Buildings.Building>(entity) || EntityManager.HasComponent<BuildingData>(prefabEntity) || originalBuilding || prefabEntity == expectedPrefab;
                 if (!building || EntityManager.HasComponent<Owner>(entity) || (originalBuilding && EntityManager.HasComponent<Owner>(temp.m_Original))) continue;
                 entries.Add(new BuildingPreviewEntry {
                     PrefabMatches = prefabEntity == expectedPrefab,

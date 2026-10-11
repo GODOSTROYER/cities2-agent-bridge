@@ -441,10 +441,27 @@ export async function unlockNode(name: string): Promise<Json> {
 
 // Tile purchase: adjacency/dryness ranking in the mod, the game's own price for the selection
 // previewed first (so a purchase never fails on funds), then the purchase.
-export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean; reserve?: number; cls?: SpendClass }): Promise<Json> {
+export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean; reserve?: number; cls?: SpendClass; allowUnreachable?: boolean }): Promise<Json> {
   const t = now(); const n = Math.max(1, Math.min(3, o.n ?? 1));
   const [opts, city0] = await multi([{ command: 'tile_options', args: { top: Math.max(3, n), ...(o.x !== undefined && o.z !== undefined ? { x: o.x, z: o.z } : {}) } }, { command: 'get_city_state' }]);
-  const picks: Json[] = (opts.tiles ?? []).slice(0, n);
+  // Never buy land that cannot be reached (FAILURES #98: 316,000 went into tiles behind the
+  // highway and the lake). A tile counts as reachable when a lot-free connector of up to 950 m
+  // from the existing road network ends inside it; highways are barriers for connectors and
+  // connectors over deep water are dropped. allowUnreachable is for road work the agent plans.
+  let options: Json[] = opts.tiles ?? []; const skipped: Json[] = [];
+  if (!o.allowUnreachable) {
+    const keep: Json[] = [];
+    for (const t of options.slice(0, 6)) {
+      if (keep.length >= n) break;
+      const links = await callOk('grid_connectors', { x0: t.x0 + 120, z0: t.z0 + 120, x1: t.x1 - 120, z1: t.z1 - 120, maxLength: 950, top: 3 }, 20);
+      let reachable = false;
+      for (const c of links.links ?? []) { const wet = await waterUnder(connectorStart(c), c.to); if (!(wet.wet && wet.deepest > 2)) { reachable = true; break; } }
+      if (reachable) keep.push(t); else skipped.push({ x: [t.x0, t.x1], z: [t.z0, t.z1] });
+    }
+    options = keep;
+    if (!options.length) return { ok: false, reason: 'no_reachable_tile', skipped, hint: 'every adjacent tile is behind a highway or water: build a crossing (underpass, bridge) first, or pass allowUnreachable for planned road work', phases: { plan: now() - t } };
+  }
+  const picks: Json[] = options.slice(0, n);
   if (!picks.length) return { ok: false, reason: 'no_adjacent_tile', phases: { plan: now() - t } };
   const tiles = picks.map(p => ({ index: p.index, version: p.version }));
   const view = picks.map(p => ({ x: [p.x0, p.x1], z: [p.z0, p.z1], dry: p.dry, relief: p.relief }));

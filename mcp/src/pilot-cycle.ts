@@ -74,7 +74,8 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     // Regular review (FAILURES #99): the ranked report of every system, from code, zero tokens.
     // Only CHANGES of status and blocked items are surfaced (progress.md, the status line).
     try {
-      const rep = buildReport({ snap, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
+      let outcomes: Record<string, any> | undefined; try { outcomes = (await tool('query', { command: 'get_metrics', args: {}, fields: ['outcomes', 'perfMs'], maxChars: 6000 })).outcomes; } catch { /* older mod */ }
+      const rep = buildReport({ snap, outcomes, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
       const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
       st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);
       st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));
