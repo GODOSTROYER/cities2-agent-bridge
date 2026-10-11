@@ -32,8 +32,8 @@ async function main(): Promise<number> {
     } else {
       console.log(`PASS: ${EXPECTED.length} tools`);
     }
-    if (EXPECTED.length !== 43) {
-      console.log(`FAIL: expected list has ${EXPECTED.length} names, want 43`);
+    if (EXPECTED.length !== 45) {
+      console.log(`FAIL: expected list has ${EXPECTED.length} names, want 45`);
       code = 1;
     }
 
