@@ -139,6 +139,38 @@ namespace CitiesIIAgentBridge
             return ConstructionAccess.Status(ConstructionAccess.Active);
         }
 
+        // The policy prefab of a line slider: vehicle interval (fewer seconds = more vehicles) or ticket price.
+        private static Entity RoutePolicy(EntityManager em, Game.Routes.RouteModifierType type)
+        {
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<RouteModifierData>(), ComponentType.ReadOnly<PolicySliderData>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var pe in es) { var buf = em.GetBuffer<RouteModifierData>(pe, true); for (int i = 0; i < buf.Length; i++) if (buf[i].m_Type == type) return pe; }
+            return Entity.Null;
+        }
+        private static JObject RoutePolicyRange(EntityManager em, Game.Routes.RouteModifierType type)
+        {
+            var pe = RoutePolicy(em, type); if (pe == Entity.Null) return null; var sl = em.GetComponentData<PolicySliderData>(pe);
+            return new JObject { ["min"] = sl.m_Range.min, ["max"] = sl.m_Range.max, ["default"] = sl.m_Default, ["step"] = sl.m_Step };
+        }
+
+        // route_policy {index, version, type: "VehicleInterval" | "TicketPrice", value, active?}: sets a line's slider
+        // through the game's own policy call (what the line panel does). The value is the slider value of the game.
+        private JObject SetRoutePolicy(JObject args)
+        {
+            RequireControl(); var w = RequireCity(); var em = w.EntityManager;
+            var e = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
+            if (!em.Exists(e) || !em.HasComponent<Route>(e) || !em.HasComponent<TransportLine>(e)) throw new ArgumentException("not_a_transport_line");
+            if (!Enum.TryParse<Game.Routes.RouteModifierType>((string)args["type"], true, out var type)) throw new ArgumentException("type_must_be_VehicleInterval_or_TicketPrice");
+            var policy = RoutePolicy(em, type); if (policy == Entity.Null) throw new InvalidOperationException("route_policy_not_found");
+            var sl = em.GetComponentData<PolicySliderData>(policy); float value = RequiredFloat(args, "value");
+            if (value < sl.m_Range.min || value > sl.m_Range.max) throw new ArgumentException("value_out_of_range: " + sl.m_Range.min + ".." + sl.m_Range.max);
+            var ui = w.GetExistingSystemManaged<Game.UI.InGame.PoliciesUISystem>();
+            var set = typeof(Game.UI.InGame.PoliciesUISystem).GetMethod("SetPolicy", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(Entity), typeof(Entity), typeof(bool), typeof(float) }, null);
+            if (ui == null || set == null) throw new MissingMethodException("PoliciesUISystem.SetPolicy");
+            var before = em.GetComponentData<TransportLine>(e);
+            set.Invoke(ui, new object[] { e, policy, (bool?)args["active"] != false, value });
+            return new JObject { ["ok"] = true, ["type"] = type.ToString(), ["value"] = value, ["before"] = new JObject { ["vehicleInterval"] = Math.Round(before.m_VehicleInterval, 1), ["ticketPrice"] = before.m_TicketPrice }, ["range"] = new JObject { ["min"] = sl.m_Range.min, ["max"] = sl.m_Range.max, ["default"] = sl.m_Default, ["step"] = sl.m_Step } };
+        }
+
         // remove_line {index, version}: deletes a transport line (the stops stay).
         private JObject RemoveLine(JObject args)
         {
@@ -154,6 +186,7 @@ namespace CitiesIIAgentBridge
         private JObject TransitLines(JObject args)
         {
             var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>(); var lines = new JArray(); var stops = new JArray();
+            var policyRanges = new JObject { ["VehicleInterval"] = RoutePolicyRange(em, Game.Routes.RouteModifierType.VehicleInterval), ["TicketPrice"] = RoutePolicyRange(em, Game.Routes.RouteModifierType.TicketPrice) };
             using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Route>(), ComponentType.ReadOnly<TransportLine>() }, None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>() } }))
             using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es)
             {
@@ -189,7 +222,7 @@ namespace CitiesIIAgentBridge
                 if (em.HasComponent<WaitingPassengers>(e)) row["waiting"] = em.GetComponentData<WaitingPassengers>(e).m_Count;
                 stops.Add(row);
             }
-            return new JObject { ["lines"] = lines, ["stops"] = stops };
+            return new JObject { ["lines"] = lines, ["stops"] = stops, ["policyRanges"] = policyRanges };
         }
     }
 }

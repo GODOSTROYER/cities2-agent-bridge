@@ -232,7 +232,7 @@ namespace CitiesIIAgentBridge
                 case "get_capabilities": return new JObject
                 {
                     ["read"] = new JArray("ping", "get_capabilities", "get_snapshot", "get_city_state", "get_camera", "get_selected", "inspect_entity", "get_water_facilities"),
-                    ["control"] = new JArray("create_district","edit_district","set_service_districts","set_building_option","set_service_fee","set_parking_fee","create_line","remove_line","set_camera", "set_simulation_speed", "build_road", "build_network", "upgrade_network", "road_option", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "purchase_tiles", "set_tax", "set_service_budget", "save_checkpoint", "batch_execute"),
+                    ["control"] = new JArray("create_district","edit_district","set_service_districts","set_building_option","set_service_fee","set_parking_fee","create_line","remove_line","route_policy","set_camera", "set_simulation_speed", "build_road", "build_network", "upgrade_network", "road_option", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "purchase_tiles", "set_tax", "set_service_budget", "save_checkpoint", "batch_execute"),
                     ["constructionQueries"] = new JArray("get_build_prefabs", "get_prefab_details", "get_network", "get_network_edges", "trace_network", "get_zone_cells", "get_operation", "get_batch", "get_city_management", "get_services", "sample_terrain", "get_tiles", "get_buildings", "diagnose_connections"),
                     ["buildVersion"] = ModVersion, ["liveValidation"] = "community_binary_requires_live_validation",
                     ["visibility"] = new JObject {
@@ -278,6 +278,7 @@ namespace CitiesIIAgentBridge
                 case "create_line": return CreateLine(args);
                 case "transit_lines": return TransitLines(args);
                 case "remove_line": return RemoveLine(args);
+                case "route_policy": return SetRoutePolicy(args);
                 case "set_service_fee": return SetServiceFee(args);
                 case "set_parking_fee": return SetParkingFee(args);
                 case "set_building_option": return SetBuildingOption(args);

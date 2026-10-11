@@ -504,6 +504,13 @@
     "undocumented": true
   },
   {
+    "name": "route_policy",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
     "name": "sample_terrain",
     "description": "",
     "pausing": false,
