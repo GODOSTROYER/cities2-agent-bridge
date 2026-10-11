@@ -489,6 +489,28 @@ export async function fixTraffic(o: { max?: number; flowBelow?: number; plan?: b
   });
 }
 
+// Power ahead of need (headroom rule): one small coal plant where the polluter site rules allow
+// (no homes within 300 m, none downwind), then a transformer beside it and a high-voltage cable
+// between the two terminals, because the game flags a plant whose high-voltage terminal is unused.
+export async function addPower(plan = false): Promise<Json> {
+  const centre = (await callOk('service_buildings', {}, 20)).homes ?? { x: 0, z: 0 };
+  const sites = await callOk('find_roadside_lots', { prefab: 'SmallCoalPowerPlant01', x: centre.x, z: centre.z, radius: 2000, count: 4 }, 30);
+  const site = (sites.candidates ?? [])[0]; if (!site) return { ok: false, reason: 'no_site_for_a_plant', rejected: sites.rejected, hint: 'no roadside site passes the polluter rules: the agent must open land (arterial) or unlock a cleaner plant' };
+  if (plan) return { ok: true, plan: true, at: site.position, toHomes: site.toHomes };
+  const terminal = async (prefabName: string, near: { x: number; z: number }) => { for (let k = 0; k < 8; k++) { await sleep(500); const n = await callOk('notifications', { type: 'Powerline Not Connected', top: 30 }, 15); const hit = (n.items ?? []).filter((i: Json) => i.ownerPrefab === prefabName && i.type === 'Powerline Not Connected').sort((a: Json, b: Json) => Math.hypot(a.x - near.x, a.z - near.z) - Math.hypot(b.x - near.x, b.z - near.z))[0]; if (hit && Math.hypot(hit.x - near.x, hit.z - near.z) < 200) return hit; } return null; };
+  const plant = await placeService('SmallCoalPowerPlant01', site.position.x, site.position.z, 120);
+  if (!plant.ok) return { ok: false, reason: 'plant_not_placed', detail: plant.reason ?? plant.error };
+  const out: Json = { ok: true, plant: plant.at, cost: Number(plant.cost ?? 0) };
+  const a = await terminal('SmallCoalPowerPlant01', plant.at);
+  if (!a) return out; // no warning raised: nothing to join
+  const tr = await placeService('TransformerStation01', plant.at.x, plant.at.z, 300);
+  if (!tr.ok) return { ...out, partial: true, reason: 'transformer_not_placed', loose: a };
+  out.cost += Number(tr.cost ?? 0); const b = await terminal('TransformerStation01', tr.at);
+  if (!b) return { ...out, partial: true, reason: 'transformer_terminal_not_found', loose: a };
+  const line = await buildLine('power_high', { x: a.x, z: a.z }, { x: b.x, z: b.z });
+  return line.ok ? { ...out, cost: out.cost + Number(line.cost ?? 0), transformer: tr.at } : { ...out, partial: true, reason: line.reason ?? 'cable_failed', loose: a };
+}
+
 // A continuous wide corridor (road hierarchy): every road edge on the network path between two
 // points is upgraded to the given prefab (highways and edges already that wide are skipped).
 // Flow of the corridor is measured before; measure again after a few minutes with traffic_hotspots.

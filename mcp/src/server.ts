@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state, REPO } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate, devTree, unlockNode, upgradeCorridor } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate, devTree, unlockNode, upgradeCorridor, addPower } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
@@ -431,6 +431,19 @@ server.registerTool('build_arterial', {
     const cleared = await ensureClear();
     assertIdle();
     return ok(withCleared(await buildCorridor(a.fromX, a.fromZ, a.toX, a.toZ, a.road ?? 'Medium Road', !!a.plan), cleared));
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('add_power', {
+  description: 'Adds electricity capacity ahead of need: one small coal plant sited by the polluter rules (no homes within 300 m or downwind), a transformer next to it and the high-voltage cable between their terminals, so no loose-end warning is left. Use when power passes 78% of capacity. plan=true reports the site only.',
+  inputSchema: { plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const r = await addPower(!!a.plan);
+    if (r.ok && !a.plan) await recordAction({ need: 'power', tool: 'add_power', detail: `plant at ${r.plant?.x},${r.plant?.z}` });
+    return ok(withCleared(r, cleared));
   } catch (e) { return fail(e); }
 });
 

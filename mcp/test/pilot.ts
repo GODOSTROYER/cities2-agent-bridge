@@ -82,6 +82,10 @@ check(selfCheck({ ...base, demand: { rL: 30, c: 10 }, needs: {} }, fresh(), T).l
 const bk = decide({ ...base, pilotMode: 'bank' }, fresh(), T).actions;
 check(!bk.some(a => a.key === 'grow' || a.key === 'tile') && bk.find(a => a.key === 'services')!.args.reserve === 1_000_000_000, 'bank mode: no districts or tiles, services only for over-capacity and very-high needs');
 
+const pw = fresh(); pw.utilityAlerts = ['power at 81% of capacity (projected 85%): add capacity before it passes 100%', 'water at 80% of capacity (projected 84%): add capacity'];
+const pwPlan = decide({ ...base, pilotMode: 'bank' }, pw, T);
+check(pwPlan.actions.some(a => a.tool === 'add_power') && pwPlan.attention.some(a => a.startsWith('water')) && !pwPlan.attention.some(a => a.startsWith('power')), 'power past the target is added by the loop itself (even in bank mode); water is raised for the agent');
+
 // Milestone -> save at once.
 const m2 = fresh(); m2.last = { services: T, traffic: T, tax: T, save: T, grow: T }; m2.milestone = 8;
 check(keys({ ...base, milestone: { achieved: 9 } }, m2, T + MIN).includes('save'), 'a new milestone is saved at once');

@@ -118,7 +118,10 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   if (!['none', 'paused_by_player_or_bridge', 'tutorial_phase', 'milestone_popup', 'signature_popup'].includes(blocker)) attention.push(`ui blocker ${blocker}`);
   for (const p of snap.happinessPriority?.very_high ?? []) attention.push(`factor ${p} is worse than -5 (very high)`);
   if (cash < reserve) attention.push(`cash ${cash} is under the reserve ${reserve}`);
-  for (const u of memo.utilityAlerts ?? []) attention.push(u);
+  // Power is the one utility the rules can add themselves (critical: also in bank mode and under the reserve).
+  const powerShort = (memo.utilityAlerts ?? []).some(u => u.startsWith('power'));
+  for (const u of memo.utilityAlerts ?? []) if (!u.startsWith('power') || !due(memo, 'power', now, 8)) attention.push(u);
+  if (powerShort && due(memo, 'power', now, 8)) push('power', 'add_power', {}, 'power past 78% of capacity: a plant before complaints');
 
   // 2. Services by escalation (the planner itself applies scores, coverage and the reserve).
   if ((Number(needs.ruins?.icons ?? 0) > 0 || Number(snap.buildings?.abandoned ?? 0) > 20) && due(memo, 'ruins', now, 5)) push('ruins', 'clear_ruins', {}, 'ruin icons on the map');
@@ -190,6 +193,7 @@ export function learn(memo: PilotMemo, action: PilotAction, result: Record<strin
     if (result?.ok) { memo.wantTile = false; delete memo.backoff.grow; return `bought a tile for ${result.cost}`; }
     memo.backoff.tile = now + 10 * MIN; memo.lastGrowReason = `no free site and no tile: ${reason}`; return `tile not bought: ${reason}`;
   }
+  if (action.key === 'power') { if (result?.ok) memo.utilityAlerts = (memo.utilityAlerts ?? []).filter(u => !u.startsWith('power')); return result?.ok ? `added a power plant at ${result.plant?.x},${result.plant?.z}${result.partial ? ' (PARTIAL: ' + result.reason + ')' : ''}` : `power plant not added: ${reason}`; }
   if (action.key === 'unlock') { if (!result?.ok) memo.backoff.unlock = now + 10 * MIN; return result?.ok ? `unlocked ${result.name} (${result.cost} points)` : `unlock refused: ${reason}`; }
   if (action.key === 'services') { memo.servicesLine = result?.services ?? memo.servicesLine; memo.utilityAlerts = result?.utilityAlerts ?? []; if (result?.table) { memo.table = result.table; memo.coverage = result.coverage ?? {}; memo.blocked = { ...(memo.blocked ?? {}), ...(result.blocked ?? {}) }; for (const p of result?.placed ?? []) delete memo.blocked[String(p.t)]; } const placed = (result?.placed ?? []).map((p: any) => p.prefab); return placed.length ? `services placed ${placed.join(', ')}` : ''; }
   if (action.key === 'traffic') { const n = (result?.jamIcons?.upgraded ?? result?.upgraded ?? []).filter((u: any) => u.status === 'complete').length; return n ? `widened ${n} roads` : ''; }
