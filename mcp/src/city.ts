@@ -371,7 +371,7 @@ export async function placeService(name: string, x: number, z: number, radius = 
   if (Number(city0.money) < Number(costs.construction ?? 0)) return { ok: false, reason: 'not_enough_money', money: city0.money, ...costs, phases: { plan: planMs } };
   if (plan) return { ok: true, plan: true, ...costs, sites: lots.found, nearest: cands[0].position, phases: { plan: planMs } };
   return mutate(async () => {
-    const t1 = now(); const cap = maxCost ?? Math.max(150000, Math.ceil(Number(costs.construction ?? 0) * 1.2));
+    const t1 = now(); const cap = Math.min(1_000_000, maxCost ?? Math.max(150000, Math.ceil(Number(costs.construction ?? 0) * 1.2))); // the mod accepts budgets up to 1,000,000
     const op = await callOk('place_building', { prefabIndex: info.index, prefabVersion: info.version, position: cands[0].position, rotation: cands[0].rotation, candidates: cands.map(c => ({ position: c.position, rotation: c.rotation })), maxCost: cap }, 20);
     const done = await waitOperation(op.id, 120);
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
