@@ -182,7 +182,9 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
     // not bought yet is the only thing bought, and nothing else is bought while its cost is being saved up (FAILURES #117).
     const reservedName = ((snap.policy?.devPointsFor ?? []) as string[]).find(n => (tree.nodes ?? []).some((q: any) => q.name === n && !q.bought));
     const reservedNode = reservedName ? (tree.nodes ?? []).find((q: any) => q.name === reservedName) : null;
-    const want = reservedNode ? (Number(tree.points) >= Number(reservedNode.cost) && reservedNode.canBuy !== false ? reservedNode : null) : wishedNode(tree.nodes ?? [], Number(tree.points));
+    // When the policy carries a list, ONLY that list is bought: points left over wait for the owner (11:08: the loop spent 10 spare points on its own wish list).
+    const listOnly = Array.isArray(snap.policy?.devPointsFor);
+    const want = reservedNode ? (Number(tree.points) >= Number(reservedNode.cost) && reservedNode.canBuy !== false ? reservedNode : null) : listOnly ? null : wishedNode(tree.nodes ?? [], Number(tree.points));
     if (want) push('unlock', 'dev_tree', { unlock: want.name }, `development points ${tree.points}: ${want.name} (${want.service}) costs ${want.cost}`);
   }
 

@@ -100,6 +100,7 @@ check(JSON.stringify(decide({ ...jobless, stopRepeating: ['entertainment'] }, fr
 const treeT = { points: 1, nodes: [{ name: 'TramNode', cost: 2, bought: false, service: 'Transportation', canBuy: false }, { name: 'LargeParksNode', cost: 1, bought: false, service: 'Parks & Recreation', canBuy: true }] };
 check(!decide({ ...base, devTree: treeT, policy: { devPointsFor: ['TramNode'] } }, fresh(), T).actions.some(a => a.key === 'unlock'), 'THE LIVE CASE: with Tram reserved and 1 point of the 2 it costs, nothing else is bought');
 check(decide({ ...base, devTree: { ...treeT, points: 2, nodes: [{ ...treeT.nodes[0], canBuy: true }, treeT.nodes[1]] }, policy: { devPointsFor: ['TramNode'] } }, fresh(), T).actions.find(a => a.key === 'unlock')?.args.unlock === 'TramNode', 'when the points are there the reserved node is bought first');
+check(!decide({ ...base, devTree: { points: 11, nodes: [{ name: 'TramNode', cost: 2, bought: true }, { name: 'HealthResearchInstituteNode', cost: 8, bought: false, service: 'Health & Deathcare', canBuy: true }] }, policy: { devPointsFor: ['TramNode'] } }, fresh(), T).actions.some(a => a.key === 'unlock'), 'THE LIVE CASE: once the reserved node is bought the spare points are kept for the owner, not spent on the wish list');
 check(selfCheck({ ...base, pilotMode: 'improve' }, (() => { const m = fresh(); m.starved = { housing: 9 }; return m; })(), T).length === 0, 'in improve mode unmet housing demand is not a fault (expansion is off by policy)');
 
 // Milestone -> save at once.
