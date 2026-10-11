@@ -122,6 +122,8 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   // Diagnosis (Phase 4): the cause class of every bad row, and root causes before knock-on effects.
   const flowPct = Number.isFinite(Number(snap.cityFlow)) ? Number(snap.cityFlow) : null;
   for (const r of rows) { const d = diagnose({ system: r.system, status: r.status, blocked: r.blocked || null, flowPct, ...(r.raw ?? {}) }); r.cause = d.cause; r.why = d.why; r.fix = d.fix; }
+  // Exported sewage has no local capacity to grade: the row is good when the outside pipe carries everything.
+  { const sx = i.sewageExport; const row = rows.find(r => r.system === 'Sewage'); if (sx && row && Number(sx.pipes) > 0 && Number(sx.fulfilled) >= Number(sx.use)) { row.status = Number(sx.local) === 0 ? 'good' : 'ok'; row.outcome = `exported through ${sx.pipes} outside pipe connection(s): ${sx.fulfilled} of ${sx.use}, fee ${sx.fee ?? '?'} a month; ${sx.local} local buildings left`; row.cause = '-'; } }
   rows.sort((a, b) => rank[a.status] - rank[b.status] || (a.value ?? 0) - (b.value ?? 0));
   const ranked = rankRootCauses(rows.map(r => ({ system: r.system, status: r.status, cause: (r.cause ?? 'unknown') as any })));
   const byName = new Map(rows.map(r => [r.system, r]));
