@@ -32,7 +32,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   const snap = await tool('snapshot', {});
   if (snap.error || !snap.city) throw new Error(`snapshot_failed:${snap.error ?? 'no city'}`);
   try { snap.devTree = await tool('dev_tree', {}); } catch { /* optional */ }
-  try { const hot = await tool('traffic_hotspots', { top: 1 }); snap.cityFlow = Number(hot.cityFlow ?? NaN); } catch { /* optional */ }
+  try { const hot = await tool('traffic_hotspots', { top: 1 }); snap.cityFlow = Number(hot.cityFlow ?? NaN); snap.flowByVolume = Number(hot.flowByVolumePct ?? NaN); } catch { /* optional */ }
 
   // Policy: the owner's goals as data (policy.json at the repository root; journals/pilot/mode.json
   // still overrides the mode for a quick switch). Bank mode ends by itself at its cash target.
@@ -96,7 +96,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));
       if (!st.reportSince) st.reportSince = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
       await fs.writeFile(join(repo, 'journals', 'REPORT.md'), rep.markdown);
-      await fs.appendFile(join(repo, 'journals', 'metrics-history.jsonl'), JSON.stringify({ utc: new Date().toISOString(), pop: snap.city.pop, flow: snap.cityFlow, unemp: snap.jobs?.unemp, edu: snap.jobs?.eduCitizens, vacant: snap.jobs?.vacantByEdu, values: rep.values, status: st.reportStatus }) + '\n');
+      await fs.appendFile(join(repo, 'journals', 'metrics-history.jsonl'), JSON.stringify({ utc: new Date().toISOString(), pop: snap.city.pop, flow: snap.cityFlow, flowByVolume: snap.flowByVolume, unemp: snap.jobs?.unemp, edu: snap.jobs?.eduCitizens, vacant: snap.jobs?.vacantByEdu, values: rep.values, status: st.reportStatus }) + '\n');
       for (const c of st.changes.filter(c => c.endsWith('(WORSE)'))) await log({ event: 'status_change', line: c });
     } catch (e: any) { await log({ event: 'report_failed', error: String(e?.message ?? e) }); }
     let notes = ''; try { notes = (await fs.readFile(join(dir, 'notes.md'), 'utf8')).split('\n').slice(0, 14).join('\n'); } catch { /* none */ }
@@ -104,7 +104,11 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   st.track = [...(st.track ?? []), { t: Date.now(), cash: Number(snap.city.money), net: Number(snap.city.net) }].slice(-15);
-  const waiting = snap.pilotMode === 'improve' ? waitingFor(st.track, Number(policy.cashReserve ?? 0), Number(snap.netFloor ?? 0)) : '';
+  // Purchases the agent has queued (journals/pilot/planned.json: [{name, realUpkeep}]): the line says what the loop waits for.
+  let planned: { name: string; realUpkeep: number }[] = []; try { planned = JSON.parse(await fs.readFile(join(dir, 'planned.json'), 'utf8')); } catch { /* none */ }
+  const plannedUpkeep = planned.reduce((a, b) => a + Number(b.realUpkeep ?? 0), 0);
+  let waiting = snap.pilotMode === 'improve' ? waitingFor(st.track, Number(policy.cashReserve ?? 0), Number(snap.netFloor ?? 0), plannedUpkeep > 0 ? plannedUpkeep : undefined) : '';
+  if (waiting && plannedUpkeep > 0) waiting = waiting.replace('for new upkeep', `for ${planned.map(q => q.name).join(' + ')}`);
   const floorNote = snap.pilotMode === 'improve' ? ` (floor ${short(Number(snap.netFloor))}, spendable ${short(Number(snap.city.net) - Number(snap.netFloor))}) reserve ${short(Number(policy.cashReserve ?? 0))} (spendable ${short(Number(snap.city.money) - Number(policy.cashReserve ?? 0))})` : '';
   const line = `[${snap.pilotMode ?? 'grow'}] pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))}${floorNote} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${waiting ? ' | ' + waiting : ''}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));

@@ -108,4 +108,20 @@ const grows = (actions: PilotAction[]) => actions.filter(a => a.key === 'grow');
   rmSync(repo, { recursive: true, force: true });
 }
 
+// 9. THE OWNER RULE (FAILURES #117): under the clean policy a shortfall never brings back a raw outlet,
+//    a coal plant or a landfill.
+{
+  const { decideServices } = await import('../src/services.ts'); const { forbiddenBy, allowed } = await import('../src/policy.ts');
+  const policy = { forbiddenPrefabs: ['SewageOutlet', 'CoalPowerPlant', 'GasPowerPlant', 'Landfill', 'IncinerationPlant'] };
+  const snap = { city: { pop: 50000, money: 15_000_000, net: 3_100_000 }, needs: { garbage: { action: 'build', icons: 170 } }, util: { power: { pct: 92, import: 0 }, water: { pct: 40 }, sewage: { pct: 84 } } };
+  const buildings = { services: [['WastewaterTreatmentPlant01', -152, 1696], ['WindTurbine01', 1328, 1700], ['RecyclingCenter01', 1206, 1081]], homes: { n: 100, x: 0, z: 0 }, industry: { n: 0, x: 0, z: 0 } } as any;
+  const run = (pol: any) => decideServices({ snap, buildings, gaps: {}, cooldown: {}, nowMs: 0, clusters: [], policy: pol } as any);
+  const clean = run(policy); const sewage = clean.find(n => n.t === 'sewage')!, power = clean.find(n => n.t === 'power')!, garbage = clean.find(n => n.t === 'garbage');
+  check(sewage.prefabs[0] === 'WastewaterTreatmentPlant01' && !sewage.prefabs.some(p => /SewageOutlet/.test(p)), 'THE LIVE CASE: a sewage headroom shortfall chooses a treatment plant, never a raw outlet');
+  check(power.prefabs.join() === 'WindTurbine01', 'a power shortfall chooses wind only: no coal, no gas');
+  check(!!garbage && garbage.prefabs.join() === 'RecyclingCenter01', 'a garbage need chooses a recycling centre only: no landfill, no incinerator');
+  check(run(undefined).find(n => n.t === 'sewage')!.prefabs.includes('SewageOutlet01'), 'without the policy the old types are still known (the list is data, not code)');
+  check(forbiddenBy(policy, 'SmallCoalPowerPlant01') === 'CoalPowerPlant' && forbiddenBy(policy, 'IncinerationPlant01 Extra Incinerator Furnace') === 'IncinerationPlant' && forbiddenBy(policy, 'WindTurbine01') === null && allowed(policy, ['Landfill01', 'RecyclingCenter01']).join() === 'RecyclingCenter01', 'the forbidden list matches by name part and leaves clean types alone');
+}
+
 process.exit(failed ? 1 : 0);

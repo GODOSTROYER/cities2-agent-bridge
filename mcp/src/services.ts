@@ -1,6 +1,7 @@
 // Native city-services planner: the TypeScript port of services.ps1 (same intent, same rules).
 // decideServices() is pure and fed with snapshot/building/gap data; fixServices() is the only
 // part that talks to the game (non-pausing reads, then placeService() for the chosen needs).
+import { loadPolicy, allowed } from './policy.ts';
 import { serviceTable, headroomFor, tableLine, utilityAlerts } from './headroom.ts';
 import { RESERVE, floorVerdict } from './budget.ts';
 import { recordFactors, recordAction, assess, readJsonl, HISTORY_PATH, ACTIONS_PATH } from './happiness.ts';
@@ -46,6 +47,7 @@ export interface ServicesInput {
   uncoveredShare?: number;
   clusters?: Cluster[];
   perRule?: number; // placements per rule in one call (only entertainment uses more than one)
+  policy?: Json; // policy.json: forbiddenPrefabs are never proposed
 }
 
 export interface Need {
@@ -159,6 +161,7 @@ export function decideServices(input: ServicesInput): Need[] {
     if (net < 0 && !isEsc && !short) continue; // upkeep discipline: no new permanent upkeep while losing money
 
     const pct = Math.round(share * 100);
+    const rulePrefabs = allowed(input.policy, rule.prefabs); if (!rulePrefabs.length) continue; // every type of this rule is forbidden by policy
     const existing: Pt[] = have.map(s => ({ x: Number(s[1]), z: Number(s[2]) }));
     const planned: Pt[] = [];
     // Several placements only for entertainment (parks spread out); each pick counts as a building for the next.
@@ -168,7 +171,7 @@ export function decideServices(input: ServicesInput): Need[] {
       if (!pick) break;
       planned.push(pick.at);
       // Park variety: rotate the prefab list so successive parks differ.
-      const prefabs = rule.t === 'entertainment' ? rotate(rule.prefabs, have.length + i) : rule.prefabs;
+      const prefabs = rule.t === 'entertainment' ? rotate(rulePrefabs, have.length + i) : rulePrefabs;
       const base = short && !isEsc ? `capacity ${room!.pct ?? '-'}% now, ${room!.projected ?? '-'}% with planned growth (target under 78%)`
         : isEsc ? `escalated ${needs[rule.need]?.score ?? ''}`.trim()
         : have.length === 0 && i === 0 ? 'none built'
@@ -191,7 +194,7 @@ export function decideServices(input: ServicesInput): Need[] {
       uncoveredPct: 0, escalated: false, critical: true, why, distance: null };
   };
   if (powerPct > 85 || powerImport > 0) {
-    out.push(utility('power', 'power', ['SmallCoalPowerPlant01', 'WindTurbine01'], /Power|WindTurbine|Transformer/,
+    out.push(utility('power', 'power', allowed(input.policy, ['WindTurbine01', 'SmallCoalPowerPlant01']), /Power|WindTurbine|Transformer/,
       `power ${powerPct}%${powerImport > 0 ? ', importing' : ''}`));
   }
   if (waterPct > 70) {
@@ -199,7 +202,8 @@ export function decideServices(input: ServicesInput): Need[] {
       /WaterPump|WaterTower|Groundwater/, `water ${waterPct}%`));
   }
   if (sewagePct > 70) {
-    out.push(utility('sewage', 'sewage', ['SewageOutlet01'], /Sewage/, `sewage ${sewagePct}%`));
+    // Treatment first; a raw outlet only where the policy still allows one.
+    out.push(utility('sewage', 'sewage', allowed(input.policy, ['WastewaterTreatmentPlant01', 'SewageOutlet01']), /Sewage|Wastewater/, `sewage ${sewagePct}%`));
   }
 
   // Cash floor: below it only critical or escalated needs survive.
@@ -267,7 +271,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   // zoned. The table is returned as one line; utilities past the target are raised.
   let table: Record<string, any> = {}; let servicesLine = ''; let alerts: string[] = [];
   try { table = serviceTable(await callOk('service_headroom', {}, 20), snap, Number(opts.projectPeople ?? 0)); servicesLine = tableLine(table); alerts = utilityAlerts(table); } catch { /* older mod: coverage and escalation only */ }
-  const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3, headroom: Object.keys(table).length ? headroomFor(table) : undefined });
+  const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3, policy: loadPolicy(), headroom: Object.keys(table).length ? headroomFor(table) : undefined });
   const held = all.filter(n => ['investigate', 'waiting'].includes(verdictOf(n.need)?.verdict));
   // Fix types the effects table judged ineffective are not repeated (critical and very-high needs still are).
   const stopped = all.filter(n => !held.includes(n) && (opts.skip ?? []).includes(n.need) && !n.critical && snap?.needs?.[n.need]?.priority !== 'very_high');

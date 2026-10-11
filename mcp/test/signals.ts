@@ -3,7 +3,7 @@
 //   node test/signals.ts [build] [minMainPct=15] [maxSideShare=0.12]
 import { callOk, call, waitOperation } from '../src/bridge.ts';
 import { prefab } from '../src/city.ts';
-const build = process.argv[2] === 'build'; const minMain = Number(process.argv[3] ?? 15), maxSide = Number(process.argv[4] ?? 0.12);
+const build = process.argv[2] === 'build'; const minMain = Number(process.argv[3] ?? 15), maxSide = Number(process.argv[4] ?? 0.12), absCap = Number(process.argv[5] ?? -1); // absCap: also remove where the third arm carries at most this % of the busiest edge (quiet cross streets)
 const lights = await prefab('Traffic Lights', 'network'); const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
 const seen = new Set<number>(); const rows: any[] = [];
 for (let cx = -2300; cx <= 1900; cx += 600) for (let cz = -2700; cz <= 2000; cz += 600) {
@@ -13,7 +13,7 @@ for (let cx = -2300; cx <= 1900; cx += 600) for (let cz = -2700; cz <= 2000; cz 
     seen.add(x.index); const j = await callOk('junction_info', { index: x.index, version: x.version }, 30); if (!j.trafficLights) continue;
     const arms = (j.arms ?? []).map((a: any) => ({ prefab: String(a.prefab), vol: Number(by.get(a.index)?.volumePct ?? 0), flow: Number(by.get(a.index)?.flowPct ?? 0) })).sort((p: any, q: any) => q.vol - p.vol);
     if (arms.length < 3) continue; const main = arms[1].vol, side = arms[2].vol;
-    rows.push({ index: x.index, version: x.version, x: Math.round(x.position.x), z: Math.round(x.position.z), arms, main, side, remove: main >= minMain && side <= maxSide * main && arms.slice(2).every((a: any) => /Small/.test(a.prefab) && (a.flow >= 14 || a.vol === 0)) && !arms.some((a: any) => /Track/.test(a.prefab)) });
+    rows.push({ index: x.index, version: x.version, x: Math.round(x.position.x), z: Math.round(x.position.z), arms, main, side, remove: ((main >= minMain && side <= maxSide * main) || side <= absCap) && arms.slice(2).every((a: any) => /Small/.test(a.prefab) && (a.flow >= 14 || a.vol <= 1)) && !arms.some((a: any) => /Track/.test(a.prefab)) });
   }
 }
 const cand = rows.filter(r => r.remove).sort((a, b) => b.main - a.main);

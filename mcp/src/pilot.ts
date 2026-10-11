@@ -232,7 +232,7 @@ export function progressBlock(snap: Record<string, any>, did: string[], next: st
     `- pop ${snap.city?.pop}, cash ${snap.city?.money}, net ${snap.city?.net}, milestone ${snap.milestone?.achieved} (XP ${snap.milestone?.xp}/${snap.milestone?.nextXp})`,
     `- unemployment ${snap.jobs?.unemp}%, vacancies by education ${JSON.stringify(snap.jobs?.vacantByEdu ?? [])}, demand ${JSON.stringify(snap.demand ?? {})}`,
     ...(diagnosis ? [`- jobs: ${diagnosis}`] : []),
-    `- scorecard: traffic flow ${snap.cityFlow ?? '?'}% (target 75+), happiness ${snap.happy}, health ${snap.health ?? '?'}, power ${snap.util?.power?.pct ?? '?'}% water ${snap.util?.water?.pct ?? '?'}% sewage ${snap.util?.sewage?.pct ?? '?'}%`,
+    `- scorecard: traffic flow weighted by vehicles ${snap.flowByVolume ?? '?'}% (target 60+; game figure ${snap.cityFlow ?? '?'}%), happiness ${snap.happy}, health ${snap.health ?? '?'}, power ${snap.util?.power?.pct ?? '?'}% water ${snap.util?.water?.pct ?? '?'}% sewage ${snap.util?.sewage?.pct ?? '?'}%`,
     `- happiness ${snap.happy}, factors worse than -3: ${f}`,
     `- icons: ${icons}`,
     `- shortages: ${JSON.stringify(snap.shortages ?? {})}`,

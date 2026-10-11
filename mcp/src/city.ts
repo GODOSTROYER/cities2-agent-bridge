@@ -1,6 +1,7 @@
 // Native build path: grids, zoning, links and service placement driven directly from the
 // MCP server through the mod's planning queries. No PowerShell, no cell dumps: planning is
 // non-pausing (the simulation keeps running), and the game is paused only inside mutate().
+import { loadPolicy, forbiddenBy } from './policy.ts';
 import { call, callOk, multi, mutate, waitBatch, waitOperation, readSession } from './bridge.ts';
 import type { Json } from './bridge.ts';
 import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater } from './budget.ts';
@@ -364,6 +365,7 @@ export async function link(x: number, z: number, roadName = 'Small Road', maxCos
 
 // Service or any other ploppable building: roadside lot search in the mod, then native placement.
 export async function placeService(name: string, x: number, z: number, radius = 400, maxCost?: number, plan = false): Promise<Json> {
+  const rule = forbiddenBy(loadPolicy(), name); if (rule) return { ok: false, reason: 'forbidden_by_policy', rule, hint: 'policy.json forbiddenPrefabs: use the clean alternative (wind, treatment plant, recycling centre)' };
   const t = now(); const info = await prefab(name, 'building');
   if (!info.found) return { ok: false, reason: 'prefab_not_found', similar: info.similar };
   if (info.locked) return { ok: false, reason: 'prefab_locked' };
@@ -374,7 +376,7 @@ export async function placeService(name: string, x: number, z: number, radius = 
   if (Number(city0.money) < Number(costs.construction ?? 0)) return { ok: false, reason: 'not_enough_money', money: city0.money, ...costs, phases: { plan: planMs } };
   if (plan) return { ok: true, plan: true, ...costs, sites: lots.found, nearest: cands[0].position, phases: { plan: planMs } };
   return mutate(async () => {
-    const t1 = now(); const cap = Math.min(1_000_000, maxCost ?? Math.max(150000, Math.ceil(Number(costs.construction ?? 0) * 1.2))); // the mod accepts budgets up to 1,000,000
+    const t1 = now(); const cap = Math.min(10_000_000, maxCost ?? Math.max(150000, Math.ceil(Number(costs.construction ?? 0) * 1.2))); // the mod accepts budgets up to 10,000,000
     const op = await callOk('place_building', { prefabIndex: info.index, prefabVersion: info.version, position: cands[0].position, rotation: cands[0].rotation, candidates: cands.map(c => ({ position: c.position, rotation: c.rotation })), maxCost: cap }, 20);
     const done = await waitOperation(op.id, 120);
     const money1 = Number((await callOk('get_city_state', {}, 10)).money);
@@ -527,6 +529,13 @@ export async function addPower(plan = false): Promise<Json> {
   // Utility land first (FAILURES #103): around the plants and the landfill that already exist,
   // where the polluter rules were satisfied before; only then around the homes.
   const sb = await callOk('service_buildings', {}, 20); const centre = sb.homes ?? { x: 0, z: 0 };
+  // Clean-power policy: no plant that burns anything. Capacity is added as wind turbines beside the
+  // existing wind park (they share its transformer and high-voltage link).
+  if (forbiddenBy(loadPolicy(), 'SmallCoalPowerPlant01')) {
+    const parks: Json[] = (sb.services ?? []).filter((b: Json) => /WindTurbine/.test(String(b[0]))); const placed: Json[] = []; let last: Json = { ok: false, reason: 'no_wind_park' };
+    for (const anchor of parks.slice(-6).reverse()) { if (placed.length >= 2) break; last = await placeService('WindTurbine01', Number(anchor[1]), Number(anchor[2]), 400); if (last.ok) placed.push({ prefab: 'WindTurbine01', at: last.at, cost: last.cost, monthlyUpkeep: last.monthlyUpkeep }); }
+    return placed.length ? { ok: true, cleanByPolicy: true, placed, cost: placed.reduce((a, b) => a + Number(b.cost ?? 0), 0), monthlyUpkeep: placed.reduce((a, b) => a + Number(b.monthlyUpkeep ?? 0), 0), note: 'wind turbines (coal and gas are forbidden by policy); check production against capacity: a far turbine needs the high-voltage link' } : { ok: false, reason: last.reason ?? 'no_site_for_wind', cleanByPolicy: true };
+  }
   const utility: { x: number; z: number }[] = (sb.services ?? []).filter((b: Json) => /PowerPlant|Landfill/.test(String(b[0]))).map((b: Json) => ({ x: Number(b[1]), z: Number(b[2]) }));
   let sites: Json = { candidates: [] };
   for (const u of utility.reverse()) { sites = await callOk('find_roadside_lots', { prefab: 'SmallCoalPowerPlant01', x: u.x, z: u.z, radius: 450, count: 4 }, 30); if ((sites.candidates ?? []).length) break; }

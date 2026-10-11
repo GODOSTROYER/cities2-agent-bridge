@@ -60,6 +60,10 @@ export function gradeOf(factor: number | null, tableStatus: string | null, uncov
   return g === 'unknown' ? g : worst(g, extra);
 }
 
+// Target for the weighted flow: arterials and highways at their unhindered speed and no standing queue
+// give about 60-70% (small streets run at about 45% of their limit even when empty).
+export const TRAFFIC_TARGET = 60;
+
 export function buildReport(i: ReportInput): { markdown: string; values: Record<string, number>; rows: SystemRow[] } {
   const snap = i.snap; const factors = snap.happiness ?? {}; const icons = snap.icons ?? {}; const rows: SystemRow[] = []; const values: Record<string, number> = {};
   const add = (r: SystemRow) => { if (r.value !== null) values[r.system] = r.value; r.trend = arrow(r.value, i.prev?.[r.system]); rows.push(r); };
@@ -72,7 +76,15 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     const need = s.need ? snap.needs?.[s.need] : null; const waiting = Number(need?.dead ?? 0) + Number(need?.sick ?? 0) + Number(need?.unserved ?? 0);
     let extra: Grade = iconCount >= 20 ? 'bad' : 'good'; let outcome = [factor !== null ? `factor ${factor}` : '', iconCount ? `${iconCount} icons` : '', waiting ? `${waiting} waiting` : ''].filter(Boolean).join(', ');
     let value: number | null = factor;
-    if (s.system === 'Traffic') { const flow = Number(snap.cityFlow ?? NaN); if (Number.isFinite(flow)) { outcome = `flow ${flow}% (target 75+), ${outcome}`; extra = worst(extra, flow < 50 ? 'critical' : flow < 75 ? 'bad' : 'good'); value = flow / 10; } }
+    // Headline: flow weighted by vehicles (how fast the average vehicle moves against free speed).
+    // The game's own citywide figure is an unweighted mean over road edges, in which an empty small
+    // street reads about 45% and a free highway 93%: it cannot reach 75% in a street grid and it hides
+    // a standing queue on one busy road (FAILURES #115). It is still shown beside the new measure.
+    if (s.system === 'Traffic') {
+      const flow = Number(snap.cityFlow ?? NaN), weighted = Number(snap.flowByVolume ?? NaN);
+      if (Number.isFinite(weighted) && weighted > 0) { outcome = `flow weighted by vehicles ${weighted}% (target ${TRAFFIC_TARGET}+); game figure, unweighted, ${Number.isFinite(flow) ? flow : '?'}%; ${outcome}`; extra = worst(extra, weighted < TRAFFIC_TARGET / 2 ? 'critical' : weighted < TRAFFIC_TARGET ? 'bad' : 'good'); value = weighted / 10; }
+      else if (Number.isFinite(flow)) { outcome = `flow ${flow}% (target 75+), ${outcome}`; extra = worst(extra, flow < 50 ? 'critical' : flow < 75 ? 'bad' : 'good'); value = flow / 10; }
+    }
     if (Number(need?.unserved ?? 0) > 0) extra = 'critical';
     // Outcome measures from the buildings themselves: what is actually waiting.
     const oc = i.outcomes ?? {};
@@ -121,7 +133,9 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   const done: [string, boolean, string][] = [
     ['every happiness factor except Tax at 0 or better', negative.length === 0, negative.join(', ') || 'all at 0 or better'],
     ['every system good', notGood.length === 0, notGood.length ? `${notGood.length} not good: ${notGood.slice(0, 8).join(', ')}` : 'all good'],
-    ['traffic flow 75% or better', Number.isFinite(flowNow) && flowNow >= 75, `${Number.isFinite(flowNow) ? flowNow : '?'}%`],
+    Number.isFinite(Number(snap.flowByVolume)) && Number(snap.flowByVolume) > 0
+      ? [`traffic flow weighted by vehicles ${TRAFFIC_TARGET}% or better`, Number(snap.flowByVolume) >= TRAFFIC_TARGET, `${snap.flowByVolume}% (the game's unweighted figure: ${Number.isFinite(flowNow) ? flowNow : '?'}%, old target 75)`] as [string, boolean, string]
+      : ['traffic flow 75% or better', Number.isFinite(flowNow) && flowNow >= 75, `${Number.isFinite(flowNow) ? flowNow : '?'}%`],
     ['no problem icons', iconTotal === 0, `${iconTotal} icons`],
     ['net at or above the floor', floor <= 0 || net >= floor, floor > 0 ? `net ${net}, floor ${floor}` : 'no floor set'],
     ...(i.outcomes?.power ? [['energy 100% clean and renewable', Number(i.outcomes.power.mix?.coal?.n ?? 0) + Number(i.outcomes.power.mix?.gas?.n ?? 0) === 0, `clean share of use ${i.outcomes.power.cleanShareOfUsePct}%, ${Number(i.outcomes.power.mix?.coal?.n ?? 0)} coal plants left`] as [string, boolean, string]] : []),

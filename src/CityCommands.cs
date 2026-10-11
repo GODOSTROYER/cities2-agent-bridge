@@ -28,7 +28,8 @@ namespace CitiesIIAgentBridge
             point.m_Rotation = quaternion.RotateY(math.radians(rotation));
             // An extension built into its owner shares the owner's rotation (FAILURES #116); the caller need not know it.
             if (owner != Entity.Null && args["rotation"] == null && w.EntityManager.HasComponent<Game.Objects.Transform>(owner)) point.m_Rotation = w.EntityManager.GetComponentData<Game.Objects.Transform>(owner).m_Rotation;
-            int budget = RequiredInt(args, "maxCost"); if (budget < 0 || budget > 1000000) throw new ArgumentException("invalid_budget");
+            // Large civic buildings cost more than a million (hospital 1.88M, solar station 1.5M): the cap is a typo guard, not a spending rule.
+            int budget = RequiredInt(args, "maxCost"); if (budget < 0 || budget > 10000000) throw new ArgumentException("invalid_budget");
             Entity move = Entity.Null;
             if (args["moveIndex"] != null) { move = Mod.CheckedEntity(RequiredInt(args, "moveIndex"), RequiredInt(args, "moveVersion")); if (!w.EntityManager.Exists(move) || !w.EntityManager.HasComponent<Game.Buildings.Building>(move)) throw new ArgumentException("invalid_building_to_move"); }
             ControlPoint[] candidates = null;

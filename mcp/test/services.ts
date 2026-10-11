@@ -74,7 +74,7 @@ const deathcareWatch = { deathcare: { action: 'watch', score: '1/3' } };
     first?.need === 'power' && first.critical === true && r[1]?.need === 'deathcare',
     r.map(n => n.need).join(','));
   check('d: power target falls back to homes and uses the power prefab list',
-    first?.x === 1000 && first?.z === -500 && first?.prefabs[0] === 'SmallCoalPowerPlant01');
+    first?.x === 1000 && first?.z === -500 && first?.prefabs[0] === 'WindTurbine01'); // clean first, even without a policy
 }
 
 // (e) education coverage gap targets the cluster; a small gap with a school present does nothing.
