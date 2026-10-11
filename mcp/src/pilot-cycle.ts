@@ -15,10 +15,12 @@ import { netFloor, upkeepBudget, waitingFor } from './budget.ts';
 import { loadQueue, saveQueue, queueLine, queueDoing, queueAttention, stalled, nextCodeItem, applyCodeResult, queueMarkdown, feedDesignQueue, unblocked } from './queue.ts';
 import { districtCount, districtLine, districtAttention } from './district.ts';
 import type { DistrictCount } from './district.ts';
+import { expansionStep, districtBuilt } from './expansion.ts';
+import type { ExpansionState } from './expansion.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
-interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; review?: { t: number; allowance: number; spent: number }; stopRepeating?: string[]; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[]; queueLine?: string; stalledSince?: number; design?: { total: number; counts: Record<string, number>; line: string }; feeLines?: string[] }
+interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; review?: { t: number; allowance: number; spent: number }; stopRepeating?: string[]; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[]; queueLine?: string; stalledSince?: number; design?: { total: number; counts: Record<string, number>; line: string }; feeLines?: string[]; expansion?: ExpansionState }
 
 const hhmm = () => new Date().toISOString().slice(11, 16);
 const short = (n: number) => Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -48,8 +50,17 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   // the margin measured at its start as new real upkeep; the next review measures again.
   snap.netFloor = netFloor(policy);
   const reviewMs = Number(policy.reviewMinutes ?? 15) * 60000;
-  if (!st.review || Date.now() - st.review.t >= reviewMs) st.review = { t: Date.now(), allowance: upkeepBudget(Number(snap.city.net), snap.netFloor, Number(policy.upkeepShareOfMarginPerReview ?? 0.5)), spent: 0 };
+  const isReview = !st.review || Date.now() - st.review.t >= reviewMs;
+  if (isReview) st.review = { t: Date.now(), allowance: upkeepBudget(Number(snap.city.net), snap.netFloor, Number(policy.upkeepShareOfMarginPerReview ?? 0.5)), spent: 0 };
   snap.upkeepAllowance = Math.max(0, st.review.allowance - st.review.spent);
+  // Expansion rule (policy.json expansionRule): improve until happiness holds at 80+ over two reviews with no negative
+  // factor, then one optimal district per step from cash above the reserve; back to improve the moment it drops.
+  if (policy.mode === 'improve' && policy.expansionRule) {
+    const now0 = { happy: Number(snap.happy), factors: (snap.happiness ?? {}) as Record<string, number>, cash: Number(snap.city.money), flow: Number(snap.cityFlow), weighted: Number(snap.flowByVolume) };
+    const ex = expansionStep(policy.expansionRule, Number(policy.cashReserve ?? 0), now0, st.expansion, isReview);
+    st.expansion = ex.state; snap.expansionWhy = ex.why;
+    if (ex.mode === 'grow-optimal') { snap.pilotMode = 'grow'; snap.growOptimal = true; }
+  }
   const now = Date.now(); const { memo } = st;
   const stuck = selfCheck(snap, memo, now);
   for (const line of stuck) await log({ event: 'self_check', line });
@@ -74,6 +85,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     if (result.reason === 'not_utility_connected' || result.reason === 'previous_district_unserved' || result.reason === 'loose_end' || result.reason === 'crosses_water')
       st.sticky.push(`${hhmm()} ${a.tool}: ${result.reason} at ${JSON.stringify(result.at ?? result.districts ?? result.dangling ?? '?')}`);
   }
+  if (snap.growOptimal && st.expansion && done.some(n => n.startsWith('built '))) { st.expansion = districtBuilt(st.expansion, { happy: Number(snap.happy), factors: {}, cash: Number(snap.city.money), flow: Number(snap.cityFlow), weighted: Number(snap.flowByVolume) }, Date.now()); st.did.push(`${hhmm()} expansion: one district built; the next waits for a review at happiness 80+ with traffic no worse`); }
   if (Number.isFinite(milestone)) { if (reached) st.did.push(`${hhmm()} MILESTONE ${milestone}`); memo.milestone = milestone; }
   while (st.did.length > 40) st.did.shift(); while (st.sticky.length > 6) st.sticky.shift();
   const attention = [...plan.attention, ...stuck, ...st.sticky]; st.cycles++;
@@ -149,7 +161,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       const nextItem = unblocked(q.items, qNow)[0];
       trafficLine = `- TRAFFIC: game flow ${snap.cityFlow ?? '?'}% (target 90), weighted by vehicles ${snap.flowByVolume ?? '?'}% (must rise); last changes: ${acts.join(' | ') || 'none recorded'}; next: ${nextItem ? nextItem.id + ' - ' + nextItem.title.slice(0, 120) : 'every traffic item is waiting for its measurement window'}\n`;
     } catch { /* no actions yet */ }
-    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + trafficLine + (stallLine ? `- ${stallLine}\n` : '') + districts + (st.design ? `- DESIGN AUDIT: ${st.design.line}\n` : '') + ((st.feeLines ?? []).length ? `- FEES AND PARKING: ${st.feeLines!.join('; ')}\n` : '') + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
+    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + trafficLine + (snap.expansionWhy ? `- EXPANSION (rule: only at happiness 80+ over two reviews; cash reserve ${Number(policy.cashReserve ?? 0)}): ${snap.expansionWhy}\n` : '') + (stallLine ? `- ${stallLine}\n` : '') + districts + (st.design ? `- DESIGN AUDIT: ${st.design.line}\n` : '') + ((st.feeLines ?? []).length ? `- FEES AND PARKING: ${st.feeLines!.join('; ')}\n` : '') + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   st.track = [...(st.track ?? []), { t: Date.now(), cash: Number(snap.city.money), net: Number(snap.city.net) }].slice(-15);

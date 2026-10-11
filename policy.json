@@ -3,13 +3,13 @@
  "mode": "improve",
  "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 90%+ on the game's figure with the vehicle-weighted figure rising, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
  "expansion": false,
- "expansionException": "only the minimum for a very-high-priority need (land for a facility that fixes a critical service, jobs if unemployment cannot be fixed otherwise, a milestone that unlocks transit); justify in progress.md",
+ "expansionException": "below happiness 80: only the minimum a fix needs (land for a facility, a joining street, rehousing); at 80+ see expansionRule",
  "netFloor": 2300000,
  "netFloorNote": "fixed by the owner; no ratchet. Spendable upkeep = net - netFloor. Waiting and earning is the answer to \"cannot afford it yet\"; services are never cut for money.",
  "upkeepShareOfMarginPerReview": 0.5,
  "reviewMinutes": 15,
  "upkeepRealFactor": 2.7,
- "cashReserve": 4000000,
+ "cashReserve": 20000000,
  "bankTarget": 5000000,
  "taxPins": "journals/tax-pins.json (Residential 15, business 10-11); never cut",
  "targets": {
@@ -154,5 +154,24 @@
    "stubMaxM": 60,
    "singleAccessMinM": 800
   }
+ },
+ "cashReserveNote": "owner, 2026-10-11 21:03: keep at least 20,000,000 in cash at all times; spend only the amount above it. The net floor (netFloor, +2,300,000 a month, fixed) is unchanged.",
+ "expansionRule": {
+  "atHappiness": 80,
+  "sustainedReviews": 2,
+  "exempt": [
+   "Tax"
+  ],
+  "trafficTolerance": 1,
+  "_note": "owner, 2026-10-11: below 80 improve mode stays (no expansion except what a fix needs). At 80+ over two reviews in a row, with every non-tax factor at 0 or better, the loop switches to grow-optimal: one district per step, paid from cash above cashReserve; after each district a review must still show 80+, no negative factor and traffic no worse, else back to improve and fix first. Code: mcp/src/expansion.ts (tests mcp/test/expansion.ts).",
+  "districtStandard": [
+   "best land: land value, no pollution or noise, good access",
+   "trunk road connections and two or more accesses first",
+   "transit: a tram or bus line and a stop within walking distance",
+   "services and utilities ahead of the residents (schools, clinic, fire, police, park, garbage and deathcare reach), by the always-over-needs rule",
+   "mixed uses so trips are short",
+   "a density that fits its place",
+   "trees and public space"
+  ]
  }
 }
