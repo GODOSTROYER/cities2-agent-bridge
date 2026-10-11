@@ -66,6 +66,8 @@ export function gradeOf(factor: number | null, tableStatus: string | null, uncov
 // Target for the weighted flow: arterials and highways at their unhindered speed and no standing queue
 // give about 60-70% (small streets run at about 45% of their limit even when empty).
 export const TRAFFIC_TARGET = 60;
+/** Owner's target on the figure the game shows (Traffic infoview, plain mean over road edges). */
+export const GAME_FLOW_TARGET = 90;
 
 export function buildReport(i: ReportInput): { markdown: string; values: Record<string, number>; rows: SystemRow[] } {
   const snap = i.snap; const factors = snap.happiness ?? {}; const icons = snap.icons ?? {}; const rows: SystemRow[] = []; const values: Record<string, number> = {};
@@ -141,7 +143,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     ['every happiness factor except Tax at 0 or better', negative.length === 0, negative.join(', ') || 'all at 0 or better'],
     ['every system good', notGood.length === 0, notGood.length ? `${notGood.length} not good: ${notGood.slice(0, 8).join(', ')}` : 'all good'],
     Number.isFinite(Number(snap.flowByVolume)) && Number(snap.flowByVolume) > 0
-      ? [`traffic flow weighted by vehicles ${TRAFFIC_TARGET}% or better`, Number(snap.flowByVolume) >= TRAFFIC_TARGET, `${snap.flowByVolume}% (the game's unweighted figure: ${Number.isFinite(flowNow) ? flowNow : '?'}%, old target 75)`] as [string, boolean, string]
+      ? [`traffic flow weighted by vehicles ${TRAFFIC_TARGET}% or better`, Number(snap.flowByVolume) >= TRAFFIC_TARGET, `${snap.flowByVolume}% (the game's unweighted figure: ${Number.isFinite(flowNow) ? flowNow : '?'}%, old target 75; owner's target on the game's figure: ${GAME_FLOW_TARGET}%${Number.isFinite(flowNow) && flowNow >= GAME_FLOW_TARGET ? ', met' : ', not met'})`] as [string, boolean, string]
       : ['traffic flow 75% or better', Number.isFinite(flowNow) && flowNow >= 75, `${Number.isFinite(flowNow) ? flowNow : '?'}%`],
     ['no problem icons', iconTotal === 0, `${iconTotal} icons`],
     ['net at or above the floor', floor <= 0 || net >= floor, floor > 0 ? `net ${net}, floor ${floor}` : 'no floor set'],

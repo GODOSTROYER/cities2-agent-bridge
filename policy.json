@@ -1,7 +1,7 @@
 {
  "_comment": "Owner goals and constraints as data (REDESIGN Phase 4). The loop reads this file every cycle; a change of mind is an edit here, not a code change. mode: grow | bank | improve.",
  "mode": "improve",
- "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 75%+, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
+ "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 90%+ on the game's figure with the vehicle-weighted figure rising, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
  "expansion": false,
  "expansionException": "only the minimum for a very-high-priority need (land for a facility that fixes a critical service, jobs if unemployment cannot be fixed otherwise, a milestone that unlocks transit); justify in progress.md",
  "netFloor": 2300000,
@@ -17,12 +17,13 @@
   "factorExempt": [
    "Tax"
   ],
-  "trafficFlowPct": 75,
+  "trafficFlowPct": 90,
   "headroomUsagePct": 78,
   "coverageGapPct": 8,
   "problemIcons": 0,
   "cleanEnergyPct": 100,
-  "rawSewageDischarge": 0
+  "rawSewageDischarge": 0,
+  "trafficFlowNote": "the figure of the game's Traffic infoview (plain mean over road edges); the vehicle-weighted figure is reported beside it and must rise. See journals/progress.md NEEDS OWNER for what the game's figure can reach."
  },
  "never": [
   "ground cable, pipe or ground road across water",

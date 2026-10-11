@@ -1,0 +1,16 @@
+// LIVE helper (read only): what the game's Traffic Flow figure is made of. Per road edge the game computes
+// flow = distance driven / (time x min(car top speed, lane speed limit)), i.e. average speed as a share of free
+// speed, per time-of-day bucket; the city figure is the plain mean over road edges (every edge counts once).
+//   node test/flowstats.ts
+import { callOk } from '../src/bridge.ts';
+const tiles = ((await callOk('get_tiles', {}, 30)).tiles ?? []).filter((t: any) => t.purchased); const seen = new Map<number, any>();
+for (const t of tiles) { const xs = t.polygon.map((p: any) => p.x), zs = t.polygon.map((p: any) => p.z); const r = await callOk('get_network_edges', { x: (Math.min(...xs) + Math.max(...xs)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2, radius: 470 }, 40); for (const e of r.edges ?? []) if (!seen.has(e.index) && e.trafficDistanceRaw && e.trafficDurationRaw) seen.set(e.index, e); }
+const rows = [...seen.values()].map(e => { const d: number[] = e.trafficDistanceRaw, u: number[] = e.trafficDurationRaw; const f = [0, 1, 2, 3].map(i => { const dist = d[i] + d[i + 4], dur = u[i] + u[i + 4]; return dur > 0 ? Math.max(0, Math.min(1, dist / dur)) : NaN; }).filter(x => Number.isFinite(x)); const vol = (d.reduce((a, b) => a + b, 0)) / 4; return { prefab: String(e.prefab), len: Number(e.length), flow: f.length ? f.reduce((a, b) => a + b, 0) / f.length : NaN, vol, node: /Roundabout/.test(String(e.prefab)) }; }).filter(r => Number.isFinite(r.flow));
+const cls = (p: string) => /Highway/.test(p) ? 'highway' : /Large/.test(p) ? 'large' : /Medium/.test(p) ? 'medium' : /Small/.test(p) ? 'small' : 'other';
+const mean = (a: number[]) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN; const pct = (x: number) => Number.isFinite(x) ? Math.round(x * 100) : null;
+console.log(`edges with a flow value: ${rows.length}; plain mean (the game's figure) ${pct(mean(rows.map(r => r.flow)))}%; weighted by vehicles ${pct(rows.reduce((a, r) => a + r.flow * r.vol, 0) / rows.reduce((a, r) => a + r.vol, 0))}%`);
+for (const c of ['highway', 'large', 'medium', 'small', 'other']) { const g = rows.filter(r => cls(r.prefab) === c); if (!g.length) continue; const quiet = g.filter(r => r.vol < 8), busy = g.filter(r => r.vol >= 30); console.log(`${c.padEnd(8)} edges ${String(g.length).padStart(4)}  mean flow ${pct(mean(g.map(r => r.flow)))}%  quiet (<8 vehicles) ${quiet.length}: ${pct(mean(quiet.map(r => r.flow)))}%  busy (30+) ${busy.length}: ${pct(mean(busy.map(r => r.flow)))}%  best tenth ${pct(mean(g.map(r => r.flow).sort((a, b) => b - a).slice(0, Math.max(1, Math.round(g.length / 10)))))}%`); }
+const small = rows.filter(r => cls(r.prefab) === 'small' && r.vol < 8);
+for (const [lo, hi] of [[0, 40], [40, 80], [80, 130], [130, 200], [200, 9999]]) { const g = small.filter(r => r.len >= lo && r.len < hi); if (g.length) console.log(`quiet small roads ${lo}-${hi} m: ${g.length} edges, mean flow ${pct(mean(g.map(r => r.flow)))}%`); }
+const share = (lim: number) => Math.round(100 * rows.filter(r => r.flow >= lim).length / rows.length);
+console.log(`share of edges at 90%+: ${share(0.9)}%; at 75%+: ${share(0.75)}%; at 50%+: ${share(0.5)}%; under 25%: ${Math.round(100 * rows.filter(r => r.flow < 0.25).length / rows.length)}%`);
