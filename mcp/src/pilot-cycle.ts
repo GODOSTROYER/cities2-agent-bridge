@@ -10,6 +10,7 @@ import { promises as fs, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
+import { evaluate, effectsTable, effectsLines, undoCandidates } from './effects.ts';
 import { sustainedNet, netFloor } from './budget.ts';
 import type { PilotMemo } from './pilot.ts';
 
@@ -82,7 +83,11 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     // Only CHANGES of status and blocked items are surfaced (progress.md, the status line).
     try {
       let outcomes: Record<string, any> | undefined; let vehicles: Record<string, any> | undefined; try { const gm = await tool('query', { command: 'get_metrics', args: {}, fields: ['outcomes', 'headroom.vehicles', 'perfMs'], maxChars: 6000 }); outcomes = gm.outcomes; vehicles = gm.headroom?.vehicles; } catch { /* older mod */ }
-      const rep = buildReport({ snap, outcomes, vehicles, netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
+      // Verify and learn: every recorded action is judged against the metric history.
+      const jsonl = async (file: string) => { try { return (await fs.readFile(join(repo, 'journals', file), 'utf8')).split('\n').filter(Boolean).slice(-600).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { return []; } };
+      let worked: string[] = [], undo: string[] = [];
+      try { const ev = evaluate(await jsonl('actions.jsonl'), await jsonl('metrics-history.jsonl'), Date.now()); worked = effectsLines(effectsTable(ev), 8); undo = undoCandidates(ev).slice(0, 4).map(u => `${u.why}: ${u.details.slice(0, 4).join(', ')}`); } catch { /* history not ready */ }
+      const rep = buildReport({ snap, outcomes, vehicles, worked, undo, netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
       const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
       st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);
       st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));
