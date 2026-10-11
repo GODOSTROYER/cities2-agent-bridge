@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { callOk, readEvents, runPwsh, assertIdle, fixPopups, run, prefabInfo, money, ensureClear, waitOperation, startBackground, stopBackground, background, stats, state, REPO } from './bridge.ts';
-import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate, devTree, unlockNode } from './city.ts';
+import { buildGrid, grow, zoneArea, link, placeService, buyTile, fixTraffic, buildCorridor, addConnections, removeRoad, buildLine, relocate, devTree, unlockNode, upgradeCorridor } from './city.ts';
 import { fixServices } from './services.ts';
 import { instrument, registerTimingsTool } from './timing.ts';
 import { registerHappinessTool, recordFactors, recordAction } from './happiness.ts';
@@ -434,6 +434,19 @@ server.registerTool('build_arterial', {
   } catch (e) { return fail(e); }
 });
 
+server.registerTool('upgrade_corridor', {
+  description: 'Road hierarchy: upgrades every road edge on the network path between two points to a wider prefab (default Large Road; Medium Road for collectors), making one continuous arterial instead of single widened blocks. Highways are skipped. plan=true only counts the edges. Measure traffic_hotspots before and a few minutes after.',
+  inputSchema: { fromX: z.number(), fromZ: z.number(), toX: z.number(), toZ: z.number(), road: z.string().optional(), plan: z.boolean().optional() },
+}, async (a) => {
+  try {
+    const cleared = await ensureClear();
+    assertIdle();
+    const r = await upgradeCorridor({ x: a.fromX, z: a.fromZ }, { x: a.toX, z: a.toZ }, a.road ?? 'Large Road', !!a.plan);
+    if (r.ok && !a.plan) await recordAction({ need: 'traffic', tool: 'upgrade_corridor', detail: `${r.upgraded} edges to ${r.road} (${a.fromX},${a.fromZ})->(${a.toX},${a.toZ})` });
+    return ok(withCleared(r, cleared));
+  } catch (e) { return fail(e); }
+});
+
 server.registerTool('autoplay_cycle', {
   description: 'ONE full rule-driven play cycle, returning one line. Keeps the background run alive, reads the snapshot, runs the self-check, then acts by the standing rules through the other tools: ruins, services by escalation, traffic, owner tax pins, growth by the demand bars (all densities, jobs and housing; a tile is bought when no site is free), development points, rolling save every 30 minutes and at each milestone. Writes journals/progress.md (every 15 minutes), journals/pilot/status.json and log.jsonl. The line ends with ATTENTION items that need an agent: unserved districts, loose network ends, factors worse than -5, blocked demand, cash under the reserve. Call it about once a minute and sleep in between.',
   inputSchema: {},
@@ -548,7 +561,7 @@ server.registerTool('query', {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'dev_tree', 'service_headroom', 'utility_check', 'network_ends', 'pollution_sources', 'find_free_lots', 'find_roadside_lots',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'dev_tree', 'service_headroom', 'get_metrics', 'utility_check', 'network_ends', 'pollution_sources', 'find_free_lots', 'find_roadside_lots',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),

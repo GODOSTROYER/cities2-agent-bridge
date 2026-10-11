@@ -489,6 +489,28 @@ export async function fixTraffic(o: { max?: number; flowBelow?: number; plan?: b
   });
 }
 
+// A continuous wide corridor (road hierarchy): every road edge on the network path between two
+// points is upgraded to the given prefab (highways and edges already that wide are skipped).
+// Flow of the corridor is measured before; measure again after a few minutes with traffic_hotspots.
+export async function upgradeCorridor(from: { x: number; z: number }, to: { x: number; z: number }, roadName = 'Large Road', plan = false): Promise<Json> {
+  const road = await prefab(roadName, 'network'); if (!road.found || road.locked) return { ok: false, reason: 'road_unavailable', road: roadName };
+  const near = async (p: { x: number; z: number }) => { const n = (await callOk('get_network', { x: p.x, z: p.z, radius: 60, limit: 60 }, 20)).nodes ?? []; return n.sort((a: Json, b: Json) => Math.hypot(a.position.x - p.x, a.position.z - p.z) - Math.hypot(b.position.x - p.x, b.position.z - p.z))[0]; };
+  const a = await near(from), b = await near(to); if (!a || !b) return { ok: false, reason: 'no_road_node_near_an_end' };
+  const path = await callOk('trace_network', { fromIndex: a.index, fromVersion: a.version, toIndex: b.index, toVersion: b.version }, 20);
+  if (!path.connected) return { ok: false, reason: 'ends_not_connected' };
+  const edges: Json[] = path.edges ?? []; if (plan) return { ok: true, plan: true, edges: edges.length, road: roadName };
+  return mutate(async () => {
+    let done = 0, skipped = 0, cost = 0; const refused: string[] = [];
+    for (const e of edges) {
+      const op = await call('upgrade_network', { index: e.index, version: e.version, prefabIndex: road.index, prefabVersion: road.version, maxCost: 80000 }, 15);
+      if (!op.ok) { skipped++; continue; }
+      const r = await waitOperation(op.result.id, 60);
+      if (r.status === 'complete') { done++; cost += Number(r.previewCost ?? 0); } else refused.push(String([...new Set((r.placementErrors ?? []).flatMap((x: Json) => x.reasons ?? []))][0] ?? r.error));
+    }
+    return { ok: done > 0, upgraded: done, skipped, refused: refused.slice(0, 5), edges: edges.length, road: roadName, cost, costSource: 'quoted' };
+  });
+}
+
 // PURE. The next wider two-way road for a congested one, or null when there is none.
 export function nextRoad(prefabName: string, mediumOpen: boolean, largeOpen: boolean): string | null {
   if (/Highway|Oneway|Bridge|Divided|Asymmetric|Gravel|Path/i.test(prefabName)) return null;

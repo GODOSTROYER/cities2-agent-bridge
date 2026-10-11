@@ -326,6 +326,9 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   const pending = needs.filter(n => !placed.some(p => p.t === n.t) && !failed.some(f => f.t === n.t) && !deferred.some(d => d.t === n.t)).map(n => ({ t: n.t, why: n.why }));
   return {
     ...(servicesLine ? { services: servicesLine } : {}), ...(alerts.length ? { utilityAlerts: alerts } : {}),
+    table: Object.fromEntries(Object.entries(table).map(([k, r]: [string, any]) => [k, { pct: r.pct, projected: r.projected, status: r.status }])),
+    coverage: Object.fromEntries(Object.entries(gaps).map(([k, g]) => [k, Math.round(Number(g?.uncoveredPct ?? 0))])),
+    blocked: Object.fromEntries(failed.map((f: Json) => [RULES.find(r => r.t === f.t)?.need ?? f.t, String(f.failed ?? '').replace('no_prefab_available: ', '')])),
     happiness,
     placed,
     failed,

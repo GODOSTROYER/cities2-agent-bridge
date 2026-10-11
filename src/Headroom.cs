@@ -31,6 +31,32 @@ namespace CitiesIIAgentBridge
             }
         }
 
+        private JObject metricsCache; private uint metricsFrame;
+
+        // get_metrics {refresh?}: every slow-moving city figure in ONE pass, cached for 3,000
+        // simulation frames (these change over game hours, not ticks): service capacities and
+        // people, citywide traffic flow with the five worst segments, the icon clusters, and the
+        // names of the game's infoviews. perfMs is the cost of the last collection.
+        private JObject GetMetrics(JObject args)
+        {
+            var w = RequireCity(); uint frame = w.GetExistingSystemManaged<SimulationSystem>()?.frameIndex ?? 0;
+            if (metricsCache == null || (bool?)args["refresh"] == true || frame < metricsFrame || frame - metricsFrame > 3000)
+            {
+                var clock = Stopwatch.StartNew(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
+                var m = new JObject { ["headroom"] = ServiceHeadroom(new JObject()) };
+                try { var t = TrafficHotspots(new JObject { ["top"] = 5, ["minLength"] = 40 }); m["traffic"] = new JObject { ["cityFlow"] = t["cityFlow"], ["cityVolume"] = t["cityVolume"], ["meanFlowPct"] = t["meanFlowPct"], ["worst"] = t["hotspots"] }; } catch (Exception e) { m["trafficError"] = e.GetBaseException().Message; }
+                try { m["iconClusters"] = Notifications(new JObject { ["top"] = 1 })["clusters"]; } catch (Exception e) { m["iconError"] = e.GetBaseException().Message; }
+                var views = new List<string>();
+                using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<InfoviewData>()))
+                using (var es = q.ToEntityArray(Allocator.Temp))
+                    foreach (var e in es) views.Add(ps.GetPrefabName(e) ?? "?");
+                views.Sort(StringComparer.Ordinal); m["infoviews"] = new JArray(views);
+                m["perfMs"] = Math.Round(clock.Elapsed.TotalMilliseconds, 1); m["frame"] = frame; m["citySession"] = citySession;
+                metricsCache = m; metricsFrame = frame;
+            }
+            var result = (JObject)metricsCache.DeepClone(); result["ageFrames"] = frame - metricsFrame; return result;
+        }
+
         private JObject ServiceHeadroom(JObject args)
         {
             var w = RequireCity(); var em = w.EntityManager; var clock = Stopwatch.StartNew();

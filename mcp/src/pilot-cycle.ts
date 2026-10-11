@@ -9,10 +9,11 @@
 import { promises as fs, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
+import { buildReport } from './report.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
-interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number }
+interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
 
 const hhmm = () => new Date().toISOString().slice(11, 16);
 const short = (n: number) => Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -65,8 +66,20 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     st.lastProgress = Date.now();
     const grows = plan.actions.find(a => a.key === 'grow');
     const next = [grows ? `grow ${grows.args.zone} by demand` : 'no zone has demand 20+ (or growth is backing off)', 'services, traffic, taxes and development points by the rules'];
+    // Regular review (FAILURES #99): the ranked report of every system, from code, zero tokens.
+    // Only CHANGES of status and blocked items are surfaced (progress.md, the status line).
+    try {
+      const rep = buildReport({ snap, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
+      const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
+      st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);
+      st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));
+      if (!st.reportSince) st.reportSince = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+      await fs.writeFile(join(repo, 'journals', 'REPORT.md'), rep.markdown);
+      await fs.appendFile(join(repo, 'journals', 'metrics-history.jsonl'), JSON.stringify({ utc: new Date().toISOString(), pop: snap.city.pop, flow: snap.cityFlow, unemp: snap.jobs?.unemp, edu: snap.jobs?.eduCitizens, vacant: snap.jobs?.vacantByEdu, values: rep.values, status: st.reportStatus }) + '\n');
+      for (const c of st.changes.filter(c => c.endsWith('(WORSE)'))) await log({ event: 'status_change', line: c });
+    } catch (e: any) { await log({ event: 'report_failed', error: String(e?.message ?? e) }); }
     let notes = ''; try { notes = (await fs.readFile(join(dir, 'notes.md'), 'utf8')).split('\n').slice(0, 14).join('\n'); } catch { /* none */ }
-    await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + (notes ? notes + '\n' : ''));
+    await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   const line = `pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;

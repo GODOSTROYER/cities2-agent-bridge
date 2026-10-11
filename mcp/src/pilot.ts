@@ -17,6 +17,7 @@ export interface PilotMemo {
   zoned?: Record<string, number>;            // kind (housing | com | off | ind) -> time of the last successful district
   starved?: Record<string, number>;          // kind -> cycles in a row with demand 60+ and nothing zoned
   lastGrowReason?: string;                   // why the last growth step was refused
+  table?: Record<string, any>; coverage?: Record<string, number>; blocked?: Record<string, string>; // last headroom table, coverage gaps and why a placement failed
   servicesLine?: string; utilityAlerts?: string[]; // last headroom table (one line) and utilities past the target
   needTrend?: Record<string, { count: number; rises: number }>; // need -> icon/people count and rises in a row while "watch"
 }
@@ -171,9 +172,12 @@ export function learn(memo: PilotMemo, action: PilotAction, result: Record<strin
     if (/locked|unknown_zone|zone_prefab/i.test(reason)) { memo.lockedZones = [...new Set([...(memo.lockedZones ?? []), String(action.args.zone)])]; return `zone ${action.args.zone} is locked: skipped from now on`; }
     // A district much smaller than asked for means land is running out: buy ahead.
     const got = Number(result?.site?.cols ?? 0) * Number(result?.site?.rows ?? 0), asked = Number(action.args.cols ?? 0) * Number(action.args.rows ?? 0);
+    if (result?.ok && memo.blocked) delete memo.blocked.grow;
     if (result?.ok) { memo.wantTile = got > 0 && got * 2 < asked; memo.zoned = { ...(memo.zoned ?? {}), [kind]: now }; delete memo.lastGrowReason; return `built ${action.args.zone} ${result.site?.cols ?? action.args.cols}x${result.site?.rows ?? action.args.rows} for ${result.cost ?? '?'}`; }
-    memo.lastGrowReason = `${action.args.zone}: ${reason || 'unknown'}`;
-    if (reason === 'no_free_site') { memo.wantTile = true; memo.backoff.grow = now + 2 * MIN; return 'no free site: will buy a tile'; }
+    memo.lastGrowReason = `${action.args.zone}: ${reason || 'unknown'}`; memo.blocked = { ...(memo.blocked ?? {}), grow: memo.lastGrowReason };
+    // The cycle runner already bought land and retried (pilot-cycle.ts). Still no site means the
+    // land has no road or fails the site rules: buying more does not help (FAILURES #98) - wait for the agent.
+    if (reason === 'no_free_site') { memo.wantTile = false; memo.backoff.grow = now + 10 * MIN; memo.backoff.tile = now + 30 * MIN; return 'no free site even after buying land: needs an arterial (agent)'; }
     if (reason === 'below_reserve' || reason === 'not_enough_money') { memo.backoff.grow = now + 6 * MIN; return `growth waits: ${reason}`; }
     memo.backoff.grow = now + 3 * MIN; return `growth refused: ${reason || 'unknown'}`;
   }
@@ -182,7 +186,7 @@ export function learn(memo: PilotMemo, action: PilotAction, result: Record<strin
     memo.backoff.tile = now + 10 * MIN; memo.lastGrowReason = `no free site and no tile: ${reason}`; return `tile not bought: ${reason}`;
   }
   if (action.key === 'unlock') { if (!result?.ok) memo.backoff.unlock = now + 10 * MIN; return result?.ok ? `unlocked ${result.name} (${result.cost} points)` : `unlock refused: ${reason}`; }
-  if (action.key === 'services') { memo.servicesLine = result?.services ?? memo.servicesLine; memo.utilityAlerts = result?.utilityAlerts ?? []; const placed = (result?.placed ?? []).map((p: any) => p.prefab); return placed.length ? `services placed ${placed.join(', ')}` : ''; }
+  if (action.key === 'services') { memo.servicesLine = result?.services ?? memo.servicesLine; memo.utilityAlerts = result?.utilityAlerts ?? []; if (result?.table) { memo.table = result.table; memo.coverage = result.coverage ?? {}; memo.blocked = { ...(memo.blocked ?? {}), ...(result.blocked ?? {}) }; for (const p of result?.placed ?? []) delete memo.blocked[String(p.t)]; } const placed = (result?.placed ?? []).map((p: any) => p.prefab); return placed.length ? `services placed ${placed.join(', ')}` : ''; }
   if (action.key === 'traffic') { const n = (result?.jamIcons?.upgraded ?? result?.upgraded ?? []).filter((u: any) => u.status === 'complete').length; return n ? `widened ${n} roads` : ''; }
   if (action.key === 'tax') return result?.applied ? `tax ${result.area} ${result.from}->${result.to}` : '';
   if (action.key === 'ruins') return result?.cleared ? `cleared ${result.cleared} ruins` : '';

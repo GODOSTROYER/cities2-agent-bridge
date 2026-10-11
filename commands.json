@@ -203,6 +203,13 @@
     "undocumented": true
   },
   {
+    "name": "get_metrics",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "get_neighborhood_plan",
     "description": "",
     "pausing": true,

@@ -85,10 +85,8 @@ check(keys({ ...base, milestone: { achieved: 9 } }, m2, T + MIN).includes('save'
 
 // learn(): back-off, land, rotation.
 const m3 = fresh(); const g = { key: 'grow', tool: 'grow', args: { zone: 'res', cols: 3, rows: 2 }, why: '' };
-check(learn(m3, g, { ok: false, reason: 'no_free_site' }, T).includes('tile') && m3.wantTile === true && m3.lastGrowReason === 'res: no_free_site', 'no free site asks for a tile and is remembered as the reason');
-check(decide(base, m3, T + MIN).actions.some(a => a.key === 'tile') && !decide(base, m3, T + MIN).actions.some(a => a.key === 'grow'), 'next cycle buys a tile and does not retry growth yet');
-learn(m3, { key: 'tile', tool: 'buy_tile', args: {}, why: '' }, { ok: true, cost: 28000 }, T + MIN);
-check(m3.wantTile === false && decide(base, m3, T + 3 * MIN).actions.some(a => a.key === 'grow'), 'after the purchase growth resumes');
+check(learn(m3, g, { ok: false, reason: 'no_free_site' }, T).includes('arterial') && m3.wantTile === false && m3.lastGrowReason === 'res: no_free_site', 'no free site after the in-cycle purchase is remembered as the reason and asks for an arterial');
+check(!decide(base, m3, T + 5 * MIN).actions.some(a => a.key === 'tile' || a.key === 'grow') && decide(base, m3, T + 11 * MIN).actions.some(a => a.key === 'grow'), 'THE LIVE CASE: no more tiles are bought and growth waits 10 minutes (three useless purchases happened before)');
 const m4 = fresh(); learn(m4, g, { ok: false, reason: 'below_reserve' }, T);
 check(!decide(base, m4, T + 3 * MIN).actions.some(a => a.key === 'grow') && decide(base, m4, T + 7 * MIN).actions.some(a => a.key === 'grow'), 'a reserve refusal backs growth off for 6 minutes');
 const m5 = fresh(); check(learn(m5, g, { ok: true, cost: 7904, site: { cols: 3, rows: 2 } }, T) === 'built res 3x2 for 7904' && m5.zoned!.housing === T && m5.turn === 1, 'a built district is summarised, timed and advances the density turn');
