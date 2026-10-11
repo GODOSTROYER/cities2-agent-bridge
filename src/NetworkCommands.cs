@@ -90,6 +90,8 @@ namespace CitiesIIAgentBridge
             if (em.HasComponent<Game.Net.Node>(e))
             {
                 o["trafficLights"] = em.HasComponent<Game.Net.TrafficLights>(e); o["roundabout"] = em.HasComponent<Game.Net.Roundabout>(e);
+                // Objects standing on the node (a roundabout is one): id and prefab, so it can be removed or replaced.
+                if (em.HasBuffer<Game.Objects.SubObject>(e)) { var objs = new JArray(); var psx = World.DefaultGameObjectInjectionWorld.GetExistingSystemManaged<PrefabSystem>(); foreach (var so in em.GetBuffer<Game.Objects.SubObject>(e, true)) { if (!em.Exists(so.m_SubObject) || !em.HasComponent<Game.Objects.NetObject>(so.m_SubObject) || !em.HasComponent<PrefabRef>(so.m_SubObject)) continue; var row = NativeBuild.Id(so.m_SubObject); row["prefab"] = psx.GetPrefabName(em.GetComponentData<PrefabRef>(so.m_SubObject).m_Prefab); objs.Add(row); } o["objects"] = objs; }
                 var arms = new JArray();
                 if (em.HasBuffer<Game.Net.ConnectedEdge>(e)) foreach (var c in em.GetBuffer<Game.Net.ConnectedEdge>(e, true))
                 {

@@ -58,7 +58,7 @@ namespace CitiesIIAgentBridge
             var w = RequireCity(); RequireControl(); CheckBuildTool(w); var em = w.EntityManager;
             var entity = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
             // An installed extension (garage, depot, wing) and a transport stop can be removed like a building.
-            if (!em.Exists(entity) || (!em.HasComponent<Game.Buildings.Building>(entity) && !em.HasComponent<Game.Net.Edge>(entity) && !em.HasComponent<Game.Buildings.ServiceUpgrade>(entity) && !em.HasComponent<Game.Routes.TransportStop>(entity))) throw new ArgumentException("target_must_be_building_or_network_edge");
+            if (!em.Exists(entity) || (!em.HasComponent<Game.Buildings.Building>(entity) && !em.HasComponent<Game.Net.Edge>(entity) && !em.HasComponent<Game.Buildings.ServiceUpgrade>(entity) && !em.HasComponent<Game.Routes.TransportStop>(entity) && !em.HasComponent<Game.Objects.NetObject>(entity))) throw new ArgumentException("target_must_be_building_or_network_edge");
             float3 pos;
             if (em.HasComponent<Game.Objects.Transform>(entity)) pos = em.GetComponentData<Game.Objects.Transform>(entity).m_Position;
             else pos = em.GetComponentData<Game.Net.Curve>(entity).m_Bezier.a;
