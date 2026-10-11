@@ -47,7 +47,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     let result: Record<string, any>;
     try { result = await tool(a.tool, a.args); } catch (e: any) { result = { ok: false, error: String(e?.message ?? e) }; }
     // No free site: buy land and build in the SAME cycle (FAILURES #94).
-    if (a.key === 'grow' && result.reason === 'no_free_site') {
+    if (a.key === 'grow' && result.reason === 'no_free_site' && snap.pilotMode !== 'bank') {
       let tile: Record<string, any>; try { tile = await tool('buy_tile', { n: 2, max: 900000 }); } catch (e: any) { tile = { ok: false, error: String(e?.message ?? e) }; }
       await log({ tool: 'buy_tile', why: `no free site for ${a.args.zone}`, ok: tile.ok, reason: tile.reason ?? tile.error, cost: tile.cost });
       if (tile.ok) { st.did.push(`${hhmm()} bought tiles for ${tile.cost}`); done.push(`bought tiles for ${tile.cost}`); try { result = await tool(a.tool, a.args); } catch (e: any) { result = { ok: false, error: String(e?.message ?? e) }; } }

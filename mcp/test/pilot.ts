@@ -80,7 +80,7 @@ check(raised.length === 0, 'once the need escalates to build it is no longer a s
 check(selfCheck({ ...base, demand: { rL: 30, c: 10 }, needs: {} }, fresh(), T).length === 0, 'weak demand is not blocked demand');
 
 const bk = decide({ ...base, pilotMode: 'bank' }, fresh(), T).actions;
-check(!bk.some(a => a.key === 'grow' || a.key === 'tile') && bk.find(a => a.key === 'services')!.args.reserve === 1_000_000_000, 'bank mode: no districts or tiles, services only for over-capacity and very-high needs');
+check(bk.filter(a => a.key === 'grow').length === 2 && !bk.some(a => a.key === 'tile') && bk.find(a => a.key === 'services')!.args.reserve === 1_000_000_000, 'bank mode: zoning by the demand bars continues (two districts a cycle), no tiles, services only for over-capacity and very-high needs');
 
 const pw = fresh(); pw.utilityAlerts = ['power at 81% of capacity (projected 85%): add capacity before it passes 100%', 'water at 80% of capacity (projected 84%): add capacity'];
 const pwPlan = decide({ ...base, pilotMode: 'bank' }, pw, T);

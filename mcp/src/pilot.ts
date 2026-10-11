@@ -91,7 +91,7 @@ export function selfCheck(snap: Record<string, any>, memo: PilotMemo, now: numbe
   for (const [kind, value] of Object.entries(demandOf)) {
     const recently = now - (memo.zoned?.[kind] ?? 0) < 10 * MIN;
     memo.starved[kind] = value >= 60 && !recently ? (memo.starved[kind] ?? 0) + 1 : 0;
-    if (memo.starved[kind] >= 5 && snap.pilotMode !== 'bank') out.push(`${kind} demand ${value} for ${memo.starved[kind]} cycles and nothing zoned: ${memo.lastGrowReason ?? 'no growth step was planned'}`);
+    if (memo.starved[kind] >= 5) out.push(`${kind} demand ${value} for ${memo.starved[kind]} cycles and nothing zoned: ${memo.lastGrowReason ?? 'no growth step was planned'}`);
   }
   memo.needTrend = memo.needTrend ?? {};
   for (const [k, n] of Object.entries(snap.needs ?? {}) as [string, any][]) {
@@ -148,7 +148,9 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   // BANK mode (owner: save money for the next expansion): only critical and very-high needs are
   // paid for - no districts, no tiles, no amenities. journals/pilot/mode.json {"mode":"bank"}.
   const bank = snap.pilotMode === 'bank';
-  if (bank) { for (let k = actions.length - 1; k >= 0; k--) if (actions[k].key === 'grow' || actions[k].key === 'tile') actions.splice(k, 1); }
+  // Owner: zoning (and its cheap roads) continues while banking; only tile purchases, large
+  // amenities and plants beyond headroom are held back. At most two districts per cycle.
+  if (bank) { let grows = 0; for (let k = 0; k < actions.length; k++) { if (actions[k].key === 'tile' || (actions[k].key === 'grow' && ++grows > 2)) { actions.splice(k, 1); k--; } else if (actions[k].key === 'grow') { actions[k].args.cols = Math.min(4, actions[k].args.cols); actions[k].args.rows = Math.min(3, actions[k].args.rows); } } }
 
   // 2b. Services ahead of need (headroom): every 3 minutes, and in every cycle that zones housing,
   //     sized for the residents the planned districts will bring.

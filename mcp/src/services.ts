@@ -14,7 +14,7 @@ export interface Rule { t: string; need: string; rx: RegExp; prefabs: string[]; 
 
 export const RULES: Rule[] = [
   { t: 'health', need: 'health', rx: /^(MedicalClinic|Hospital)/, prefabs: ['MedicalClinic01', 'MedicalClinic02'], cov: 'Healthcare', minPop: 300, spacing: 700 },
-  { t: 'deathcare', need: 'deathcare', rx: /^(Cemetery|Crematorium)/, prefabs: ['Cemetery01', 'Cemetery02', 'Crematorium01'], minPop: 500, spacing: 2500 },
+  { t: 'deathcare', need: 'deathcare', rx: /^(Cemetery|Crematorium)/, prefabs: ['Crematorium01', 'Cemetery02', 'Cemetery01'], minPop: 500, spacing: 2500 },
   { t: 'fire', need: 'fire', rx: /^(FireHouse|RS_FireHouse|FireStation)/, prefabs: ['FireHouse01', 'RS_FireHouse01', 'FireHouse02'], cov: 'FireRescue', minPop: 600, spacing: 900 },
   { t: 'police', need: 'police', rx: /^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)/, prefabs: ['PoliceStation02', 'PoliceStation01'], cov: 'Police', minPop: 800, spacing: 900 },
   { t: 'school', need: 'education', rx: /^ElementarySchool/, prefabs: ['ElementarySchool01', 'ElementarySchool02'], cov: 'Education', minPop: 600, spacing: 900 },
@@ -22,7 +22,7 @@ export const RULES: Rule[] = [
   { t: 'college', need: 'education_college', rx: /College/, prefabs: ['College01'], minPop: 6000, spacing: 3000 },
   { t: 'university', need: 'education_university', rx: /University/, prefabs: ['RS_University01', 'TechnicalUniversity01'], minPop: 9000, spacing: 3000 },
   { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice02', 'PostOffice01'], cov: 'PostService', minPop: 1500, spacing: 1500 },
-  { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['Landfill01', 'IncinerationPlant01'], minPop: 1000, spacing: 3000 },
+  { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['RecyclingCenter01', 'Landfill01', 'IncinerationPlant01'], minPop: 1000, spacing: 3000 },
   { t: 'entertainment', need: 'entertainment', rx: /Park|Playground|Plaza/, prefabs: ['ChirperPark01', 'Playground01', 'CityPark05', 'CityPark01'], cov: 'Park', minPop: 300, spacing: 350 },
   { t: 'telecom', need: 'telecom', rx: /RadioMast|ServerFarm|Telecom/, prefabs: ['RadioMast01'], minPop: 1000, spacing: 1500 },
 ];
@@ -303,7 +303,10 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
         const quote = await placeService(prefab, n.x, n.z, 600, undefined, true);
         if (quote.ok && cash - Number(quote.construction ?? 0) < reserve) { deferred.push({ t: n.t, prefab, construction: quote.construction, why: `would leave ${cash - Number(quote.construction ?? 0)} cash, reserve is ${reserve}` }); settled = true; break; }
       }
-      const r = await placeService(prefab, n.x, n.z, 600);
+      // No free roadside near the target (a built-up centre): take the nearest site within 1,500 m
+      // rather than give up (FAILURES #101: police was "blocked by no_roadside_site" at crime -4.5).
+      let r = await placeService(prefab, n.x, n.z, 600);
+      if (!r.ok && r.reason === 'no_roadside_site') r = await placeService(prefab, n.x, n.z, 1500);
       if (r.ok) { cash -= Number(r.cost ?? r.construction ?? 0); placedCount++; }
       if (r.ok) {
         placed.push({ t: n.t, prefab, cost: r.cost, monthlyUpkeep: r.monthlyUpkeep, at: r.at });
