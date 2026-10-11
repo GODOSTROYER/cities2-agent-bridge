@@ -12,7 +12,7 @@ import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
 import { evaluate, effectsTable, effectsLines, undoCandidates, stopRepeating } from './effects.ts';
 import { netFloor, upkeepBudget, waitingFor } from './budget.ts';
-import { loadQueue, saveQueue, queueLine, queueDoing, queueAttention, stalled, nextCodeItem, applyCodeResult, queueMarkdown, feedDesignQueue } from './queue.ts';
+import { loadQueue, saveQueue, queueLine, queueDoing, queueAttention, stalled, nextCodeItem, applyCodeResult, queueMarkdown, feedDesignQueue, unblocked } from './queue.ts';
 import { districtCount, districtLine, districtAttention } from './district.ts';
 import type { DistrictCount } from './district.ts';
 import type { PilotMemo } from './pilot.ts';
@@ -142,7 +142,14 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
         const alarm = districtAttention([...mine, now], Date.now()); if (alarm) st.sticky.push(`${hhmm()} ${alarm}`);
       }
     } catch (e: any) { await log({ event: 'district_watch_failed', error: String(e?.message ?? e) }); }
-    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + (stallLine ? `- ${stallLine}\n` : '') + districts + (st.design ? `- DESIGN AUDIT: ${st.design.line}\n` : '') + ((st.feeLines ?? []).length ? `- FEES AND PARKING: ${st.feeLines!.join('; ')}\n` : '') + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
+    // Traffic line (owner's top priority): both flow figures, the last traffic changes and the next queue item, at every review.
+    let trafficLine = '';
+    try {
+      const acts = (await fs.readFile(join(repo, 'journals', 'actions.jsonl'), 'utf8')).trimEnd().split('\n').slice(-80).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(r => r && ['traffic', 'transport'].includes(r.need)).slice(-2).map(r => `${String(r.utc).slice(11, 16)} ${String(r.detail).slice(0, 110)}`);
+      const nextItem = unblocked(q.items, qNow)[0];
+      trafficLine = `- TRAFFIC: game flow ${snap.cityFlow ?? '?'}% (target 90), weighted by vehicles ${snap.flowByVolume ?? '?'}% (must rise); last changes: ${acts.join(' | ') || 'none recorded'}; next: ${nextItem ? nextItem.id + ' - ' + nextItem.title.slice(0, 120) : 'every traffic item is waiting for its measurement window'}\n`;
+    } catch { /* no actions yet */ }
+    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + trafficLine + (stallLine ? `- ${stallLine}\n` : '') + districts + (st.design ? `- DESIGN AUDIT: ${st.design.line}\n` : '') + ((st.feeLines ?? []).length ? `- FEES AND PARKING: ${st.feeLines!.join('; ')}\n` : '') + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   st.track = [...(st.track ?? []), { t: Date.now(), cash: Number(snap.city.money), net: Number(snap.city.net) }].slice(-15);
