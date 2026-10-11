@@ -513,8 +513,13 @@ export async function fixTraffic(o: { max?: number; flowBelow?: number; plan?: b
 // (no homes within 300 m, none downwind), then a transformer beside it and a high-voltage cable
 // between the two terminals, because the game flags a plant whose high-voltage terminal is unused.
 export async function addPower(plan = false): Promise<Json> {
-  const centre = (await callOk('service_buildings', {}, 20)).homes ?? { x: 0, z: 0 };
-  const sites = await callOk('find_roadside_lots', { prefab: 'SmallCoalPowerPlant01', x: centre.x, z: centre.z, radius: 2000, count: 4 }, 30);
+  // Utility land first (FAILURES #103): around the plants and the landfill that already exist,
+  // where the polluter rules were satisfied before; only then around the homes.
+  const sb = await callOk('service_buildings', {}, 20); const centre = sb.homes ?? { x: 0, z: 0 };
+  const utility: { x: number; z: number }[] = (sb.services ?? []).filter((b: Json) => /PowerPlant|Landfill/.test(String(b[0]))).map((b: Json) => ({ x: Number(b[1]), z: Number(b[2]) }));
+  let sites: Json = { candidates: [] };
+  for (const u of utility.reverse()) { sites = await callOk('find_roadside_lots', { prefab: 'SmallCoalPowerPlant01', x: u.x, z: u.z, radius: 450, count: 4 }, 30); if ((sites.candidates ?? []).length) break; }
+  if (!(sites.candidates ?? []).length) sites = await callOk('find_roadside_lots', { prefab: 'SmallCoalPowerPlant01', x: centre.x, z: centre.z, radius: 2000, count: 4 }, 30);
   const site = (sites.candidates ?? [])[0]; if (!site) return { ok: false, reason: 'no_site_for_a_plant', rejected: sites.rejected, hint: 'no roadside site passes the polluter rules: the agent must open land (arterial) or unlock a cleaner plant' };
   if (plan) return { ok: true, plan: true, at: site.position, toHomes: site.toHomes };
   const terminal = async (prefabName: string, near: { x: number; z: number }) => { for (let k = 0; k < 8; k++) { await sleep(500); const n = await callOk('notifications', { type: 'Powerline Not Connected', top: 30 }, 15); const hit = (n.items ?? []).filter((i: Json) => i.ownerPrefab === prefabName && i.type === 'Powerline Not Connected').sort((a: Json, b: Json) => Math.hypot(a.x - near.x, a.z - near.z) - Math.hypot(b.x - near.x, b.z - near.z))[0]; if (hit && Math.hypot(hit.x - near.x, hit.z - near.z) < 200) return hit; } return null; };
