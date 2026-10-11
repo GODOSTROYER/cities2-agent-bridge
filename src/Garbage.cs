@@ -74,6 +74,28 @@ namespace CitiesIIAgentBridge
             return o;
         }
 
+        // building_upgrades {index, version}: the extensions installed on a building, with their place and rotation
+        // against the owner's (an extension the game placed itself shares the owner's rotation).
+        private JObject BuildingUpgrades(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
+            var e = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
+            if (!em.Exists(e) || !em.HasBuffer<InstalledUpgrade>(e)) throw new ArgumentException("not_a_building_with_upgrades");
+            var owner = em.GetComponentData<Game.Objects.Transform>(e); var rows = new JArray();
+            foreach (var u in em.GetBuffer<InstalledUpgrade>(e, true))
+            {
+                if (u.m_Upgrade == Entity.Null || !em.Exists(u.m_Upgrade)) continue; var row = NativeBuild.Id(u.m_Upgrade);
+                row["prefab"] = ps.GetPrefabName(em.GetComponentData<PrefabRef>(u.m_Upgrade).m_Prefab);
+                if (em.HasComponent<Game.Objects.Transform>(u.m_Upgrade))
+                {
+                    var t = em.GetComponentData<Game.Objects.Transform>(u.m_Upgrade); row["x"] = Math.Round(t.m_Position.x, 1); row["z"] = Math.Round(t.m_Position.z, 1);
+                    row["rotationOffsetDeg"] = Math.Round(Math.Acos(Math.Min(1.0, Math.Abs(Unity.Mathematics.math.dot(t.m_Rotation.value, owner.m_Rotation.value)))) * 2 * 180 / Math.PI);
+                }
+                rows.Add(row);
+            }
+            return new JObject { ["upgrades"] = rows };
+        }
+
         // set_building_option {index, version, option: Empty | Inactive, active}: the building options
         // of the info panel (empty a landfill into other facilities, switch a building off).
         private JObject SetBuildingOption(JObject args)

@@ -21,6 +21,13 @@
     "undocumented": true
   },
   {
+    "name": "building_upgrades",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "cancel_batch",
     "description": "",
     "pausing": true,
@@ -336,6 +343,13 @@
     "undocumented": true
   },
   {
+    "name": "junction_info",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "load_save",
     "description": "",
     "pausing": false,
@@ -451,6 +465,13 @@
     "name": "resolve_pause_blocker",
     "description": "",
     "pausing": false,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "road_option",
+    "description": "",
+    "pausing": true,
     "control": true,
     "undocumented": true
   },

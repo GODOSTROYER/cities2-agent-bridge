@@ -80,6 +80,67 @@ namespace CitiesIIAgentBridge
             tool.Replacement = target; tool.Begin(prefab,a,b,budget);
             return ConstructionAccess.Status(ConstructionAccess.Active);
         }
+        // What a node or edge carries as options: traffic lights, roundabout, upgrade flags.
+        internal static JObject JunctionState(EntityManager em, Entity e)
+        {
+            var o = new JObject(); if (e == Entity.Null || !em.Exists(e)) return o;
+            string Flags(Entity x) { if (!em.HasComponent<Game.Net.Upgraded>(x)) return ""; var f = em.GetComponentData<Game.Net.Upgraded>(x).m_Flags; return f.m_General + " | L:" + f.m_Left + " | R:" + f.m_Right; }
+            o["upgraded"] = Flags(e);
+            if (em.HasComponent<Game.Net.Node>(e))
+            {
+                o["trafficLights"] = em.HasComponent<Game.Net.TrafficLights>(e); o["roundabout"] = em.HasComponent<Game.Net.Roundabout>(e);
+                var arms = new JArray();
+                if (em.HasBuffer<Game.Net.ConnectedEdge>(e)) foreach (var c in em.GetBuffer<Game.Net.ConnectedEdge>(e, true))
+                {
+                    var edge = em.GetComponentData<Game.Net.Edge>(c.m_Edge); if (edge.m_Start != e && edge.m_End != e) continue; // an edge passing through its middle is not an arm
+                    var row = NativeBuild.Id(c.m_Edge); row["upgraded"] = Flags(c.m_Edge); arms.Add(row);
+                }
+                o["arms"] = arms;
+            }
+            return o;
+        }
+        // junction_info {index, version}: a road node with its arms, traffic lights and options.
+        private JObject JunctionInfo(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
+            var e = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
+            if (!em.Exists(e) || !(em.HasComponent<Game.Net.Node>(e) || em.HasComponent<Game.Net.Edge>(e))) throw new ArgumentException("live_network_node_or_edge_required");
+            var o = JunctionState(em, e);
+            if (o["arms"] is JArray arms) foreach (JObject a in arms) { var edge = Mod.CheckedEntity((int)a["index"], (int)a["version"]); a["prefab"] = ps.GetPrefabName(em.GetComponentData<PrefabRef>(edge).m_Prefab); }
+            if (em.HasComponent<Game.Net.Node>(e)) { var p = em.GetComponentData<Game.Net.Node>(e).m_Position; o["x"] = Math.Round(p.x); o["z"] = Math.Round(p.z); }
+            return o;
+        }
+        // road_option {index, version, prefabIndex, prefabVersion, remove?, maxCost, previewOnly?}: applies or
+        // removes a road option (Traffic Lights, Sound Barrier, Trees, Grass, Wide Sidewalk, Lighting,
+        // Crosswalk) on an edge or at a node, through the game's own replace tool.
+        private JObject RoadOption(JObject args)
+        {
+            var w = RequireCity(); RequireControl(); CheckBuildTool(w); var em = w.EntityManager;
+            var target = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
+            bool isEdge = em.Exists(target) && em.HasComponent<Game.Net.Edge>(target) && em.HasComponent<Game.Net.Curve>(target), isNode = em.Exists(target) && em.HasComponent<Game.Net.Node>(target);
+            if (!isEdge && !isNode) throw new ArgumentException("live_network_node_or_edge_required");
+            var prefab = BuildPrefab<NetPrefab>(w, args); var pe = w.GetExistingSystemManaged<PrefabSystem>().GetEntity(prefab);
+            if (!em.HasComponent<PlaceableNetData>(pe)) throw new ArgumentException("not_a_road_option_prefab");
+            var pn = em.GetComponentData<PlaceableNetData>(pe);
+            if (pn.m_SetUpgradeFlags.Equals(default(CompositionFlags)) && pn.m_UnsetUpgradeFlags.Equals(default(CompositionFlags))) throw new ArgumentException("not_a_road_option_prefab");
+            ControlPoint a, b;
+            if (isEdge)
+            {
+                var curve = em.GetComponentData<Game.Net.Curve>(target).m_Bezier;
+                a = new ControlPoint { m_OriginalEntity = target, m_Position = curve.a, m_HitPosition = curve.a, m_CurvePosition = 0, m_Rotation = quaternion.identity };
+                b = new ControlPoint { m_OriginalEntity = target, m_Position = curve.d, m_HitPosition = curve.d, m_CurvePosition = 1, m_Rotation = quaternion.identity };
+            }
+            else
+            {
+                var pos = em.GetComponentData<Game.Net.Node>(target).m_Position;
+                a = b = new ControlPoint { m_OriginalEntity = target, m_Position = pos, m_HitPosition = pos, m_Rotation = quaternion.identity };
+            }
+            int budget = RequiredInt(args, "maxCost"); if (budget < 0 || budget > 1000000) throw new ArgumentException("invalid_budget");
+            var tool = w.GetExistingSystemManaged<BridgeRoadTool>(); tool.ExtraPoints = null; tool.RequestedMode = NetToolSystem.Mode.Replace; tool.RequestedElevation = 0;
+            tool.PreviewOnly = (bool?)args["previewOnly"] == true; tool.Replacement = target; tool.RemoveUpgrade = (bool?)args["remove"] == true; tool.FlagUpgrade = true;
+            tool.Begin(prefab, a, b, budget);
+            return ConstructionAccess.Status(ConstructionAccess.Active);
+        }
         private Entity[] pendingTiles;
         private string tileOperation;
         private int tileBudget;

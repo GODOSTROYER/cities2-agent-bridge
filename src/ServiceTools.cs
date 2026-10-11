@@ -44,6 +44,7 @@ namespace CitiesIIAgentBridge
         private Entity moved;
         private Entity upgrading;
         private HashSet<Entity> upgradesBefore;
+        private Entity previousSelection;
         private Entity expectedPrefab;
         private ControlPoint[] candidates;
         private int candidateIndex;
@@ -62,6 +63,10 @@ namespace CitiesIIAgentBridge
             ConstructionAccess.Results[operation]["attempts"] = new JArray();
             upgrading = upgradeOf; upgradesBefore = new HashSet<Entity>();
             if (upgrading != Entity.Null) foreach (var u in EntityManager.GetBuffer<Game.Buildings.InstalledUpgrade>(upgrading, true)) upgradesBefore.Add(u.m_Upgrade);
+            // The game snaps an extension to its owner (fixed place and rotation) through the SELECTED
+            // entity, not through m_UpgradingObject (FAILURES #116: garages installed at rotation 0 had no car access).
+            var toolSystem = World.GetExistingSystemManaged<ToolSystem>(); previousSelection = toolSystem.selected;
+            if (upgrading != Entity.Null) toolSystem.selected = upgrading;
             prefab = building; mode = upgrading != Entity.Null ? Mode.Upgrade : move == Entity.Null ? Mode.Create : Mode.Move;
             if (move != Entity.Null) StartMoving(move);
             World.GetExistingSystemManaged<ToolSystem>().activeTool = this;
@@ -213,7 +218,9 @@ namespace CitiesIIAgentBridge
         private void Finish(string status, string error = null)
         {
             applyMode = ApplyMode.Clear; ConstructionAccess.Finish(operation, status, error); operation = null;
-            World.GetExistingSystemManaged<ToolSystem>().activeTool = World.GetExistingSystemManaged<DefaultToolSystem>();
+            var toolSystem = World.GetExistingSystemManaged<ToolSystem>();
+            if (upgrading != Entity.Null) { toolSystem.selected = previousSelection != Entity.Null && EntityManager.Exists(previousSelection) ? previousSelection : Entity.Null; upgrading = Entity.Null; }
+            toolSystem.activeTool = World.GetExistingSystemManaged<DefaultToolSystem>();
         }
     }
 

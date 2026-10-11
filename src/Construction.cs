@@ -101,6 +101,10 @@ namespace CitiesIIAgentBridge
         private HashSet<Entity> before;
         private int maxCost;
         internal Entity Replacement;
+        // Road options (traffic lights, sound barriers, trees): the edge or node keeps its prefab and
+        // gains or loses upgrade flags. RemoveUpgrade is the game's secondary action (take the option away).
+        internal bool RemoveUpgrade, FlagUpgrade;
+        private bool removeNow, flagNow;
         private Entity expectedPrefab;
         private DateTime deadline;
         public void Begin(NetPrefab road, ControlPoint a, ControlPoint b, int budget)
@@ -110,6 +114,8 @@ namespace CitiesIIAgentBridge
             deadline = DateTime.UtcNow.AddSeconds(20);
             before = ConstructionAccess.Roads(EntityManager);
             if (RequestedMode != Mode.Replace) Replacement = Entity.Null;
+            removeNow = RemoveUpgrade; flagNow = FlagUpgrade; RemoveUpgrade = FlagUpgrade = false;
+            if (flagNow) ConstructionAccess.Results[operation]["before"] = Mod.JunctionState(EntityManager, Replacement);
             expectedPrefab = World.GetExistingSystemManaged<PrefabSystem>().GetEntity(road);
             prefab = road; mode = RequestedMode; elevation = RequestedElevation; parallelCount = 0;
             World.GetExistingSystemManaged<ToolSystem>().activeTool = this;
@@ -138,7 +144,7 @@ namespace CitiesIIAgentBridge
                     ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOffMask", snapOff);
                     applyMode = ApplyMode.Clear;
                     deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "SnapControlPoints", deps, false);
-                    deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "UpdateCourse", deps, false);
+                    deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "UpdateCourse", deps, removeNow);
                     ConstructionAccess.Results[operation]["status"] = "validating"; stage = 1; return deps;
                 }
                 if (stage == 1)
@@ -177,6 +183,12 @@ namespace CitiesIIAgentBridge
                     ConstructionAccess.Results[operation]["createdRoads"] = created;
                     bool replaced = Replacement != Entity.Null && EntityManager.Exists(Replacement) && EntityManager.HasComponent<PrefabRef>(Replacement) && EntityManager.GetComponentData<PrefabRef>(Replacement).m_Prefab == expectedPrefab;
                     if (replaced) ConstructionAccess.Results[operation]["upgradedEntity"] = NativeBuild.Id(Replacement);
+                    if (flagNow)
+                    {
+                        var after = Mod.JunctionState(EntityManager, Replacement); ConstructionAccess.Results[operation]["after"] = after;
+                        if (JToken.DeepEquals(after, ConstructionAccess.Results[operation]["before"])) throw new InvalidOperationException("option_change_not_observed");
+                        Finish("complete"); return deps;
+                    }
                     if (RequestedMode == Mode.Replace && !replaced) throw new InvalidOperationException("replace_not_observed_on_target");
                     if (created.Count == 0 && !replaced) throw new InvalidOperationException("network_change_not_observed");
                     Finish("complete");
