@@ -238,7 +238,7 @@ export function progressBlock(snap: Record<string, any>, did: string[], next: st
     `- pop ${snap.city?.pop}, cash ${snap.city?.money}, net ${snap.city?.net}, milestone ${snap.milestone?.achieved} (XP ${snap.milestone?.xp}/${snap.milestone?.nextXp})`,
     `- unemployment ${snap.jobs?.unemp}%, vacancies by education ${JSON.stringify(snap.jobs?.vacantByEdu ?? [])}, demand ${JSON.stringify(snap.demand ?? {})}`,
     ...(diagnosis ? [`- jobs: ${diagnosis}`] : []),
-    `- TRAFFIC: game flow ${snap.cityFlow ?? '?'}% (owner's target 90), weighted by vehicles ${snap.flowByVolume ?? '?'}% (must rise; 25% on the afternoon of 11 October)\n- scorecard: traffic flow weighted by vehicles ${snap.flowByVolume ?? '?'}% (target 60+; game figure ${snap.cityFlow ?? '?'}%), happiness ${snap.happy}, health ${snap.health ?? '?'}, power ${snap.util?.power?.pct ?? '?'}% water ${snap.util?.water?.pct ?? '?'}% sewage ${snap.util?.sewage?.pct ?? '?'}%`,
+    `- scorecard: traffic flow weighted by vehicles ${snap.flowByVolume ?? '?'}% (target 60+; game figure ${snap.cityFlow ?? '?'}%), happiness ${snap.happy}, health ${snap.health ?? '?'}, power ${snap.util?.power?.pct ?? '?'}% water ${snap.util?.water?.pct ?? '?'}% sewage ${snap.util?.sewage?.pct ?? '?'}%`,
     `- happiness ${snap.happy}, factors worse than -3: ${f}`,
     `- icons: ${icons}`,
     `- shortages: ${JSON.stringify(snap.shortages ?? {})}`,

@@ -282,6 +282,7 @@ namespace CitiesIIAgentBridge
                 case "set_service_fee": return SetServiceFee(args);
                 case "set_parking_fee": return SetParkingFee(args);
                 case "get_policies": return GetPolicies(args);
+                case "tile_prices": return TilePrices(args);
                 case "set_policy": return SetPolicyCommand(args);
                 case "set_building_option": return SetBuildingOption(args);
                 case "service_buildings": return ServiceBuildings();

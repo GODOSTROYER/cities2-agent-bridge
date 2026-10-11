@@ -74,6 +74,68 @@ namespace CitiesIIAgentBridge
             return new JObject { ["ok"] = true, ["name"] = ps.GetPrefabName(policy), ["scope"] = district ? "district" : "city", ["active"] = on, ["value"] = value };
         }
 
+        // tile_prices {}: READ ONLY. What every map tile costs by the game's own formula (MapTilePurchaseSystem.UpdateStatus):
+        // a tile's base price = sum over its map features of amount x baseline modifier x 10 x feature cost x the tile prefab's cost factor;
+        // a selection costs the sum of base prices, sorted from dearest to cheapest, each times (tiles owned + its place in that order);
+        // upkeep = sum of the base prices of the owned tiles that are not start tiles x the game's curve at the number owned.
+        // Nothing is selected and nothing is bought: the selection tool and the construction slot are not touched.
+        private JObject TilePrices(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var purchase = w.GetExistingSystemManaged<MapTilePurchaseSystem>();
+            const BindingFlags any = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+            var modifiers = (double[])typeof(MapTilePurchaseSystem).GetField("kMapFeatureBaselineModifiers", any).GetValue(null);
+            Func<int, double> baseline = i => i >= 0 && i < modifiers.Length ? modifiers[i] : 1.0;
+            Func<int, float> curve = n => (float)typeof(MapTilePurchaseSystem).GetMethod("GetMapTileUpkeepCostMultiplier", any).Invoke(purchase, new object[] { n });
+            var tileSystem = w.GetExistingSystemManaged<Game.Areas.MapTileSystem>();
+            var startList = (NativeList<Entity>)typeof(Game.Areas.MapTileSystem).GetMethod("GetStartTiles", any).Invoke(tileSystem, null);
+            var start = new HashSet<Entity>(); for (int i = 0; i < startList.Length; i++) start.Add(startList[i]);
+            var rows = new JArray(); var unownedBase = new List<double>(); double ownedBase = 0, allBase = 0; int owned = 0, total = 0, unpriced = 0;
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<Game.Areas.MapTile>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es)
+            {
+                total++; bool mine = !em.HasComponent<Native>(e), isStart = start.Contains(e); if (mine) owned++;
+                double x = 0, z = 0; int n = 0; if (em.HasBuffer<Game.Areas.Node>(e)) foreach (var node in em.GetBuffer<Game.Areas.Node>(e, true)) { x += node.m_Position.x; z += node.m_Position.z; n++; }
+                double price = 0; var amounts = new JArray(); bool priced = false;
+                if (em.HasBuffer<Game.Areas.MapFeatureElement>(e) && em.HasComponent<PrefabRef>(e))
+                {
+                    var features = em.GetBuffer<Game.Areas.MapFeatureElement>(e, true); var prefab = em.GetComponentData<PrefabRef>(e).m_Prefab;
+                    if (em.HasComponent<TilePurchaseCostFactor>(prefab) && em.HasBuffer<MapFeatureData>(prefab))
+                    {
+                        float factor = em.GetComponentData<TilePurchaseCostFactor>(prefab).m_Amount; var costs = em.GetBuffer<MapFeatureData>(prefab, true); priced = true;
+                        for (int i = 0; i < features.Length; i++) { double amount = features[i].m_Amount; amounts.Add(Math.Round(amount)); if (i < costs.Length) price += (float)(amount * baseline(i) * 10.0 * costs[i].m_Cost * factor); }
+                    }
+                }
+                if (!priced) unpriced++;
+                if (!isStart) { allBase += price; if (mine) ownedBase += price; }
+                if (!mine) unownedBase.Add(price);
+                rows.Add(new JObject { ["x"] = n > 0 ? Math.Round(x / n) : 0, ["z"] = n > 0 ? Math.Round(z / n) : 0, ["owned"] = mine, ["start"] = isStart, ["base"] = Math.Round(price, 1), ["features"] = amounts });
+            }
+            // The game's own order: dearest tile first, each multiplied by the number of tiles owned at that point.
+            unownedBase.Sort(); double all = 0; for (int k = 0; k < unownedBase.Count; k++) all += unownedBase[unownedBase.Count - 1 - k] * (owned + k);
+            int available = purchase.GetAvailableTiles(); double permitted = 0; for (int k = 0; k < Math.Min(available, unownedBase.Count); k++) permitted += unownedBase[k] * (owned + Math.Min(available, unownedBase.Count) - 1 - k);
+            int milestoneTilesUnlocked = 0, milestoneTilesLocked = 0, milestonesLocked = 0;
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<MilestoneData>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es)
+            {
+                int t = em.GetComponentData<MilestoneData>(e).m_MapTiles;
+                if (em.HasComponent<Locked>(e) && em.IsComponentEnabled<Locked>(e)) { milestoneTilesLocked += t; milestonesLocked++; } else milestoneTilesUnlocked += t;
+            }
+            var config = w.GetExistingSystemManaged<CityConfigurationSystem>();
+            var costRow = new JArray(); if (rows.Count > 0) { var anyTile = em.CreateEntityQuery(ComponentType.ReadOnly<Game.Areas.MapTile>()); using (var es = anyTile.ToEntityArray(Allocator.Temp)) { var prefab = em.GetComponentData<PrefabRef>(es[0]).m_Prefab; if (em.HasBuffer<MapFeatureData>(prefab)) foreach (var c in em.GetBuffer<MapFeatureData>(prefab, true)) costRow.Add(c.m_Cost); costRow.Add(em.HasComponent<TilePurchaseCostFactor>(prefab) ? em.GetComponentData<TilePurchaseCostFactor>(prefab).m_Amount : -1f); } anyTile.Dispose(); }
+            var curveRow = new JObject(); foreach (int c in new[] { 9, 10, 20, 30, owned, 50, 100, 150, 200, 300, 400, total }) curveRow[c.ToString()] = Math.Round(curve(c), 5);
+            return new JObject {
+                ["tilesOnMap"] = total, ["owned"] = owned, ["unowned"] = total - owned, ["startTiles"] = start.Count, ["unpriced"] = unpriced,
+                ["availablePurchases"] = available, ["milestoneTilesUnlocked"] = milestoneTilesUnlocked, ["milestoneTilesLocked"] = milestoneTilesLocked, ["milestonesLocked"] = milestonesLocked,
+                ["allTilesUnlockedOption"] = config.unlockMapTiles,
+                ["priceAllUnowned"] = Math.Round(all), ["pricePermittedCheapest"] = Math.Round(permitted),
+                ["sumBaseUnowned"] = Math.Round(unownedBase.Sum(), 1), ["sumBaseOwnedNotStart"] = Math.Round(ownedBase, 1), ["sumBaseAllNotStart"] = Math.Round(allBase, 1),
+                ["upkeepNowGame"] = (int)typeof(MapTilePurchaseSystem).GetMethod("CalculateOwnedTilesUpkeep", any).Invoke(purchase, null),
+                ["upkeepNowFormula"] = Math.Round(ownedBase * curve(owned)), ["upkeepAllOwned"] = Math.Round(allBase * curve(total)),
+                ["upkeepEnabled"] = (bool)typeof(MapTilePurchaseSystem).GetMethod("GetMapTileUpkeepEnabled", any).Invoke(purchase, null),
+                ["upkeepCurve"] = curveRow, ["featureCostsThenFactor"] = costRow, ["baselineModifiers"] = new JArray(modifiers),
+                ["tiles"] = rows };
+        }
+
         // get_fees {}: service fees and parking sites.
         private JObject GetFees(JObject args)
         {

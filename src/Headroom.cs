@@ -143,6 +143,7 @@ namespace CitiesIIAgentBridge
             int bodyStorage = 0, bodiesStored = 0, hearses = 0, deathcare = 0;
             long garbageCap = 0; int garbageTrucks = 0, garbageSites = 0, garbageSpeed = 0;
             int fireEngines = 0, fireHouses = 0, patrolCars = 0, jail = 0, policeStations = 0;
+            int jailUsed = 0, jailFull = 0, prisonCap = 0, prisoners = 0, prisons = 0, prisonVans = 0;   // cells at the stations and places in prisons, with the people in them
             int postVans = 0, mailCap = 0, postOffices = 0, telecom = 0; double telecomCap = 0;
             // The game's own usage figure per service building (ServiceUsage.m_Usage, what the
             // building panel shows): vans out, beds taken, cells used. A norm per resident said
@@ -168,6 +169,7 @@ namespace CitiesIIAgentBridge
                     if (em.HasComponent<GarbageFacilityData>(pe)) { var d = em.GetComponentData<GarbageFacilityData>(pe); garbageCap += d.m_GarbageCapacity; garbageTrucks += d.m_VehicleCapacity; garbageSpeed += d.m_ProcessingSpeed; garbage = true; }
                     if (em.HasComponent<FireStationData>(pe)) { fireEngines += em.GetComponentData<FireStationData>(pe).m_FireEngineCapacity; fire = true; }
                     if (em.HasComponent<PoliceStationData>(pe)) { var d = em.GetComponentData<PoliceStationData>(pe); patrolCars += d.m_PatrolCarCapacity; jail += d.m_JailCapacity; police = true; }
+                    if (em.HasComponent<PrisonData>(pe)) { var pd = em.GetComponentData<PrisonData>(pe); prisonCap += pd.m_PrisonerCapacity; prisonVans += pd.m_PrisonVanCapacity; }
                     if (em.HasComponent<PostFacilityData>(pe)) { var d = em.GetComponentData<PostFacilityData>(pe); postVans += d.m_PostVanCapacity; mailCap += d.m_MailCapacity; post = true; }
                     if (em.HasComponent<TelecomFacilityData>(pe)) { telecomCap += em.GetComponentData<TelecomFacilityData>(pe).m_NetworkCapacity; tele = true; }
                 }
@@ -181,6 +183,8 @@ namespace CitiesIIAgentBridge
                 // flags decide: a station with no vehicle available is busy; efficiency says whether
                 // it works at all (staff, power, road).
                 if (fire) Busy("fire", e, em.HasComponent<Game.Buildings.FireStation>(e) && (em.GetComponentData<Game.Buildings.FireStation>(e).m_Flags & FireStationFlags.HasAvailableFireEngines) != 0);
+                // Occupants: arrested people in a station's cells, prisoners in a prison.
+                if (em.HasBuffer<Game.Buildings.Occupant>(e)) { int occ = em.GetBuffer<Game.Buildings.Occupant>(e, true).Length; if (em.HasComponent<Game.Buildings.Prison>(e)) { prisoners += occ; prisons++; } else if (em.HasComponent<Game.Buildings.PoliceStation>(e)) { jailUsed += occ; int cap = 0; foreach (var pe2 in PrefabAndUpgrades(em, e)) if (em.HasComponent<PoliceStationData>(pe2)) cap += em.GetComponentData<PoliceStationData>(pe2).m_JailCapacity; if (cap > 0 && occ >= cap) jailFull++; } }
                 if (police) Busy("police", e, em.HasComponent<Game.Buildings.PoliceStation>(e) && (em.GetComponentData<Game.Buildings.PoliceStation>(e).m_Flags & PoliceStationFlags.HasAvailablePatrolCars) != 0);
                 if (post) Busy("post", e, em.HasComponent<Game.Buildings.PostFacility>(e) && (em.GetComponentData<Game.Buildings.PostFacility>(e).m_Flags & (PostFacilityFlags.CanDeliverMailWithVan | PostFacilityFlags.CanCollectMailWithVan | PostFacilityFlags.HasAvailableTrucks)) != 0);
                 if (death) Busy("deathcare", e, em.HasComponent<Game.Buildings.DeathcareFacility>(e) && (em.GetComponentData<Game.Buildings.DeathcareFacility>(e).m_Flags & DeathcareFacilityFlags.HasAvailableHearses) != 0);
@@ -208,7 +212,8 @@ namespace CitiesIIAgentBridge
                 ["deathcare"] = new JObject { ["stored"] = bodiesStored, ["capacity"] = bodyStorage, ["hearses"] = hearses, ["buildings"] = deathcare },
                 ["garbage"] = new JObject { ["capacity"] = garbageCap, ["trucks"] = garbageTrucks, ["processing"] = garbageSpeed, ["processingLive"] = garbageLive, ["full"] = garbageFull, ["buildings"] = garbageSites },
                 ["fire"] = new JObject { ["engines"] = fireEngines, ["buildings"] = fireHouses },
-                ["police"] = new JObject { ["cars"] = patrolCars, ["jail"] = jail, ["buildings"] = policeStations },
+                ["police"] = new JObject { ["cars"] = patrolCars, ["jail"] = jail, ["jailUsed"] = jailUsed, ["stationsWithFullCells"] = jailFull, ["buildings"] = policeStations },
+                ["prisons"] = new JObject { ["capacity"] = prisonCap, ["prisoners"] = prisoners, ["buildings"] = prisons, ["vans"] = prisonVans },
                 ["post"] = new JObject { ["vans"] = postVans, ["mailCapacity"] = mailCap, ["buildings"] = postOffices },
                 ["telecom"] = new JObject { ["capacity"] = Math.Round(telecomCap), ["buildings"] = telecom },
                 ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds), ["citySession"] = citySession

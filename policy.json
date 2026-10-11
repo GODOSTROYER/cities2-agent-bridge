@@ -1,7 +1,7 @@
 {
  "_comment": "Owner goals and constraints as data (REDESIGN Phase 4). The loop reads this file every cycle; a change of mind is an edit here, not a code change. mode: grow | bank | improve.",
  "mode": "improve",
- "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 90%+ on the game's figure with the vehicle-weighted figure rising, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
+ "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow weighted by vehicles 60% as the first mark and rising, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
  "expansion": false,
  "expansionException": "below happiness 80: only the minimum a fix needs (land for a facility, a joining street, rehousing); at 80+ see expansionRule",
  "netFloor": 2300000,
@@ -17,13 +17,14 @@
   "factorExempt": [
    "Tax"
   ],
-  "trafficFlowPct": 90,
+  "trafficFlowPct": 60,
   "headroomUsagePct": 78,
   "coverageGapPct": 8,
   "problemIcons": 0,
   "cleanEnergyPct": 100,
   "rawSewageDischarge": 0,
-  "trafficFlowNote": "the figure of the game's Traffic infoview (plain mean over road edges); the vehicle-weighted figure is reported beside it and must rise. See journals/progress.md NEEDS OWNER for what the game's figure can reach."
+  "trafficFlowNote": "owner, 2026-10-12: the headline is the flow weighted by vehicles (what drivers experience); 60 is the first mark, then as high as real improvements take it. The game's unweighted figure is shown beside it for reference only. No Alley conversions and no lower speed limits to lift a number; speed bumps only where they also cut noise and accidents in residential districts. Only changes that make vehicles faster or take vehicles off the road count.",
+  "prisonUsagePct": 78
  },
  "never": [
   "ground cable, pipe or ground road across water",

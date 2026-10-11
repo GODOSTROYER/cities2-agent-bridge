@@ -623,6 +623,13 @@
     "undocumented": true
   },
   {
+    "name": "tile_prices",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "trace_network",
     "description": "",
     "pausing": true,
