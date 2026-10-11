@@ -53,4 +53,8 @@ let p = await readPins(); check(p.Industrial.max === 11 && p.Residential.min ===
 await writePin('Industrial', null); p = await readPins(); check(!p.Industrial && !!p.Residential, 'writePin(null) removes one pin and keeps the others');
 
 rmSync(dir, { recursive: true, force: true });
+const pinned = { rates: { R: 15, C: 10, I: 10, O: 10 }, pins: owner, demand: { c: 69, i: 54, o: 88 }, unemployment: 19.5, jobsState: 'mismatch' as const };
+check(decideTax({ ...pinned, unemploymentFactor: -1.8 }).action === 'hold', 'THE LIVE CASE: office demand 88 with the Unemployment factor at -1.8 does not raise the office rate');
+check(decideTax({ ...pinned, unemploymentFactor: 0 }).action === 'raise', 'with no unemployment unhappiness the raise inside the pins still happens');
+check(decideTax({ ...pinned, rates: { R: 15, C: 10, I: 10, O: 11 }, demand: { c: 69, i: 54, o: 0 }, unemploymentFactor: -1.8 }).to === 10, 'a rate that killed demand goes back to the lowest pin');
 process.exit(failed ? 1 : 0);

@@ -94,20 +94,26 @@ export const spansWater = (prefabName: string): boolean => /(^|\s)Line$/.test(pr
 // An action that adds upkeep is allowed only when net minus its real running cost stays at or
 // above the floor. Real cost = prefab upkeep x a factor (measured live: wages and consumption make
 // a building cost about 2.7x its listed upkeep).
-export function sustainedNet(recent: number[], window = 8): number | null {
-  const r = recent.slice(-window); return r.length >= Math.min(window, 6) ? Math.min(...r) : null;
+// The net floor is FIXED (owner: +2,300,000 a month). There is no ratchet: an earlier rule raised the
+// floor with the highest sustained net, which turned every rise in income into a spending freeze
+// (FAILURES #112). Spendable upkeep = net - floor.
+export function netFloor(policy: Record<string, any> | number | undefined): number {
+  return Math.round(Number(typeof policy === 'number' ? policy : policy?.netFloor ?? policy?.netFloorBaseline ?? 0) || 0);
 }
-export function netFloor(baseline: number, highestSustained: number | null | undefined, marginPct = 2): number {
-  return Math.round(Math.max(baseline, Number(highestSustained ?? 0)) * (1 - marginPct / 100));
+// Guard against sliding to the floor in one burst: one review may add at most this share of the
+// margin measured at its start as new real upkeep; then net is measured again.
+export function upkeepBudget(net: number, floor: number, share = 0.5): number {
+  return Math.max(0, Math.round((Number(net) - Number(floor)) * share));
 }
 export interface FloorVerdict { ok: boolean; projected: number; floor: number; margin: number; reason?: string }
-export function floorVerdict(i: { net: number; floor: number; monthlyUpkeep: number; factor?: number; critical?: boolean }): FloorVerdict {
+export function floorVerdict(i: { net: number; floor: number; monthlyUpkeep: number; factor?: number; critical?: boolean; allowance?: number }): FloorVerdict {
   const cost = Math.max(0, Number(i.monthlyUpkeep) || 0) * (i.factor ?? 2.7); const projected = Math.round(Number(i.net) - cost);
   const margin = Math.round(Number(i.net) - i.floor);
-  if (projected >= i.floor) return { ok: true, projected, floor: i.floor, margin };
+  const overReview = Number.isFinite(i.allowance) && cost > Number(i.allowance);
+  if (projected >= i.floor && !overReview) return { ok: true, projected, floor: i.floor, margin };
   // A critical fix (a service over capacity, an unserved district) goes ahead; the breach is reported.
   if (i.critical) return { ok: true, projected, floor: i.floor, margin, reason: 'critical_despite_floor' };
-  return { ok: false, projected, floor: i.floor, margin, reason: 'net_floor' };
+  return { ok: false, projected, floor: i.floor, margin, reason: projected >= i.floor ? 'half_margin_per_review' : 'net_floor' };
 }
 
 // PURE. What the improve loop is waiting for and roughly how long (owner: waiting, not cutting, is
@@ -121,3 +127,4 @@ export function waitingFor(track: { t: number; cash: number; net: number }[], re
   if (last.net < floor + minUpkeepRoom) parts.push(`net ${m(last.net)} needs ${m(floor + minUpkeepRoom)} for new upkeep, ${eta(floor + minUpkeepRoom - last.net, (last.net - first.net) / minutes)}`);
   return parts.length ? 'waiting: ' + parts.join('; ') : '';
 }
+

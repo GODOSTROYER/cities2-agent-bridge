@@ -154,7 +154,15 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   // districts and no tiles; every upkeep-adding placement is checked against the net floor.
   const improve = snap.pilotMode === 'improve'; const floor = Number(snap.netFloor ?? 0); const netNow = Number(snap.city?.net ?? 0);
   if (improve) { for (let k = actions.length - 1; k >= 0; k--) if (actions[k].key === 'grow' || actions[k].key === 'tile') actions.splice(k, 1); }
-  if (improve && floor > 0 && netNow < floor) attention.push(`net ${netNow} is under the floor ${floor}: upkeep-adding actions are stopped; find the cause, trim over-provisioned services`);
+  // The one expansion improve mode allows by itself (owner: only the minimum for a negative factor):
+  // while the Unemployment factor is at -1 or worse, ONE small district of the job zone with the
+  // strongest demand (50+) every 12 minutes. Homes are never zoned here.
+  const unempFactor = Number(snap.happiness?.Unemployment ?? 0);
+  if (improve && !blockers.length && unempFactor <= -1 && due(memo, 'jobs', now, 12)) {
+    const job = [{ zone: 'off', demand: Number(snap.demand?.o ?? 0) }, { zone: 'com', demand: Number(snap.demand?.c ?? 0) }, { zone: 'ind', demand: Number(snap.demand?.i ?? 0) }].filter(z => z.demand >= 50 && !(memo.lockedZones ?? []).includes(z.zone)).sort((a, b) => b.demand - a.demand)[0];
+    if (job) push('jobs', 'grow', { zone: job.zone, cols: 3, rows: 2 }, `improve mode exception: Unemployment factor ${unempFactor} is negative and ${job.zone} demand is ${job.demand}: one job district (${diagnosis})`);
+  }
+  if (improve && floor > 0 && netNow < floor) attention.push(`net ${netNow} is under the floor ${floor}: no new upkeep until net is back above it (the loop waits and earns; nothing is cut)`);
   const bank = snap.pilotMode === 'bank';
   // Owner: zoning (and its cheap roads) continues while banking; only tile purchases, large
   // amenities and plants beyond headroom are held back. At most two districts per cycle.
@@ -165,7 +173,7 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   const planned = actions.filter(a => a.key === 'grow').map(a => ({ zone: String(a.args.zone), cols: Number(a.args.cols), rows: Number(a.args.rows) }));
   const people = plannedPeople(planned);
   if (due(memo, 'services', now, 3) || people > 0)
-    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: improve ? { maxPlacements: 3, netFloor: floor, reserve, upkeepFactor: Number(snap.policy?.upkeepRealFactor ?? 2.7) } : bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: improve ? `improve mode: services by condition, net floor ${floor}` : bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
+    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: improve ? { maxPlacements: 3, netFloor: floor, reserve, upkeepFactor: Number(snap.policy?.upkeepRealFactor ?? 2.7), ...(Number.isFinite(snap.upkeepAllowance) ? { upkeepAllowance: snap.upkeepAllowance } : {}), ...((snap.stopRepeating ?? []).length ? { skip: snap.stopRepeating } : {}) } : bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: improve ? `improve mode: services by condition, net floor ${floor}` : bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
 
   // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
   const tree = snap.devTree;
@@ -185,6 +193,7 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
 // refusal so the same failing call is not repeated every cycle, and ask for land when none is free.
 export function learn(memo: PilotMemo, action: PilotAction, result: Record<string, any>, now: number): string {
   memo.last[action.key] = now; const reason = String(result?.reason ?? result?.error ?? '');
+  if (action.key === 'jobs') return result?.ok || Number(result?.zoned ?? 0) > 0 ? `job district ${action.args.zone} built for ${result.cost ?? '?'}` : `job district refused: ${reason || 'unknown'}`;
   if (action.key === 'grow') {
     memo.turn = (memo.turn ?? 0) + 1; const kind = kindOf(String(action.args.zone));
     if (/locked|unknown_zone|zone_prefab/i.test(reason)) { memo.lockedZones = [...new Set([...(memo.lockedZones ?? []), String(action.args.zone)])]; return `zone ${action.args.zone} is locked: skipped from now on`; }

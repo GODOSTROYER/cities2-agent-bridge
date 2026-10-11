@@ -10,12 +10,12 @@ import { promises as fs, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
-import { evaluate, effectsTable, effectsLines, undoCandidates } from './effects.ts';
-import { sustainedNet, netFloor, waitingFor } from './budget.ts';
+import { evaluate, effectsTable, effectsLines, undoCandidates, stopRepeating } from './effects.ts';
+import { netFloor, upkeepBudget, waitingFor } from './budget.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
-interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; netRecent?: number[]; netSustainedMax?: number; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
+interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; review?: { t: number; allowance: number; spent: number }; stopRepeating?: string[]; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
 
 const hhmm = () => new Date().toISOString().slice(11, 16);
 const short = (n: number) => Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -40,11 +40,13 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   try { policy = JSON.parse(await fs.readFile(join(repo, 'policy.json'), 'utf8')); } catch { /* defaults */ }
   try { const mode = JSON.parse(await fs.readFile(join(dir, 'mode.json'), 'utf8')); policy = { ...policy, ...mode }; } catch { /* no override */ }
   if (policy.mode === 'bank' && Number(snap.city.money) >= Number(policy.bankTarget ?? policy.target ?? 5_000_000)) { policy.mode = 'grow'; await fs.unlink(join(dir, 'mode.json')).catch(() => {}); st.did.push(`${hhmm()} BANK TARGET reached: growth resumes`); }
-  snap.pilotMode = policy.mode; snap.policy = policy;
-  // Net floor: max(baseline, highest sustained net) minus the noise margin; tracked every cycle.
-  st.netRecent = [...(st.netRecent ?? []), Number(snap.city.net)].slice(-12);
-  const sustained = sustainedNet(st.netRecent); if (sustained !== null) st.netSustainedMax = Math.max(Number(st.netSustainedMax ?? 0), sustained);
-  snap.netFloor = netFloor(Number(policy.netFloorBaseline ?? 0), st.netSustainedMax, Number(policy.netFloorMarginPct ?? 2));
+  snap.pilotMode = policy.mode; snap.policy = policy; snap.stopRepeating = st.stopRepeating ?? [];
+  // Net floor: fixed by the owner (policy.json). One review (15 minutes) may add at most half of
+  // the margin measured at its start as new real upkeep; the next review measures again.
+  snap.netFloor = netFloor(policy);
+  const reviewMs = Number(policy.reviewMinutes ?? 15) * 60000;
+  if (!st.review || Date.now() - st.review.t >= reviewMs) st.review = { t: Date.now(), allowance: upkeepBudget(Number(snap.city.net), snap.netFloor, Number(policy.upkeepShareOfMarginPerReview ?? 0.5)), spent: 0 };
+  snap.upkeepAllowance = Math.max(0, st.review.allowance - st.review.spent);
   const now = Date.now(); const { memo } = st;
   const stuck = selfCheck(snap, memo, now);
   for (const line of stuck) await log({ event: 'self_check', line });
@@ -61,6 +63,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       if (tile.ok) { st.did.push(`${hhmm()} bought tiles for ${tile.cost}`); done.push(`bought tiles for ${tile.cost}`); try { result = await tool(a.tool, a.args); } catch (e: any) { result = { ok: false, error: String(e?.message ?? e) }; } }
       if (!result.ok && result.reason === 'no_free_site') st.sticky.push(`${hhmm()} no free site for ${a.args.zone} even after buying land: the owned tiles have no road nearby or fail the site rules - build an arterial into them (agent)`);
     }
+    if (st.review) st.review.spent += Number(result.addedUpkeep ?? 0) || (result.ok && a.tool !== 'fix_services' ? Number(result.monthlyUpkeep ?? 0) * Number(policy.upkeepRealFactor ?? 2.7) : 0);
     const note = learn(memo, a, result, Date.now());
     if (note) { st.did.push(`${hhmm()} ${note}`); done.push(note); }
     await log({ tool: a.tool, args: a.args, why: a.why, ok: result.ok, reason: result.reason ?? result.error, note, cost: result.cost, ...(result.at ? { at: result.at } : {}), ...(result.missing ? { missing: result.missing } : {}), ...(result.site ? { site: { x: result.site.x, z: result.site.z } } : {}) });
@@ -86,7 +89,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       // Verify and learn: every recorded action is judged against the metric history.
       const jsonl = async (file: string) => { try { return (await fs.readFile(join(repo, 'journals', file), 'utf8')).split('\n').filter(Boolean).slice(-600).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { return []; } };
       let worked: string[] = [], undo: string[] = [];
-      try { const ev = evaluate(await jsonl('actions.jsonl'), await jsonl('metrics-history.jsonl'), Date.now()); worked = effectsLines(effectsTable(ev), 8); undo = undoCandidates(ev).slice(0, 4).map(u => `${u.why}: ${u.details.slice(0, 4).join(', ')}`); } catch { /* history not ready */ }
+      try { const ev = evaluate(await jsonl('actions.jsonl'), await jsonl('metrics-history.jsonl'), Date.now()); worked = effectsLines(effectsTable(ev), 8); st.stopRepeating = stopRepeating(ev, 'fix_services'); if (st.stopRepeating.length) worked.push(`STOPPED as ineffective, diagnose again: fix_services for ${st.stopRepeating.join(', ')}`); undo = undoCandidates(ev).slice(0, 4).map(u => `${u.why}: ${u.details.slice(0, 4).join(', ')}`); } catch { /* history not ready */ }
       const rep = buildReport({ snap, outcomes, vehicles, worked, undo, reserve: Number(policy.cashReserve ?? 0), netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
       const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
       st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);

@@ -1,5 +1,5 @@
 // Offline checks: what each action did to the metric it aimed at (verify and learn).
-import { valueAt, judge, evaluate, effectsTable, undoCandidates, effectsLines, NEED_SYSTEM } from '../src/effects.ts';
+import { valueAt, judge, evaluate, effectsTable, undoCandidates, effectsLines, stopRepeating, NEED_SYSTEM } from '../src/effects.ts';
 import type { Evaluated } from '../src/effects.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 
@@ -110,4 +110,7 @@ check(lines[1] === 'build_utility/power: 0 of 1 effective, avg -0.4', 'effectsLi
 check(lines[2] === 'fix_services/fire: no verdict yet', 'effectsLines: no rate reads "no verdict yet"');
 check(effectsLines(lineRows, 2).length === 2 && effectsLines(lineRows, 0).length === 0, 'effectsLines: max caps the number of lines');
 check(effectsLines(effectsTable(ev)).length === 3, 'effects pipeline: evaluate -> effectsTable -> effectsLines gives one line per group');
+const rep = (need: string, verdicts: string[]): Evaluated[] => verdicts.map(v => ({ utc: at(0), need, tool: 'fix_services', system: 'x', before: 0, after: 0, delta: 0, verdict: v } as Evaluated));
+check(JSON.stringify(stopRepeating([...rep('entertainment', Array(27).fill('ineffective')), ...rep('health', ['effective', 'ineffective', 'ineffective', 'effective', 'worse', 'ineffective']), ...rep('fire', Array(5).fill('ineffective'))], 'fix_services')) === '["entertainment"]', 'THE LIVE CASE: 27 parks with no effect stop being repeated; a fix that works one time in three and one with too few verdicts continue');
+check(stopRepeating(rep('entertainment', Array(27).fill('ineffective')), 'place_service').length === 0 && stopRepeating(rep('post', [...Array(6).fill('pending')]), 'fix_services').length === 0, 'the stop is per tool, and pending actions are not verdicts');
 process.exit(failed ? 1 : 0);

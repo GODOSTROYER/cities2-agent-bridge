@@ -87,4 +87,25 @@ const grows = (actions: PilotAction[]) => actions.filter(a => a.key === 'grow');
   check(plan.attention.length === 0, 'nothing is raised for the agent');
 }
 
+// 8. THE OWNER CORRECTION (FAILURES #112): the net floor is fixed. A rising net must never reduce
+//    the spendable margin, and under the floor the loop waits; it never advises a cut.
+{
+  const { runCycle } = await import('../src/pilot-cycle.ts'); const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const repo = mkdtempSync(join(tmpdir(), 'cs2-floor-')); writeFileSync(join(repo, 'policy.json'), JSON.stringify({ mode: 'improve', netFloor: 2_300_000, cashReserve: 4_000_000, upkeepRealFactor: 2.7 }));
+  const base = load('improve-mode-net-under-floor.json').snap; const nets = [3_050_000, 3_160_000, 3_290_000, 3_360_000, 3_480_000, 3_470_000, 3_600_000, 3_900_000, 4_200_000];
+  let k = 0; const floors: number[] = []; const margins: number[] = []; const lines: string[] = []; const allowances: number[] = [];
+  const tool = async (name: string, args: Record<string, any>) => {
+    if (name === 'snapshot') return { ...base, city: { ...base.city, money: 9_000_000, net: nets[k] }, needs: {}, demand: { rL: 100, rM: 100, rH: 100, c: 0, i: 0, o: 0 } };
+    if (name === 'run_status') return { background: true, remainingSec: 5000 };
+    if (name === 'fix_services') { allowances.push(Number(args.upkeepAllowance)); floors.push(Number(args.netFloor)); return { ok: true, placed: [], failed: [], addedUpkeep: 0 }; }
+    return { ok: true };
+  };
+  for (k = 0; k < nets.length; k++) { const r = await runCycle(tool as any, repo); lines.push(r.line); const st = JSON.parse(readFileSync(join(repo, 'journals', 'pilot', 'status.json'), 'utf8')); margins.push(nets[k] - Number(st.netFloor)); }
+  const rising = nets.map((n, i) => i === 0 || n >= nets[i - 1]);
+  check(margins.every((m, i) => i === 0 || !rising[i] || m >= margins[i - 1]) && margins[margins.length - 1] === 1_900_000, 'a rising net never reduces the spendable margin: floor fixed at 2,300,000 through nine cycles from 3.05M to 4.2M');
+  check(floors.every(f => f === 2_300_000) && allowances[0] === 375_000, 'the service planner gets the fixed floor and half of the first margin (375,000 of 750,000) as the most new upkeep of this review');
+  check(!lines.some(l => /under the floor|trim|over-provisioned/.test(l)), 'no cycle raises a floor breach or advises trimming while net is above 2,300,000');
+  rmSync(repo, { recursive: true, force: true });
+}
+
 process.exit(failed ? 1 : 0);

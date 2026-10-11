@@ -1,5 +1,5 @@
 // Offline checks: the owner's reserve rule, the growth blockers and the utility postcondition.
-import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, sustainedNet, netFloor, floorVerdict, waitingFor, RESERVE } from '../src/budget.ts';
+import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, netFloor, upkeepBudget, floorVerdict, waitingFor, RESERVE } from '../src/budget.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 
 check(RESERVE === 1_000_000, 'the working reserve is 1,000,000');
@@ -40,10 +40,9 @@ check(w.wet && w.metres > 150 && w.metres < 230 && w.deepest === 13.5, 'the live
 check(!wetSpan(pts, pts.map(() => null)).wet && !wetSpan(pts, pts.map(() => 0.2)).wet, 'dry ground and puddles under 0.3 m are not water');
 check(spansWater('High-voltage Line') && spansWater('Low-voltage Line') && !spansWater('High-voltage Ground Cable') && !spansWater('Small Water Pipe') && !spansWater('Small Road'), 'only overhead lines (and bridges) may cross water');
 check(linePoints({ x: 0, z: 0 }, { x: 5000, z: 0 }).length === 61, 'a very long line is capped at 60 steps');
-check(netFloor(1_600_000, null) === 1_568_000, 'the floor starts at the owner baseline minus the 2% noise margin');
-check(netFloor(1_600_000, 2_000_000) === 1_960_000, 'the floor rises with the highest sustained net');
-check(netFloor(1_600_000, 1_200_000) === 1_568_000, 'and never drops below the baseline');
-check(sustainedNet([2.0e6, 2.1e6, 1.9e6, 2.2e6, 2.0e6, 2.05e6]) === 1.9e6 && sustainedNet([2e6, 2.1e6]) === null, 'sustained net is the lowest of the recent readings and needs at least six of them');
+check(netFloor({ netFloor: 2_300_000 }) === 2_300_000 && netFloor({ netFloorBaseline: 2_300_000 }) === 2_300_000 && netFloor(undefined) === 0, 'the net floor is the fixed figure of the policy');
+check(upkeepBudget(3_160_000, 2_300_000) === 430_000 && upkeepBudget(2_200_000, 2_300_000) === 0, 'one review may add at most half of the margin as new upkeep; under the floor nothing');
+check(floorVerdict({ net: 3_160_000, floor: 2_300_000, monthlyUpkeep: 105_000, allowance: 430_000 }).ok && floorVerdict({ net: 3_160_000, floor: 2_300_000, monthlyUpkeep: 105_000, allowance: 200_000 }).reason === 'half_margin_per_review', 'an incinerator (105,000 listed, 283,500 real) fits half of an 860,000 margin, and waits for the next review once the half is used');
 let fv = floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 11_250 });
 check(fv.ok && fv.projected === 1_969_625 && fv.margin === 40_000, 'a high school (11,250 listed, about 30,000 real) fits a 40,000 margin');
 fv = floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 75_000 });

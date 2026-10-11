@@ -97,6 +97,18 @@ export function undoCandidates(evaluated: Evaluated[], minRepeats = 2): { need: 
   return out;
 }
 
+// "When a fix type shows as ineffective, stop repeating it and diagnose again" (owner): the needs
+// of one tool with at least minJudged judged actions of which under maxRate were effective.
+export function stopRepeating(evaluated: Evaluated[], tool: string, minJudged = 6, maxRate = 0.15): string[] {
+  const out: string[] = [];
+  for (const items of groupBy(evaluated)) {
+    if (items[0].tool !== tool) continue;
+    const judged = items.filter(i => i.verdict === 'effective' || i.verdict === 'ineffective' || i.verdict === 'worse');
+    if (judged.length >= minJudged && judged.filter(i => i.verdict === 'effective').length / judged.length < maxRate) out.push(items[0].need);
+  }
+  return out;
+}
+
 // One short report line per row, at most max lines.
 export function effectsLines(table: EffectRow[], max = 6): string[] {
   return table.slice(0, Math.max(0, max)).map(r => {

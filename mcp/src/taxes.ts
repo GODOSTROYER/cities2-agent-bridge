@@ -50,7 +50,7 @@ export function longRates(rates: Json): Record<string, number> {
 
 const demandOf = (area: string, d: Json): number => area === 'Residential' ? Math.max(Number(d?.rL ?? 0), Number(d?.rM ?? 0), Number(d?.rH ?? 0)) : Number(d?.[area === 'Commercial' ? 'c' : area === 'Industrial' ? 'i' : 'o'] ?? 0);
 
-export interface TaxInput { rates: Json; pins: Record<string, Pin>; demand?: Json; unemployment?: number; taxFactor?: number; jobsState?: 'ok' | 'no_jobs' | 'mismatch' }
+export interface TaxInput { rates: Json; pins: Record<string, Pin>; demand?: Json; unemployment?: number; taxFactor?: number; jobsState?: 'ok' | 'no_jobs' | 'mismatch'; unemploymentFactor?: number }
 
 // PURE. One step per call:
 //  1. a rate outside its pin range is put back (to `start` when given, else the nearest bound);
@@ -70,7 +70,10 @@ export function decideTax(input: TaxInput): Json {
   if (low) return { action: 'lower', area: low, from: rates[low], to: rates[low] - 1, reason: `${low} demand ${demandOf(low, input.demand)} is below 20: lowest pinned rate restores jobs`, ...base };
   // Not a bare unemployment gate (FAILURES #91): a raise is held only when jobs are truly missing.
   // With the diagnosis absent, the old 10% line is the fallback.
-  const jobsFine = input.jobsState ? input.jobsState !== 'no_jobs' : unemployment < 10;
+  // Live case (FAILURES #112): Office 10 -> 11 at 19% unemployment took office demand from 88 to 0.
+  // While the game's own Unemployment happiness factor is negative, business rates are not raised.
+  const hurting = Number(input.unemploymentFactor ?? 0) <= -0.5;
+  const jobsFine = !hurting && (input.jobsState ? input.jobsState !== 'no_jobs' : unemployment < 10);
   const high = jobsFine ? movable.filter(a => rates[a] < pins[a].max && demandOf(a, input.demand) >= 60).sort((a, b) => demandOf(b, input.demand) - demandOf(a, input.demand))[0] : undefined;
   if (high) return { action: 'raise', area: high, from: rates[high], to: rates[high] + 1, reason: `${high} demand ${demandOf(high, input.demand)} carries a higher rate and unemployment is ${unemployment}%`, ...base };
   return { action: 'hold', reason: movable.length ? 'every pinned rate is where demand and unemployment want it' : 'all pinned rates are fixed', ...base };
@@ -89,7 +92,7 @@ export async function taxAutopilot(apply = false): Promise<Json> {
     income = { Residential: b.TaxResidential, Commercial: b.TaxCommercial, Industrial: b.TaxIndustrial, Office: b.TaxOffice };
     if (m.taxes && typeof m.taxes === 'object') liveRates = m.taxes;
   } catch { /* report without income; fall back to the snapshot rates */ }
-  const decision = decideTax({ rates: liveRates, pins, demand: snap.demand, unemployment: Number(snap.jobs?.unemp ?? 0), taxFactor: Number(snap.happiness?.Tax ?? 0), jobsState: diagnoseJobs(snap.jobs, snap.servicePenalties).state });
+  const decision = decideTax({ rates: liveRates, pins, demand: snap.demand, unemployment: Number(snap.jobs?.unemp ?? 0), taxFactor: Number(snap.happiness?.Tax ?? 0), jobsState: diagnoseJobs(snap.jobs, snap.servicePenalties).state , unemploymentFactor: Number(snap.happiness?.Unemployment ?? 0) });
   // Settle time: after any tax change to an area, wait 10 minutes before adjusting it again
   // inside its range (demand needs time to react). Restoring a pin is never delayed.
   if (decision.action === 'lower' || decision.action === 'raise') {

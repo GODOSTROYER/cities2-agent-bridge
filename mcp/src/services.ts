@@ -237,7 +237,7 @@ function parseClusters(res: Json): Cluster[] | undefined {
     .map((c: Json): Cluster => [Number(c[0]), Number(c[1]), Number(c[2])]);
 }
 
-export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number; netFloor?: number; upkeepFactor?: number } = {}): Promise<Json> {
+export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number; netFloor?: number; upkeepFactor?: number; skip?: string[]; upkeepAllowance?: number } = {}): Promise<Json> {
   const t0 = Date.now();
   const [snap, buildings, homeClusters] = await multi([
     { command: 'get_snapshot' }, { command: 'service_buildings' },
@@ -269,7 +269,9 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   try { table = serviceTable(await callOk('service_headroom', {}, 20), snap, Number(opts.projectPeople ?? 0)); servicesLine = tableLine(table); alerts = utilityAlerts(table); } catch { /* older mod: coverage and escalation only */ }
   const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3, headroom: Object.keys(table).length ? headroomFor(table) : undefined });
   const held = all.filter(n => ['investigate', 'waiting'].includes(verdictOf(n.need)?.verdict));
-  const needs = all.filter(n => !held.includes(n));
+  // Fix types the effects table judged ineffective are not repeated (critical and very-high needs still are).
+  const stopped = all.filter(n => !held.includes(n) && (opts.skip ?? []).includes(n.need) && !n.critical && snap?.needs?.[n.need]?.priority !== 'very_high');
+  const needs = all.filter(n => !held.includes(n) && !stopped.includes(n));
   const investigate = verdicts.filter(v => v.verdict === 'investigate').map(v => ({ factor: v.factor, value: v.value, actions: v.actions, delta: v.delta, hint: v.fix }));
   const waiting = [...new Set(held.filter(n => verdictOf(n.need)?.verdict === 'waiting').map(n => n.t))];
 
@@ -292,7 +294,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   // Cash reserve (owner rule: bank about 1,000,000 before discretionary spending): a need that is neither a critical utility nor a
   // very_high factor is deferred when its construction cost would take cash below the reserve.
   const reserve = Number.isFinite(opts.reserve) ? Number(opts.reserve) : RESERVE;
-  let cash = Number(snap?.city?.money ?? 0); let net = Number(snap?.city?.net ?? 0); const deferred: Json[] = []; let placedCount = 0;
+  let cash = Number(snap?.city?.money ?? 0); let net = Number(snap?.city?.net ?? 0); const deferred: Json[] = []; let placedCount = 0; let addedUpkeep = 0;
   for (const n of needs) {
     if (placedCount >= maxPlacements) break;
     let settled = false; let lastPrefab = n.prefabs[0]; let lastReason = 'no_prefab_tried';
@@ -303,8 +305,8 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
         const quote = await placeService(prefab, n.x, n.z, 600, undefined, true);
         // Net floor (improve mode): the real running cost of the building must leave net at or above the floor.
         if (quote.ok && Number.isFinite(opts.netFloor)) {
-          const fv = floorVerdict({ net, floor: Number(opts.netFloor), monthlyUpkeep: Number(quote.monthlyUpkeep ?? 0), factor: opts.upkeepFactor });
-          if (!fv.ok) { deferred.push({ t: n.t, prefab, monthlyUpkeep: quote.monthlyUpkeep, why: `net floor: projected net ${fv.projected} would be under ${fv.floor}` }); settled = true; break; }
+          const fv = floorVerdict({ net, floor: Number(opts.netFloor), monthlyUpkeep: Number(quote.monthlyUpkeep ?? 0), factor: opts.upkeepFactor, ...(Number.isFinite(opts.upkeepAllowance) ? { allowance: Number(opts.upkeepAllowance) - addedUpkeep } : {}) });
+          if (!fv.ok) { deferred.push({ t: n.t, prefab, monthlyUpkeep: quote.monthlyUpkeep, why: fv.reason === 'half_margin_per_review' ? 'waits for the next review: half of the margin is the most new upkeep per review' : `net floor: projected net ${fv.projected} would be under ${fv.floor}` }); settled = true; break; }
         }
         if (quote.ok && cash - Number(quote.construction ?? 0) < reserve) { deferred.push({ t: n.t, prefab, construction: quote.construction, why: `would leave ${cash - Number(quote.construction ?? 0)} cash, reserve is ${reserve}` }); settled = true; break; }
       }
@@ -312,7 +314,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
       // rather than give up (FAILURES #101: police was "blocked by no_roadside_site" at crime -4.5).
       let r = await placeService(prefab, n.x, n.z, 600);
       if (!r.ok && r.reason === 'no_roadside_site') r = await placeService(prefab, n.x, n.z, 1500);
-      if (r.ok) { cash -= Number(r.cost ?? r.construction ?? 0); placedCount++; net -= Number(r.monthlyUpkeep ?? 0) * (opts.upkeepFactor ?? 2.7); }
+      if (r.ok) { cash -= Number(r.cost ?? r.construction ?? 0); placedCount++; net -= Number(r.monthlyUpkeep ?? 0) * (opts.upkeepFactor ?? 2.7); addedUpkeep += Number(r.monthlyUpkeep ?? 0) * (opts.upkeepFactor ?? 2.7); }
       if (r.ok) {
         placed.push({ t: n.t, prefab, cost: r.cost, monthlyUpkeep: r.monthlyUpkeep, at: r.at });
         await recordAction({ need: n.need, tool: 'fix_services', detail: `${prefab}@${r.at?.x},${r.at?.z}`, ...(typeof snap?.needs?.[n.need]?.factor === 'number' ? { factor: snap.needs[n.need].factor } : {}) });
@@ -338,6 +340,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
     coverage: Object.fromEntries(Object.entries(gaps).map(([k, g]) => [k, Math.round(Number(g?.uncoveredPct ?? 0))])),
     blocked: Object.fromEntries(failed.map((f: Json) => [RULES.find(r => r.t === f.t)?.need ?? f.t, String(f.failed ?? '').replace('no_prefab_available: ', '')])),
     happiness,
+    addedUpkeep: Math.round(addedUpkeep),
     placed,
     failed,
     pending,

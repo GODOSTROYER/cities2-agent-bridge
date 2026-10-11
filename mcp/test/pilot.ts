@@ -89,6 +89,14 @@ check(pwPlan.actions.some(a => a.tool === 'add_power') && pwPlan.attention.some(
 const im = decide({ ...base, pilotMode: 'improve', netFloor: 960_000, policy: { upkeepRealFactor: 2.7 } }, fresh(), T);
 check(!im.actions.some(a => a.key === 'grow' || a.key === 'tile') && im.actions.find(a => a.key === 'services')!.args.netFloor === 960_000, 'IMPROVE mode: no districts, no tiles; the service planner gets the net floor');
 check(decide({ ...base, pilotMode: 'improve', netFloor: 1_200_000 }, fresh(), T).attention.some(a => a.includes('under the floor')), 'net under the floor is raised and stops upkeep-adding actions');
+check(!decide({ ...base, pilotMode: 'improve', netFloor: 1_200_000 }, fresh(), T).attention.some(a => /trim|cut services|over-provisioned/.test(a)) && decide({ ...base, pilotMode: 'improve', netFloor: 1_200_000 }, fresh(), T).attention.some(a => a.includes('nothing is cut')), 'under the floor the loop waits: it never advises trimming services');
+check(decide({ ...base, pilotMode: 'improve', netFloor: 500_000, upkeepAllowance: 247_500 }, fresh(), T).actions.find(a => a.key === 'services')!.args.upkeepAllowance === 247_500, 'the service planner gets what this review may still add as upkeep');
+const jobless = { ...base, pilotMode: 'improve', netFloor: 960_000, demand: { rL: 100, rM: 100, rH: 100, c: 69, i: 54, o: 0 }, happiness: { Tax: -5, Unemployment: -1.8 } };
+const jb = decide(jobless, fresh(), T).actions.filter(a => a.tool === 'grow');
+check(jb.length === 1 && jb[0].key === 'jobs' && jb[0].args.zone === 'com' && jb[0].why.includes('exception'), 'THE LIVE CASE: improve mode with the Unemployment factor at -1.8 builds one job district of the strongest job zone, and no homes');
+check(!decide({ ...jobless, happiness: { Tax: -5, Unemployment: -0.4 } }, fresh(), T).actions.some(a => a.tool === 'grow') && !decide({ ...jobless, demand: { rL: 100, c: 30, i: 40, o: 0 } }, fresh(), T).actions.some(a => a.tool === 'grow'), 'no job district without the negative factor or without job demand of 50');
+check(!decide(jobless, (() => { const m = fresh(); m.last.jobs = T - 5 * MIN; return m; })(), T).actions.some(a => a.tool === 'grow'), 'one job district per 12 minutes, so its effect can be measured');
+check(JSON.stringify(decide({ ...jobless, stopRepeating: ['entertainment'] }, fresh(), T).actions.find(a => a.key === 'services')!.args.skip) === '["entertainment"]', 'fix types judged ineffective are handed to the service planner as a stop list');
 check(selfCheck({ ...base, pilotMode: 'improve' }, (() => { const m = fresh(); m.starved = { housing: 9 }; return m; })(), T).length === 0, 'in improve mode unmet housing demand is not a fault (expansion is off by policy)');
 
 // Milestone -> save at once.
