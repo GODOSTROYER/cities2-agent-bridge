@@ -19,7 +19,7 @@ for (const [, x, z] of owners) {
     if (!repair) continue;
     const del = await op('demolish', { index: u.index, version: u.version }); if (del.status !== 'complete') { notes.push(`(${x},${z}) remove failed: ${del.error}`); continue; }
     await wait(1500);
-    const p = await prefab(u.prefab, 'all'); const re = await op('place_building', { prefabIndex: p.index, prefabVersion: p.version, position: { x: b.position.x, z: b.position.z }, rotation: 0, maxCost: 400000, upgradeOf: { index: b.index, version: b.version }, maxSnapDistance: 128 });
+    const p = await prefab(u.prefab, 'all'); const re = await op('place_building', { prefabIndex: p.index, prefabVersion: p.version, position: { x: b.position.x, z: b.position.z }, rotation: 2 * Math.atan2(b.rotationQuaternion[1], b.rotationQuaternion[3]) * 180 / Math.PI, maxCost: 400000, upgradeOf: { index: b.index, version: b.version }, maxSnapDistance: 128 });
     if (re.status === 'complete') fixed++; else notes.push(`(${x},${z}) reinstall failed: ${re.error} ${[...new Set((re.placementErrors ?? []).flatMap((e: any) => e.reasons ?? []))].join(',')}`);
   }
 }

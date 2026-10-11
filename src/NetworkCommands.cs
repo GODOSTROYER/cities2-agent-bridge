@@ -99,6 +99,8 @@ namespace CitiesIIAgentBridge
             }
             return o;
         }
+        // The state that an option changes, without the order of the arms.
+        internal static string JunctionKey(JObject o) => o == null ? "" : (string)o["upgraded"] + "|" + (string)o["trafficLights"] + "|" + string.Join(",", ((o["arms"] as JArray) ?? new JArray()).Select(a => (string)a["index"] + ":" + (string)a["upgraded"]).OrderBy(x => x));
         // junction_info {index, version}: a road node with its arms, traffic lights and options.
         private JObject JunctionInfo(JObject args)
         {

@@ -1,4 +1,5 @@
 // LIVE helper: preview/install an extension (service upgrade) on a building.
+// An internal extension shares its owner's place AND rotation: pass rotation = the owner's yaw in degrees.
 //   node test/extend.ts '<json: {prefab, owner:{index,version}, x, z, rotation?}>' [build]
 import { call, waitOperation } from '../src/bridge.ts';
 import { prefab } from '../src/city.ts';

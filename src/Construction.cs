@@ -143,7 +143,7 @@ namespace CitiesIIAgentBridge
                     ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOnMask", snapOn);
                     ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOffMask", snapOff);
                     applyMode = ApplyMode.Clear;
-                    deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "SnapControlPoints", deps, false);
+                    deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "SnapControlPoints", deps, removeNow);
                     deps = (JobHandle)ConstructionAccess.Call(typeof(NetToolSystem), this, "UpdateCourse", deps, removeNow);
                     ConstructionAccess.Results[operation]["status"] = "validating"; stage = 1; return deps;
                 }
@@ -186,7 +186,7 @@ namespace CitiesIIAgentBridge
                     if (flagNow)
                     {
                         var after = Mod.JunctionState(EntityManager, Replacement); ConstructionAccess.Results[operation]["after"] = after;
-                        if (JToken.DeepEquals(after, ConstructionAccess.Results[operation]["before"])) throw new InvalidOperationException("option_change_not_observed");
+                        if (Mod.JunctionKey(after) == Mod.JunctionKey(ConstructionAccess.Results[operation]["before"] as JObject)) throw new InvalidOperationException("option_change_not_observed");
                         Finish("complete"); return deps;
                     }
                     if (RequestedMode == Mode.Replace && !replaced) throw new InvalidOperationException("replace_not_observed_on_target");
