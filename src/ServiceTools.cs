@@ -129,7 +129,9 @@ namespace CitiesIIAgentBridge
                             if(t.m_Original!=Entity.Null && t.m_Original!=moved && (t.m_Flags&TempFlags.Delete)!=0 && EntityManager.HasComponent<Game.Buildings.Building>(t.m_Original))
                                 throw new InvalidOperationException("would_demolish_existing_building");
                     }
-                    if (upgrading == Entity.Null) ValidateBuildingPreview(); else ValidateUpgradePreview();
+                    // A road-side stop touches the buildings it stands in front of (they appear as modified temps): the building
+                    // preview check does not apply to it; the demolition check above still does.
+                    if (upgrading != Entity.Null) ValidateUpgradePreview(); else if (!keepNetSide) ValidateBuildingPreview();
                     ConstructionAccess.Results[operation]["previewCost"] = NativeBuild.Cost(World, budget);
                     ConstructionAccess.Results[operation]["snappedPosition"] = new JObject{["x"]=point.m_Position.x,["y"]=point.m_Position.y,["z"]=point.m_Position.z};
                     ConstructionAccess.Results[operation]["snappedRotation"] = new JArray(point.m_Rotation.value.x,point.m_Rotation.value.y,point.m_Rotation.value.z,point.m_Rotation.value.w);
