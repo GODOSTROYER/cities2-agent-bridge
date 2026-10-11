@@ -1,5 +1,10 @@
 // MCP stdio server for the CitiesIIAgentBridge mod. Thin tool layer over bridge.ts.
 // Logs go to stderr only; stdout belongs to the MCP transport.
+import { tuneFees, feeActions } from './fees-live.ts';
+import type { FeeState } from './fees-live.ts';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { designAudit } from './design-live.ts';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -469,6 +474,20 @@ server.registerTool('autoplay_cycle', {
   try {
     const r = await runCycle(innerTool, REPO);
     return { content: [{ type: 'text', text: r.line }] };
+  } catch (e) { return fail(e); }
+});
+
+server.registerTool('tune_fees', {
+  description: 'Fee tuner (policy.json fees): parking fees towards the 70-85% occupancy band, service fees never above the game default. Runs at most once per fees.reviewMinutes; every change is recorded in journals/actions.jsonl. Returns the changes and report lines.',
+  inputSchema: {},
+}, async () => {
+  try {
+    const file = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'journals', 'pilot', 'fees-state.json');
+    let state: FeeState = {}; try { state = JSON.parse(readFileSync(file, 'utf8')); } catch { /* first run */ }
+    const r = await tuneFees((c, a) => callOk(c, a ?? {}, 30), loadPolicy(), state, Date.now());
+    writeFileSync(file, JSON.stringify(r.state));
+    for (const row of feeActions(r.changed)) await recordAction(row);
+    return ok({ ok: true, changed: r.changed, lines: r.lines, skipped: r.skipped });
   } catch (e) { return fail(e); }
 });
 

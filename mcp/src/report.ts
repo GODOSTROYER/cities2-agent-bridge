@@ -44,6 +44,7 @@ const arrow = (now: number | null, before: number | undefined) => now === null |
 export interface ReportInput {
   snap: Record<string, any>; table?: Record<string, { pct: number | null; projected: number | null; status: string }>; coverage?: Record<string, number>;
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
+  fees?: string[]; // fee tuner lines (fees-live.ts)
   design?: { total: number; counts: Record<string, number>; line: string; worst?: { kind: string; x: number; z: number; detail: string }[] }; // urban design audit (design.ts)
   worked?: string[]; undo?: string[]; // verify-and-learn: effects per action type, and what to undo first
   reserve?: number; // cash that must stay in the bank
@@ -153,6 +154,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   const md = [`# City report ${i.when}${i.mode ? ' (mode ' + i.mode + ')' : ''}`, '', '## Definition of done', ...done.map(([name, pass, detail]) => `- [${pass ? 'x' : ' '}] ${name}: ${detail}`), '', '## Top problems and what is being done',
     ...(top.length ? top.map((r, k) => `${k + 1}. **${r.system}** (${r.status}; cause: ${r.cause}${r.rootOf?.length ? '; root of ' + r.rootOf.join(', ') : ''}${r.drivenBy ? '; driven by ' + r.drivenBy : ''}): ${r.outcome}${r.capacity !== '-' ? ', capacity ' + r.capacity : ''}. ${r.cause && !['none', 'unknown'].includes(r.cause) ? r.fix : r.action}${r.blocked ? '. Blocked by: ' + r.blocked : ''}`) : ['Nothing critical or bad.']),
     '', `Last actions: ${(i.did ?? []).slice(-6).join('; ') || '-'}`, '',
+    ...(i.fees?.length ? ['## Fees and parking (tuner: parking to 70-85% occupancy; no service fee above the game default)', ...i.fees.map(l => `- ${l}`), ''] : []),
     ...(i.worked?.length ? ['## What worked (action type / need, judged 20 minutes after each action)', ...i.worked.map(l => `- ${l}`), ...(i.undo?.length ? ['', 'Repeated with no effect: diagnose again before repeating (nothing is cut for money)', ...i.undo.map(l => `- ${l}`)] : []), ''] : []),
     '| system | status | cause | outcome | use / capacity | coverage | trend | action | blocked by |', '|---|---|---|---|---|---|---|---|---|',
     ...rows.map(r => `| ${r.system} | ${r.status} | ${r.cause && r.cause !== 'none' ? r.cause : '-'} | ${r.outcome} | ${r.capacity} | ${r.coverage} | ${r.trend || '-'} | ${r.action} | ${r.blocked || '-'} |`), ''].join('\n');
