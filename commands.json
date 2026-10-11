@@ -378,6 +378,13 @@
     "undocumented": true
   },
   {
+    "name": "outside_connections",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "pause_for_analysis",
     "description": "",
     "pausing": true,

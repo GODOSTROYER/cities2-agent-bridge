@@ -203,7 +203,7 @@ export function decideServices(input: ServicesInput): Need[] {
   }
   if (sewagePct > 70) {
     // Treatment first; a raw outlet only where the policy still allows one.
-    out.push(utility('sewage', 'sewage', allowed(input.policy, ['WastewaterTreatmentPlant01', 'SewageOutlet01']), /Sewage|Wastewater/, `sewage ${sewagePct}%`));
+    { const types = allowed(input.policy, ['WastewaterTreatmentPlant01', 'SewageOutlet01']); if (types.length) out.push(utility('sewage', 'sewage', types, /Sewage|Wastewater/, `sewage ${sewagePct}%`)); } // export-only policy: capacity is the outside pipe; nothing is placed
   }
 
   // Cash floor: below it only critical or escalated needs survive.

@@ -575,7 +575,7 @@ server.registerTool('query', {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
       'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
-      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'dev_tree', 'service_headroom', 'get_metrics', 'utility_check', 'network_ends', 'pollution_sources', 'garbage_system', 'junction_info', 'find_free_lots', 'find_roadside_lots',
+      'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'dev_tree', 'service_headroom', 'get_metrics', 'utility_check', 'network_ends', 'pollution_sources', 'garbage_system', 'junction_info', 'outside_connections', 'building_upgrades', 'find_free_lots', 'find_roadside_lots',
       'get_capabilities',
     ]),
     args: z.record(z.any()).default({}),

@@ -42,7 +42,8 @@
   "CoalPowerPlant",
   "GasPowerPlant",
   "Landfill",
-  "IncinerationPlant"
+  "IncinerationPlant",
+  "WastewaterTreatment"
  ],
  "forbiddenNote": "name parts; no placement path may build these (owner: zero raw sewage, clean power only, recycling only - no landfill, no incinerator)",
  "allowedCleanPower": [
@@ -52,5 +53,5 @@
   "GeothermalPowerPlant",
   "HydroelectricPowerPlant"
  ],
- "sewagePolicy": "export only once the outside pipe connection carries the full flow; until then treatment only; raw outlets never"
+ "sewagePolicy": "export only through the outside pipe connection at (1470,7168); no raw outlet and no treatment plant may be placed"
 }

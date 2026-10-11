@@ -96,6 +96,37 @@ namespace CitiesIIAgentBridge
             return new JObject { ["upgrades"] = rows };
         }
 
+        // outside_connections {}: every outside connection object of the map (road, rail, power line, PIPE)
+        // with its position, and the trade prices. A sewage or water export needs a pipe led to a pipe connection.
+        private JObject OutsideConnections(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>(); var rows = new JArray();
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<Game.Objects.OutsideConnection>(), ComponentType.ReadOnly<Game.Objects.Transform>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es)
+            {
+                if (em.HasComponent<PrefabData>(e) || !em.HasComponent<PrefabRef>(e)) continue;
+                var pos = em.GetComponentData<Game.Objects.Transform>(e).m_Position; string name = ps.GetPrefabName(em.GetComponentData<PrefabRef>(e).m_Prefab) ?? "";
+                string kind = em.HasComponent<Game.Objects.WaterPipeOutsideConnection>(e) ? "pipe" : em.HasComponent<Game.Objects.ElectricityOutsideConnection>(e) ? "power" : "transport";
+                var row = NativeBuild.Id(e); row["kind"] = kind; row["prefab"] = name; row["x"] = Math.Round(pos.x); row["z"] = Math.Round(pos.z); rows.Add(row);
+            }
+            var o = new JObject { ["connections"] = rows, ["pipes"] = rows.Count(r => (string)r["kind"] == "pipe") };
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<OutsideTradeParameterData>())) if (!q.IsEmptyIgnoreFilter)
+            {
+                var t = q.GetSingleton<OutsideTradeParameterData>();
+                o["prices"] = new JObject { ["sewageExport"] = t.m_SewageExportPrice, ["waterImport"] = t.m_WaterImportPrice, ["waterExport"] = t.m_WaterExportPrice, ["electricityExport"] = t.m_ElectricityExportPrice, ["electricityImport"] = t.m_ElectricityImportPrice };
+            }
+            var ws = w.GetExistingSystemManaged<WaterStatisticsSystem>(); if (ws != null) o["sewage"] = new JObject { ["capacity"] = ws.sewageCapacity, ["use"] = ws.sewageConsumption, ["fulfilled"] = ws.fulfilledSewageConsumption };
+            // Batteries: what is stored and which way the energy flowed last.
+            var bats = new JArray();
+            foreach (var e in NativeBuild.Buildings(em))
+            {
+                if (!em.HasComponent<Game.Buildings.Battery>(e) || em.HasComponent<PrefabData>(e)) continue; var b = em.GetComponentData<Game.Buildings.Battery>(e); var pos = em.GetComponentData<Game.Objects.Transform>(e).m_Position;
+                bats.Add(new JObject { ["x"] = Math.Round(pos.x), ["z"] = Math.Round(pos.z), ["stored"] = b.m_StoredEnergy, ["capacity"] = b.m_Capacity, ["lastFlow"] = b.m_LastFlow, ["hours"] = b.storedEnergyHours });
+            }
+            o["batteries"] = bats;
+            return o;
+        }
+
         // set_building_option {index, version, option: Empty | Inactive, active}: the building options
         // of the info panel (empty a landfill into other facilities, switch a building off).
         private JObject SetBuildingOption(JObject args)

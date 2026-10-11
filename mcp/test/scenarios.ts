@@ -121,6 +121,7 @@ const grows = (actions: PilotAction[]) => actions.filter(a => a.key === 'grow');
   check(power.prefabs.join() === 'WindTurbine01', 'a power shortfall chooses wind only: no coal, no gas');
   check(!!garbage && garbage.prefabs.join() === 'RecyclingCenter01', 'a garbage need chooses a recycling centre only: no landfill, no incinerator');
   check(run(undefined).find(n => n.t === 'sewage')!.prefabs.includes('SewageOutlet01'), 'without the policy the old types are still known (the list is data, not code)');
+  check(!decideServices({ snap, buildings, gaps: {}, cooldown: {}, nowMs: 0, clusters: [], policy: { forbiddenPrefabs: [...policy.forbiddenPrefabs, 'WastewaterTreatment'] } } as any).some(n => n.t === 'sewage'), 'EXPORT ONLY: with treatment forbidden too the sewage rule places nothing (the outside pipe is the capacity)');
   check(forbiddenBy(policy, 'SmallCoalPowerPlant01') === 'CoalPowerPlant' && forbiddenBy(policy, 'IncinerationPlant01 Extra Incinerator Furnace') === 'IncinerationPlant' && forbiddenBy(policy, 'WindTurbine01') === null && allowed(policy, ['Landfill01', 'RecyclingCenter01']).join() === 'RecyclingCenter01', 'the forbidden list matches by name part and leaves clean types alone');
 }
 

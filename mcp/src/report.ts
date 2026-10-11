@@ -46,6 +46,7 @@ export interface ReportInput {
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
   worked?: string[]; undo?: string[]; // verify-and-learn: effects per action type, and what to undo first
   reserve?: number; // cash that must stay in the bank
+  sewageExport?: { pipes: number; use: number; fulfilled: number; local: number; fee?: number }; // outside pipe connections against local outlets and treatment plants
   garbage?: Record<string, any>; // service_headroom.garbage: full facilities, live processing
   netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
   vehicles?: Record<string, { busyPct?: number; efficiencyPct?: number; buildings?: number }>; // service_headroom.vehicles: stations with no vehicle free, efficiency
@@ -139,7 +140,9 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     ['no problem icons', iconTotal === 0, `${iconTotal} icons`],
     ['net at or above the floor', floor <= 0 || net >= floor, floor > 0 ? `net ${net}, floor ${floor}` : 'no floor set'],
     ...(i.outcomes?.power ? [['energy 100% clean and renewable', Number(i.outcomes.power.mix?.coal?.n ?? 0) + Number(i.outcomes.power.mix?.gas?.n ?? 0) === 0, `clean share of use ${i.outcomes.power.cleanShareOfUsePct}%, ${Number(i.outcomes.power.mix?.coal?.n ?? 0)} coal plants left`] as [string, boolean, string]] : []),
-    ...(i.outcomes?.sewage ? [['zero raw sewage discharge', Number(i.outcomes.sewage.rawOutlets) === 0, `${i.outcomes.sewage.rawOutlets} raw outlets`] as [string, boolean, string]] : []),
+    // Owner target: all sewage leaves through the outside pipe connection; nothing is discharged or treated in the city.
+    ...(i.sewageExport ? [['sewage 100% exported, zero local discharge or treatment', Number(i.sewageExport.pipes) > 0 && Number(i.sewageExport.local) === 0 && Number(i.sewageExport.fulfilled) >= Number(i.sewageExport.use), `${i.sewageExport.pipes} outside pipe connection(s), ${i.sewageExport.fulfilled} of ${i.sewageExport.use} carried, ${i.sewageExport.local} local outlet or treatment buildings left, export fee ${i.sewageExport.fee ?? '?'} a month`] as [string, boolean, string]]
+      : i.outcomes?.sewage ? [['zero raw sewage discharge', Number(i.outcomes.sewage.rawOutlets) === 0, `${i.outcomes.sewage.rawOutlets} raw outlets`] as [string, boolean, string]] : []),
     ['cash at or above the reserve', !i.reserve || cash >= Number(i.reserve), i.reserve ? `cash ${cash}, reserve ${i.reserve}` : 'no reserve set'],
   ];
   const md = [`# City report ${i.when}${i.mode ? ' (mode ' + i.mode + ')' : ''}`, '', '## Definition of done', ...done.map(([name, pass, detail]) => `- [${pass ? 'x' : ' '}] ${name}: ${detail}`), '', '## Top problems and what is being done',
