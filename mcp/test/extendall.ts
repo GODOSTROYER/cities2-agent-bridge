@@ -1,11 +1,12 @@
 // LIVE helper: installs one extension on every building of a type that does not have it yet.
-//   node test/extendall.ts "<owner prefab>" "<extension prefab>" [max] [build]
+//   node test/extendall.ts "<owner prefab>" "<extension prefab>" [max] [build] [x,z of one owner]
 // Each one is previewed by the game first; refusals are listed with the game's reasons.
 import { callOk, call, waitOperation } from '../src/bridge.ts';
 import { prefab } from '../src/city.ts';
 const [ownerName, extName, maxArg, mode] = process.argv.slice(2); const max = Number(maxArg ?? 99); const build = mode === 'build';
 const p = await prefab(extName, 'all'); if (!p.found) { console.log('NOT FOUND', extName, JSON.stringify(p.similar ?? []).slice(0, 300)); process.exit(0); }
-const owners = ((await callOk('service_buildings', {}, 30)).services ?? []).filter((s: any) => s[0] === ownerName);
+const only = (process.argv[6] ?? '').split(',').map(Number); // optional 5th argument 'x,z': only the owner standing there
+const owners = ((await callOk('service_buildings', {}, 30)).services ?? []).filter((s: any) => s[0] === ownerName && (only.length !== 2 || Math.hypot(s[1] - only[0], s[2] - only[1]) < 15));
 let done = 0, cost = 0; const refused: string[] = [];
 for (const [, x, z] of owners) {
   if (done >= max) break;
