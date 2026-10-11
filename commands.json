@@ -483,6 +483,13 @@
     "undocumented": true
   },
   {
+    "name": "remove_line",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
     "name": "resolve_pause_blocker",
     "description": "",
     "pausing": false,

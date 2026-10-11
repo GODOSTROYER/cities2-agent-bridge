@@ -67,12 +67,13 @@ namespace CitiesIIAgentBridge
             return "other";
         }
 
-        // notifications {type?, top?}: counts by icon type and the items (position, owner) of the
+        // notifications {type?, top?, x0?, x1?, z0?, z1?}: counts by icon type and the items (position, owner) of the
+        // (with x0..z1 the counts, clusters and items are those of that rectangle only: one district)
         // types matching `type` (substring, case-insensitive; all problem types when omitted).
         private JObject Notifications(JObject args)
         {
             var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
-            string filter = (string)args["type"]; int top = Math.Max(1, Math.Min(100, (int?)args["top"] ?? 20));
+            string filter = (string)args["type"]; int top = Math.Max(1, Math.Min(400, (int?)args["top"] ?? 20));
             if ((bool?)args["catalog"] == true)
             {
                 var names = new List<string>();
@@ -84,6 +85,11 @@ namespace CitiesIIAgentBridge
             }
             var owned = OwnedTiles(em);
             var icons = ReadIcons(w).Where(i => owned.Contains(i.X, i.Z)).ToList(); var items = new JArray();
+            if (args["x0"] != null && args["x1"] != null && args["z0"] != null && args["z1"] != null)
+            {
+                double ax = RequiredFloat(args, "x0"), bx = RequiredFloat(args, "x1"), az = RequiredFloat(args, "z0"), bz = RequiredFloat(args, "z1");
+                icons = icons.Where(i => i.X >= Math.Min(ax, bx) && i.X <= Math.Max(ax, bx) && i.Z >= Math.Min(az, bz) && i.Z <= Math.Max(az, bz)).ToList();
+            }
             foreach (var icon in icons.Where(i => filter == null || i.Type.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0).Take(top))
             {
                 var row = new JObject { ["type"] = icon.Type, ["x"] = Math.Round(icon.X), ["z"] = Math.Round(icon.Z), ["ownerKind"] = OwnerKind(em, icon.Owner) };

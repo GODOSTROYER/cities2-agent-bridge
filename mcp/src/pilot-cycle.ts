@@ -13,6 +13,8 @@ import { buildReport } from './report.ts';
 import { evaluate, effectsTable, effectsLines, undoCandidates, stopRepeating } from './effects.ts';
 import { netFloor, upkeepBudget, waitingFor } from './budget.ts';
 import { loadQueue, saveQueue, queueLine, queueDoing, queueAttention, stalled, nextCodeItem, applyCodeResult, queueMarkdown } from './queue.ts';
+import { districtCount, districtLine, districtAttention } from './district.ts';
+import type { DistrictCount } from './district.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
@@ -122,9 +124,21 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       await fs.appendFile(join(repo, 'journals', 'metrics-history.jsonl'), JSON.stringify({ utc: new Date().toISOString(), pop: snap.city.pop, flow: snap.cityFlow, flowByVolume: snap.flowByVolume, unemp: snap.jobs?.unemp, edu: snap.jobs?.eduCitizens, vacant: snap.jobs?.vacantByEdu, values: rep.values, status: st.reportStatus }) + '\n');
       for (const c of st.changes.filter(c => c.endsWith('(WORSE)'))) await log({ event: 'status_change', line: c });
     } catch (e: any) { await log({ event: 'report_failed', error: String(e?.message ?? e) }); }
-    let notes = ''; try { notes = (await fs.readFile(join(dir, 'notes.md'), 'utf8')).split('\n').slice(0, 14).join('\n'); } catch { /* none */ }
+    let notes = ''; try { notes = (await fs.readFile(join(dir, 'notes.md'), 'utf8')).split('\n').slice(0, 24).join('\n'); } catch { /* none */ }
     let top = ''; try { top = (await fs.readFile(join(dir, 'top.md'), 'utf8')).trim() + '\n'; } catch { /* none */ }
-    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + (stallLine ? `- ${stallLine}\n` : '') + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
+    // District watch: icons inside each watched rectangle against its first count (policy.json watchDistricts).
+    let districts = '';
+    try {
+      const file = join(repo, 'journals', 'district-history.jsonl'); let hist: DistrictCount[] = [];
+      try { hist = (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { /* first count */ }
+      for (const d of (policy.watchDistricts ?? []) as any[]) {
+        const n = await tool('query', { command: 'notifications', args: { x0: d.x0, x1: d.x1, z0: d.z0, z1: d.z1, top: 1 }, fields: ['counts'], maxChars: 1500 });
+        const mine = hist.filter(h => h.name === d.name); const now = districtCount(d.name, n.counts ?? {}, new Date().toISOString());
+        districts += districtLine(now, mine[0], mine[mine.length - 1]) + '\n'; await fs.appendFile(file, JSON.stringify(now) + '\n');
+        const alarm = districtAttention([...mine, now], Date.now()); if (alarm) st.sticky.push(`${hhmm()} ${alarm}`);
+      }
+    } catch (e: any) { await log({ event: 'district_watch_failed', error: String(e?.message ?? e) }); }
+    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + (stallLine ? `- ${stallLine}\n` : '') + districts + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   st.track = [...(st.track ?? []), { t: Date.now(), cash: Number(snap.city.money), net: Number(snap.city.net) }].slice(-15);

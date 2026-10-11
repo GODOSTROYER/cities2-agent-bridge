@@ -17,7 +17,7 @@ const CLIENT_ONLY = ['stop'];
 const ALWAYS_NON_PAUSING = ['simulate_step', 'cancel_simulation_step', 'set_simulation_speed', 'set_camera'];
 // Commands that mutate the city and therefore need AllowControl.
 const CONTROL = [
-    'create_district', 'edit_district', 'set_service_districts', 'set_building_option', 'set_service_fee', 'set_parking_fee', 'create_line', 'set_camera', 'set_simulation_speed',
+    'create_district', 'edit_district', 'set_service_districts', 'set_building_option', 'set_service_fee', 'set_parking_fee', 'create_line', 'remove_line', 'set_camera', 'set_simulation_speed',
     'build_road', 'build_network', 'upgrade_network', 'road_option', 'zone_rectangle', 'clear_zoning', 'place_building',
     'relocate_building', 'demolish', 'purchase_tiles', 'set_tax', 'set_service_budget', 'save_checkpoint',
     'batch_execute', 'execute_neighborhood', 'cancel_batch', 'simulate_step', 'cancel_simulation_step',

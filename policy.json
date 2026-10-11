@@ -74,5 +74,22 @@
   "service": {},
   "reviewMinutes": 20,
   "note": "service fees stay at the game's default unless the owner lists them here with bounds: above the default the game applies a happiness penalty (owner constraint: no negative factor except Tax). Parking fees are tuned to keep occupancy at 70-85%."
- }
+ },
+ "watchDistricts": [
+  {
+   "name": "east high-density (towers)",
+   "x0": 1000,
+   "x1": 1620,
+   "z0": -950,
+   "z1": 200,
+   "note": "owner's screenshot: garbage and hearse icons on every dense building"
+  },
+  {
+   "name": "south-east block",
+   "x0": 1700,
+   "x1": 2200,
+   "z0": -1650,
+   "z1": -1150
+  }
+ ]
 }

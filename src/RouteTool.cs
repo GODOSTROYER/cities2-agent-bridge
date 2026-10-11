@@ -32,8 +32,10 @@ namespace CitiesIIAgentBridge
             return set;
         }
 
-        public void Begin(RoutePrefab line, Entity[] stopEntities, bool close, bool preview)
+        private bool allowNoPath;
+        public void Begin(RoutePrefab line, Entity[] stopEntities, bool close, bool preview, bool allowWithoutPath = false)
         {
+            allowNoPath = allowWithoutPath;
             operation = ConstructionAccess.Begin("line"); stops = stopEntities; closed = close; previewOnly = preview; stage = frames = 0;
             deadline = DateTime.UtcNow.AddSeconds(40); before = Routes(); linePrefab = World.GetExistingSystemManaged<PrefabSystem>().GetEntity(line);
             if (!TrySetPrefab(line)) { ConstructionAccess.Finish(operation, "failed", "route_tool_refused_prefab"); operation = null; return; }
@@ -79,12 +81,16 @@ namespace CitiesIIAgentBridge
                     bool pathDone = true; try { pathDone = (bool)ConstructionAccess.Call(typeof(RouteToolSystem), this, "GetPathfindCompleted"); } catch (MissingMethodException) { }
                     if (!pathDone && frames < 300) return deps;
                     // What the preview holds: the temp route with its waypoints.
-                    int tempRoutes = 0, tempWaypoints = 0;
+                    int tempRoutes = 0, tempWaypoints = 0; var tempPaths = new JArray(); int noPath = 0;
                     using (var q = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Route>()))
-                    using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es) { tempRoutes++; if (EntityManager.HasBuffer<RouteWaypoint>(e)) tempWaypoints = Math.Max(tempWaypoints, EntityManager.GetBuffer<RouteWaypoint>(e, true).Length); }
-                    ConstructionAccess.Results[operation]["preview"] = new JObject { ["tempRoutes"] = tempRoutes, ["waypoints"] = tempWaypoints, ["pathfindCompleted"] = pathDone, ["allowApply"] = GetAllowApply() };
+                    using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es) { tempRoutes++; if (EntityManager.HasBuffer<RouteWaypoint>(e)) tempWaypoints = Math.Max(tempWaypoints, EntityManager.GetBuffer<RouteWaypoint>(e, true).Length);
+                        // Each segment of the previewed line with the length of its path; -1 = the game found no path (wrong side, no track, dead end).
+                        if (EntityManager.HasBuffer<RouteSegment>(e)) foreach (var sg in EntityManager.GetBuffer<RouteSegment>(e, true)) if (sg.m_Segment != Entity.Null && EntityManager.HasComponent<Game.Pathfind.PathInformation>(sg.m_Segment)) { var pi = EntityManager.GetComponentData<Game.Pathfind.PathInformation>(sg.m_Segment); bool bad = pi.m_Distance <= 0 || (pi.m_State & (Game.Pathfind.PathFlags.Pending | Game.Pathfind.PathFlags.Failed)) != 0; if (bad) noPath++; tempPaths.Add(bad ? -1 : (int)Math.Round(pi.m_Distance)); } }
+                    ConstructionAccess.Results[operation]["preview"] = new JObject { ["tempRoutes"] = tempRoutes, ["waypoints"] = tempWaypoints, ["pathfindCompleted"] = pathDone, ["allowApply"] = GetAllowApply(), ["segmentMetres"] = tempPaths, ["segmentsWithoutPath"] = noPath };
                     if (tempRoutes == 0 || tempWaypoints < Math.Min(2, stops.Length)) throw new InvalidOperationException("no_route_preview");
                     if (previewOnly) { ConstructionAccess.Results[operation]["previewOnly"] = true; Finish("complete"); return deps; }
+                    // A line with a segment the game cannot route is never applied (tram T1 was created with 16 of 19 segments without a path).
+                    if (noPath > 0 && !allowNoPath) throw new InvalidOperationException("line_has_segments_without_path");
                     if (!GetAllowApply()) { if (frames < 300) return deps; throw new InvalidOperationException("route_preview_not_applicable"); }
                     applyMode = ApplyMode.Apply; stage = 2; frames = 0; ConstructionAccess.Results[operation]["status"] = "applying"; return deps;
                 }
@@ -129,8 +135,19 @@ namespace CitiesIIAgentBridge
                 if (!em.Exists(e) || !em.HasComponent<Game.Routes.TransportStop>(e) || !em.HasComponent<Game.Objects.Transform>(e)) throw new ArgumentException("not_a_transport_stop: " + i);
                 stops[i] = e;
             }
-            w.GetExistingSystemManaged<BridgeRouteTool>().Begin(prefab, stops, (bool?)args["closed"] != false, (bool?)args["previewOnly"] == true);
+            w.GetExistingSystemManaged<BridgeRouteTool>().Begin(prefab, stops, (bool?)args["closed"] != false, (bool?)args["previewOnly"] == true, (bool?)args["allowNoPath"] == true);
             return ConstructionAccess.Status(ConstructionAccess.Active);
+        }
+
+        // remove_line {index, version}: deletes a transport line (the stops stay).
+        private JObject RemoveLine(JObject args)
+        {
+            RequireControl(); var w = RequireCity(); var em = w.EntityManager;
+            var e = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
+            if (!em.Exists(e) || !em.HasComponent<Route>(e) || !em.HasComponent<TransportLine>(e) || em.HasComponent<Temp>(e)) throw new ArgumentException("not_a_transport_line");
+            int number = em.HasComponent<RouteNumber>(e) ? em.GetComponentData<RouteNumber>(e).m_Number : 0;
+            em.AddComponent<Deleted>(e);
+            return new JObject { ["removed"] = true, ["number"] = number };
         }
 
         // transit_lines {}: every line with stops, vehicles and waiting passengers; and every stop.
@@ -144,10 +161,10 @@ namespace CitiesIIAgentBridge
                 if (em.HasComponent<RouteNumber>(e)) row["number"] = em.GetComponentData<RouteNumber>(e).m_Number;
                 row["ticketPrice"] = t.m_TicketPrice; row["vehicleInterval"] = Math.Round(t.m_VehicleInterval, 1); row["flags"] = t.m_Flags.ToString();
                 row["vehicles"] = em.HasBuffer<RouteVehicle>(e) ? em.GetBuffer<RouteVehicle>(e, true).Length : 0;
-                int waiting = 0, n = 0, badPaths = 0;
+                int waiting = 0, n = 0, badPaths = 0; var paths = new JArray();
                 if (em.HasBuffer<RouteWaypoint>(e)) foreach (var wp in em.GetBuffer<RouteWaypoint>(e, true)) { n++; if (em.HasComponent<WaitingPassengers>(wp.m_Waypoint)) waiting += em.GetComponentData<WaitingPassengers>(wp.m_Waypoint).m_Count; }
-                if (em.HasBuffer<RouteSegment>(e)) foreach (var sg in em.GetBuffer<RouteSegment>(e, true)) if (em.HasComponent<Game.Pathfind.PathInformation>(sg.m_Segment)) { var pi = em.GetComponentData<Game.Pathfind.PathInformation>(sg.m_Segment); if (pi.m_Distance <= 0 || (pi.m_State & (Game.Pathfind.PathFlags.Pending | Game.Pathfind.PathFlags.Failed)) != 0) badPaths++; }
-                row["waypoints"] = n; row["waiting"] = waiting; row["segmentsWithoutPath"] = badPaths; lines.Add(row);
+                if (em.HasBuffer<RouteSegment>(e)) foreach (var sg in em.GetBuffer<RouteSegment>(e, true)) if (em.HasComponent<Game.Pathfind.PathInformation>(sg.m_Segment)) { var pi = em.GetComponentData<Game.Pathfind.PathInformation>(sg.m_Segment); bool bad = pi.m_Distance <= 0 || (pi.m_State & (Game.Pathfind.PathFlags.Pending | Game.Pathfind.PathFlags.Failed)) != 0; if (bad) badPaths++; paths.Add(bad ? -1 : (int)Math.Round(pi.m_Distance)); }
+                row["waypoints"] = n; row["waiting"] = waiting; row["segmentsWithoutPath"] = badPaths; row["segmentMetres"] = paths; lines.Add(row);
             }
             using (var q = em.CreateEntityQuery(new EntityQueryDesc { All = new[] { ComponentType.ReadOnly<Game.Routes.TransportStop>(), ComponentType.ReadOnly<PrefabRef>(), ComponentType.ReadOnly<Game.Objects.Transform>() }, None = new[] { ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Game.Objects.OutsideConnection>() } }))
             using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var e in es)

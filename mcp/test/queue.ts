@@ -37,4 +37,17 @@ const f = it('p', 1, 'queued', { owner: 'code', code: { tool: 'place_service', a
 check(f.status === 'blocked' && f.owner === 'opus' && /no_site/.test(f.blocker ?? '') && /BLOCKED/.test(n2), 'a step code cannot do is handed to the agent as blocked with the reason, not retried in silence');
 const md = queueMarkdown(q, now);
 check(md.startsWith('- QUEUE: 1 in progress') && md.indexOf(' a (opus)') < md.indexOf(' b (opus)') && /BLOCKED: needs 4 points/.test(md), 'progress.md lists the queue, open items first, with the blocker');
+// district watch
+{
+  const { districtCount, districtLine, districtAttention } = await import('../src/district.ts');
+  const first = districtCount('east', { 'Garbage Notification': 146, 'Hearse Notification': 32, 'Noise Pollution': 2 }, iso(-120));
+  const mid = districtCount('east', { 'Garbage Notification': 150, 'Hearse Notification': 30 }, iso(-60));
+  const cur = districtCount('east', { 'Garbage Notification': 73, 'Hearse Notification': 8 }, iso(0));
+  check(first.garbage === 146 && first.hearse === 32 && first.total === 180, 'a district count holds garbage, hearse and all problem icons');
+  check(/garbage icons 73 \(-50% since 146\), hearse icons 8 \(-75% since 32\)/.test(districtLine(cur, first, mid)) && /previous count/.test(districtLine(cur, first, mid)), 'the progress line compares the count with the first and the previous one: ' + districtLine(cur, first, mid));
+  check(districtAttention([first, mid, cur], now) === '', 'a district whose icons halved raises nothing');
+  const stuck = districtCount('east', { 'Garbage Notification': 149, 'Hearse Notification': 33 }, iso(0));
+  check(/not improving/.test(districtAttention([first, mid, stuck], now)), 'a district that has not improved in an hour is raised even if the city total fell: ' + districtAttention([first, mid, stuck], now));
+  check(districtAttention([mid, districtCount('east', { 'Garbage Notification': 150 }, iso(-50))], now - 50 * 60000) === '', 'no alarm before an hour of history exists');
+}
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`); process.exit(failed ? 1 : 0);
