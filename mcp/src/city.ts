@@ -451,11 +451,19 @@ export async function buyTile(o: { n?: number; max?: number; x?: number; z?: num
   let options: Json[] = opts.tiles ?? []; const skipped: Json[] = [];
   if (!o.allowUnreachable) {
     const keep: Json[] = [];
+    // An unowned tile is "outside" for the connector search, so reachability is judged from the
+    // owned side: a local road edge within 950 m of the tile's edge, with no deep water between.
     for (const t of options.slice(0, 6)) {
       if (keep.length >= n) break;
-      const links = await callOk('grid_connectors', { x0: t.x0 + 120, z0: t.z0 + 120, x1: t.x1 - 120, z1: t.z1 - 120, maxLength: 950, top: 3 }, 20);
+      const cx = (t.x0 + t.x1) / 2, cz = (t.z0 + t.z1) / 2;
+      const near = await callOk('get_network_edges', { x: cx, z: cz, radius: Math.hypot(t.x1 - t.x0, t.z1 - t.z0) / 2 + 950 }, 30);
       let reachable = false;
-      for (const c of links.links ?? []) { const wet = await waterUnder(connectorStart(c), c.to); if (!(wet.wet && wet.deepest > 2)) { reachable = true; break; } }
+      for (const e of (near.edges ?? []).filter((q: Json) => !/Highway|Cable|Line|Pipe/.test(String(q.prefab))).slice(0, 400)) {
+        const a = e.curve[e.curve.length - 1]; const px = Math.max(t.x0, Math.min(t.x1, a.x)), pz = Math.max(t.z0, Math.min(t.z1, a.z));
+        if (Math.hypot(px - a.x, pz - a.z) > 950) continue;
+        const wet = await waterUnder({ x: a.x, z: a.z }, { x: px, z: pz }); if (wet.wet && wet.deepest > 2) continue;
+        reachable = true; break;
+      }
       if (reachable) keep.push(t); else skipped.push({ x: [t.x0, t.x1], z: [t.z0, t.z1] });
     }
     options = keep;
