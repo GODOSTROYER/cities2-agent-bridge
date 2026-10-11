@@ -32,6 +32,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   try { snap.devTree = await tool('dev_tree', {}); } catch { /* optional */ }
   try { const hot = await tool('traffic_hotspots', { top: 1 }); snap.cityFlow = Number(hot.cityFlow ?? NaN); } catch { /* optional */ }
 
+  try { snap.pilotMode = JSON.parse(await fs.readFile(join(dir, 'mode.json'), 'utf8')).mode; } catch { /* normal mode */ }
   const now = Date.now(); const { memo } = st;
   const stuck = selfCheck(snap, memo, now);
   for (const line of stuck) await log({ event: 'self_check', line });

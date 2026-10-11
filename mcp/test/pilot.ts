@@ -79,6 +79,9 @@ raised = selfCheck({ ...base, demand: {}, needs: { garbage: { icons: 12, score: 
 check(raised.length === 0, 'once the need escalates to build it is no longer a stuck watch');
 check(selfCheck({ ...base, demand: { rL: 30, c: 10 }, needs: {} }, fresh(), T).length === 0, 'weak demand is not blocked demand');
 
+const bk = decide({ ...base, pilotMode: 'bank' }, fresh(), T).actions;
+check(!bk.some(a => a.key === 'grow' || a.key === 'tile') && bk.find(a => a.key === 'services')!.args.reserve === 1_000_000_000, 'bank mode: no districts or tiles, services only for over-capacity and very-high needs');
+
 // Milestone -> save at once.
 const m2 = fresh(); m2.last = { services: T, traffic: T, tax: T, save: T, grow: T }; m2.milestone = 8;
 check(keys({ ...base, milestone: { achieved: 9 } }, m2, T + MIN).includes('save'), 'a new milestone is saved at once');

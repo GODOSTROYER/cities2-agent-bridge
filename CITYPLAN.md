@@ -58,3 +58,17 @@ Coordinates are world metres (x east, z north). The core sits at roughly x -935.
 3. Industrial district near the highway (needs a tile purchase west or south-west).
 4. Police and fire coverage for S1 and the core.
 5. Extend A1 south through the south tile as districts fill. Second arterial east when the next tile is bought.
+
+## Strategic review 2026-10-11 (milestone 9, pop 19k)
+
+Decisions:
+- Growth is demand-driven (every bar at 50+ gets a district); services are built ahead of need (usage under 78% of capacity, coverage gap under 8%), sized for the planned districts.
+- Land: the east tiles (x 458..1558, z -935..-312) and the west side behind the highway (arterial x about -1650 from z 219 to 1750) are the expansion areas. West-side traffic depends on ONE small-road underpass at z=130: upgrade it and add a second underpass before the west passes about 8,000 residents.
+- Traffic push done 2026-10-11: Large Road corridors highway entry -> centre -> east district, centre -> south, centre -> north; second river crossing for the north district at (-355,1100); west arterial; south-west office grid connected at (-1185,-2445)->(-895,-2445).
+- NOT done, next road work (needs ramp design, preview every leg):
+  1. Second highway connection. Best place: east carriageway (flows toward -z) at about (-1303,-97) with an off-ramp to the road node (-1158,-173) and an on-ramp from (-1158,-285) to the carriageway near z=-420. The bus depot at (-1246,-141) is in the way of the off-ramp: move the depot first.
+  2. West carriageway (flows toward +z): off-ramp from node (-1325,-85) to the west district corner (-1405,-65) as a ONE-WAY ramp (the old at-grade piece), on-ramp further north.
+  3. The highway terminus at (-877,33) feeds one road; the double nodes at (-800,17)/(-798,21) and (-660,8)/(-664,8) are 4 m apart and should be merged into one junction each.
+  4. North district junction at (-519,1371): four Large Road arms at 1% flow with traffic data: inspect lane connections, try a roundabout (RoundaboutsNode is bought).
+- Power: 81% of capacity at 19k residents. Wind turbines need 190 m clearance and roadside sites are scarce: buy GasPowerPlantNode or place a second coal plant on the east road (no homes downwind) before 90%.
+- Bank mode (owner): no districts, tiles or amenities until cash reaches 5,000,000; only over-capacity and very-high needs are paid.

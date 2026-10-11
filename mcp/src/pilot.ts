@@ -142,12 +142,17 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
     }
   }
 
+  // BANK mode (owner: save money for the next expansion): only critical and very-high needs are
+  // paid for - no districts, no tiles, no amenities. journals/pilot/mode.json {"mode":"bank"}.
+  const bank = snap.pilotMode === 'bank';
+  if (bank) { for (let k = actions.length - 1; k >= 0; k--) if (actions[k].key === 'grow' || actions[k].key === 'tile') actions.splice(k, 1); }
+
   // 2b. Services ahead of need (headroom): every 3 minutes, and in every cycle that zones housing,
   //     sized for the residents the planned districts will bring.
   const planned = actions.filter(a => a.key === 'grow').map(a => ({ zone: String(a.args.zone), cols: Number(a.args.cols), rows: Number(a.args.rows) }));
   const people = plannedPeople(planned);
   if (due(memo, 'services', now, 3) || people > 0)
-    actions.splice(servicesAt, 0, { key: 'services', tool: 'fix_services', args: { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
+    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
 
   // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
   const tree = snap.devTree;

@@ -379,11 +379,16 @@ namespace CitiesIIAgentBridge
         {
             var w = RequireCity(); var em = w.EntityManager; var clock = Stopwatch.StartNew();
             int top = Math.Max(1, Math.Min(30, (int?)args["top"] ?? 10)); double minLength = args["minLength"] == null ? 20 : RequiredFloat(args, "minLength");
-            var rows = new List<JObject>(); double sum = 0; int n = 0;
+            var rows = new List<JObject>(); double sum = 0; int n = 0, noData = 0;
             foreach (var edge in RoadEdges(w))
             {
                 var road = em.GetComponentData<Road>(edge.Entity); var speed = NetUtils.GetTrafficFlowSpeed(road);
                 double flow = (speed.x + speed.y + speed.z + speed.w) / 4; double length = em.GetComponentData<Curve>(edge.Entity).m_Length;
+                // A road nobody has driven on yet (new or just upgraded: its counters start at zero)
+                // reads as flow 0. That is "no data", not a jam (FAILURES #100: the ladder kept
+                // widening the roads it had just widened).
+                double driven = math.csum(road.m_TrafficFlowDistance0 + road.m_TrafficFlowDistance1);
+                if (driven < 1) { noData++; continue; }
                 sum += flow; n++;
                 if (length < minLength) continue;
                 var mid = BezierAt(edge.Curve, 0.5f);
@@ -392,7 +397,7 @@ namespace CitiesIIAgentBridge
             var tf = w.GetExistingSystemManaged<TrafficFlowSystem>();
             var result = new JObject
             {
-                ["edges"] = n, ["meanFlowPct"] = n == 0 ? 0 : Math.Round(100 * sum / n),
+                ["edges"] = n, ["noData"] = noData, ["meanFlowPct"] = n == 0 ? 0 : Math.Round(100 * sum / n),
                 ["hotspots"] = new JArray(rows.OrderBy(r => (double)r["flowPct"]).ThenByDescending(r => (double)r["length"]).Take(top)),
                 ["ms"] = Math.Round(clock.Elapsed.TotalMilliseconds), ["note"] = "flowPct = native traffic flow speed (100 = free flow); low values on arterials suggest upgrade_network or a parallel corridor."
             };
