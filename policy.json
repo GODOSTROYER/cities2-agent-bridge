@@ -57,5 +57,22 @@
  "devPointsFor": [
   "TramNode"
  ],
- "devPointsNote": "owner: the next development points go to Tram; nothing else is bought until it is"
+ "devPointsNote": "owner: the next development points go to Tram; nothing else is bought until it is",
+ "fees": {
+  "occupancyBand": [
+   70,
+   85
+  ],
+  "raiseAbovePct": 85,
+  "lowerBelowPct": 50,
+  "parking": {
+   "min": 1,
+   "max": 50,
+   "start": 10,
+   "step": 2
+  },
+  "service": {},
+  "reviewMinutes": 20,
+  "note": "service fees stay at the game's default unless the owner lists them here with bounds: above the default the game applies a happiness penalty (owner constraint: no negative factor except Tax). Parking fees are tuned to keep occupancy at 70-85%."
+ }
 }

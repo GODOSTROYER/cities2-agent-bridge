@@ -217,6 +217,13 @@
     "undocumented": true
   },
   {
+    "name": "get_fees",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "get_metrics",
     "description": "",
     "pausing": false,
@@ -525,6 +532,13 @@
     "undocumented": true
   },
   {
+    "name": "set_parking_fee",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
     "name": "set_service_budget",
     "description": "",
     "pausing": true,
@@ -533,6 +547,13 @@
   },
   {
     "name": "set_service_districts",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "set_service_fee",
     "description": "",
     "pausing": true,
     "control": true,
