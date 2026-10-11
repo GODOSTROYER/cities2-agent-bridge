@@ -52,6 +52,7 @@ namespace CitiesIIAgentBridge
             updateSystem.UpdateAt<BridgeDistrictTool>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<BridgeObjectTool>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<BridgeBulldozeTool>(SystemUpdatePhase.ToolUpdate);
+            updateSystem.UpdateAt<BridgeRouteTool>(SystemUpdatePhase.ToolUpdate);
             GameManager.instance.onGamePreload += OnPreload;
             GameManager.instance.RegisterUpdater(updater);
             try { mailbox.Publish(new JObject { ["status"] = "starting", ["modVersion"] = ModVersion }); }
@@ -153,7 +154,7 @@ namespace CitiesIIAgentBridge
                 throw new InvalidOperationException("control_disabled: enable it in Options > Cities II Agent Bridge");
         }
 
-        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "utility_check", "dev_tree", "service_headroom", "get_metrics", "network_ends", "pollution_sources", "garbage_system", "junction_info", "building_upgrades", "outside_connections", "get_fees", "service_buildings", "home_clusters", "crime_map", "notifications", "transit_status", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
+        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "utility_check", "dev_tree", "service_headroom", "get_metrics", "network_ends", "pollution_sources", "garbage_system", "junction_info", "building_upgrades", "outside_connections", "get_fees", "transit_lines", "service_buildings", "home_clusters", "crime_map", "notifications", "transit_status", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
 
         // multi {commands:[{command,args}]}: up to 16 non-pausing reads in one mailbox round trip.
         private JObject Multi(JObject args)
@@ -183,7 +184,7 @@ namespace CitiesIIAgentBridge
             return new Entity { Index = index, Version = version };
         }
 
-        private static bool IsBridgeTool(ToolBaseSystem tool) => tool is BridgeRoadTool || tool is BridgeZoneTool || tool is BridgeObjectTool || tool is BridgeBulldozeTool || tool is BridgeDistrictTool;
+        private static bool IsBridgeTool(ToolBaseSystem tool) => tool is BridgeRoadTool || tool is BridgeZoneTool || tool is BridgeObjectTool || tool is BridgeRouteTool || tool is BridgeBulldozeTool || tool is BridgeDistrictTool;
 
         // A command that claimed the operation slot or installed a bridge tool and then threw must
         // not leave later builds stuck on construction_busy (FAILURES #22, #23): roll both back.
@@ -231,7 +232,7 @@ namespace CitiesIIAgentBridge
                 case "get_capabilities": return new JObject
                 {
                     ["read"] = new JArray("ping", "get_capabilities", "get_snapshot", "get_city_state", "get_camera", "get_selected", "inspect_entity", "get_water_facilities"),
-                    ["control"] = new JArray("create_district","edit_district","set_service_districts","set_building_option","set_service_fee","set_parking_fee","set_camera", "set_simulation_speed", "build_road", "build_network", "upgrade_network", "road_option", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "purchase_tiles", "set_tax", "set_service_budget", "save_checkpoint", "batch_execute"),
+                    ["control"] = new JArray("create_district","edit_district","set_service_districts","set_building_option","set_service_fee","set_parking_fee","create_line","set_camera", "set_simulation_speed", "build_road", "build_network", "upgrade_network", "road_option", "zone_rectangle", "clear_zoning", "place_building", "relocate_building", "demolish", "purchase_tiles", "set_tax", "set_service_budget", "save_checkpoint", "batch_execute"),
                     ["constructionQueries"] = new JArray("get_build_prefabs", "get_prefab_details", "get_network", "get_network_edges", "trace_network", "get_zone_cells", "get_operation", "get_batch", "get_city_management", "get_services", "sample_terrain", "get_tiles", "get_buildings", "diagnose_connections"),
                     ["buildVersion"] = ModVersion, ["liveValidation"] = "community_binary_requires_live_validation",
                     ["visibility"] = new JObject {
@@ -274,6 +275,8 @@ namespace CitiesIIAgentBridge
                 case "building_upgrades": return BuildingUpgrades(args);
                 case "outside_connections": return OutsideConnections(args);
                 case "get_fees": return GetFees(args);
+                case "create_line": return CreateLine(args);
+                case "transit_lines": return TransitLines(args);
                 case "set_service_fee": return SetServiceFee(args);
                 case "set_parking_fee": return SetParkingFee(args);
                 case "set_building_option": return SetBuildingOption(args);

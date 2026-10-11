@@ -40,6 +40,7 @@ namespace CitiesIIAgentBridge
             }
             float snapDistance=args["maxSnapDistance"]==null?32:RequiredFloat(args,"maxSnapDistance");
             if(snapDistance<0 || snapDistance>128)throw new ArgumentException("maxSnapDistance_must_be_0_to_128");
+            w.GetExistingSystemManaged<BridgeObjectTool>().KeepNetSide = (bool?)args["netSide"] == true; // transport stops snap to the road side
             w.GetExistingSystemManaged<BridgeObjectTool>().Begin(prefab, point, budget, move,(bool?)args["previewOnly"]==true,candidates,(bool?)args["allowDemolition"]==true,snapDistance,owner);
             return ConstructionAccess.Status(ConstructionAccess.Active);
         }

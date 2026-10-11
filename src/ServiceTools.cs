@@ -45,6 +45,7 @@ namespace CitiesIIAgentBridge
         private Entity upgrading;
         private HashSet<Entity> upgradesBefore;
         private Entity previousSelection;
+        internal bool KeepNetSide; private bool keepNetSide;
         private Entity expectedPrefab;
         private ControlPoint[] candidates;
         private int candidateIndex;
@@ -61,6 +62,7 @@ namespace CitiesIIAgentBridge
             expectedPrefab = requestedPrefab;
             candidates = alternatives ?? new[] { p }; candidateIndex = 0; previewOnly = preview; allowDemolition = demolish; applied = false; maxSnapDistance = snapDistance;
             ConstructionAccess.Results[operation]["attempts"] = new JArray();
+            keepNetSide = KeepNetSide; KeepNetSide = false;
             upgrading = upgradeOf; upgradesBefore = new HashSet<Entity>();
             if (upgrading != Entity.Null) foreach (var u in EntityManager.GetBuffer<Game.Buildings.InstalledUpgrade>(upgrading, true)) upgradesBefore.Add(u.m_Upgrade);
             // The game snaps an extension to its owner (fixed place and rotation) through the SELECTED
@@ -91,7 +93,9 @@ namespace CitiesIIAgentBridge
                         World.GetExistingSystemManaged<PrefabSystem>().GetPrefab<ObjectPrefab>(expectedPrefab), upgrading != Entity.Null ? (object)upgrading : null);
                     point = candidates[candidateIndex];
                     GetAvailableSnapMask(out m_SnapOnMask,out m_SnapOffMask);
-                    m_SnapOffMask &= ~(Snap.NetSide | Snap.Shoreline | Snap.ExistingGeometry);
+                    // A transport stop must stick to the side of a road: keep that snap for it (KeepNetSide).
+                    m_SnapOffMask &= ~((keepNetSide ? Snap.None : Snap.NetSide) | Snap.Shoreline | Snap.ExistingGeometry);
+                    if (keepNetSide) m_SnapOnMask |= Snap.NetSide;
                     // SnapJob reads its own NativeReference<Rotation>, not just ControlPoint.m_Rotation.
                     var rotationField = typeof(ObjectToolSystem).GetField("m_Rotation",BindingFlags.NonPublic|BindingFlags.Instance);
                     var reference = rotationField.GetValue(this); var valueProperty = reference.GetType().GetProperty("Value");

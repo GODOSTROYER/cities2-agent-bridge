@@ -77,6 +77,13 @@
     "undocumented": true
   },
   {
+    "name": "create_line",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
     "name": "crime_map",
     "description": "",
     "pausing": false,
@@ -596,6 +603,13 @@
   },
   {
     "name": "traffic_hotspots",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "transit_lines",
     "description": "",
     "pausing": false,
     "control": false,
