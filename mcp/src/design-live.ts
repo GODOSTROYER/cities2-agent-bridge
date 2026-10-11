@@ -38,8 +38,10 @@ export async function planRefusal(prefab: string, from: { x: number; z: number }
   try {
     if (!cache || Date.now() - cache.t > 60_000) cache = { t: Date.now(), edges: await readAuditEdges() };
     const t = await callOk('sample_terrain', { points: [{ x: from.x, z: from.z }, { x: to.x, z: to.z }] }, 20); const s = t.samples ?? t.points ?? [];
-    const y = (i: number) => Number(s[i]?.position?.y ?? 0);
-    const r = checkRoadPlan({ prefab, from: { x: from.x, y: y(0), z: from.z }, to: { x: to.x, y: y(1), z: to.z } }, { edges: cache.edges });
+    // An end that sits on an existing node joins that node (not a new junction beside it); its height is the node's.
+    const nodeAt = (p: { x: number; z: number }) => { for (const e of cache!.edges) { if (Math.hypot(e.a.x - p.x, e.a.z - p.z) < 2.5) return { id: e.startNode, y: e.a.y }; if (Math.hypot(e.d.x - p.x, e.d.z - p.z) < 2.5) return { id: e.endNode, y: e.d.y }; } return null; };
+    const n0 = nodeAt(from), n1 = nodeAt(to); const y = (i: number) => Number(s[i]?.position?.y ?? 0);
+    const r = checkRoadPlan({ prefab, from: { x: from.x, y: n0?.y ?? y(0), z: from.z }, to: { x: to.x, y: n1?.y ?? y(1), z: to.z }, ...(n0 ? { fromNode: n0.id } : {}), ...(n1 ? { toNode: n1.id } : {}) }, { edges: cache.edges });
     return r.reasons.filter(x => !ignore.includes(x));
   } catch { return []; }   // the check never blocks building when the read fails
 }
