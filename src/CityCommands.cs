@@ -24,6 +24,15 @@ namespace CitiesIIAgentBridge
             ObjectPrefab prefab = (bool?)args["object"] == true || owner != Entity.Null ? BuildPrefab<ObjectPrefab>(w, args) : BuildPrefab<BuildingPrefab>(w, args);
             if (owner != Entity.Null && !w.EntityManager.HasComponent<ServiceUpgradeData>(w.GetExistingSystemManaged<PrefabSystem>().GetEntity(prefab))) throw new ArgumentException("prefab_is_not_an_extension");
             var point = BuildPoint(w, args["position"] as JObject);
+            // A stop is placed on the side of the road the caller points at. BuildPoint moves the point to the
+            // centre line of the edge, which left the side to chance: every stop of a pair landed on the same
+            // side and the return direction of tram line 1 had no path. Keep the requested off-centre position
+            // as the hit position; the game's road-side snap then picks the lane on that side.
+            if ((bool?)args["netSide"] == true && args["position"] is JObject sidePos && sidePos["index"] != null)
+            {
+                var hit = new float3(RequiredFloat(sidePos, "x"), point.m_Position.y, RequiredFloat(sidePos, "z"));
+                if (math.distance(hit.xz, point.m_Position.xz) <= 40) { point.m_HitPosition = hit; point.m_Position = hit; }
+            }
             float rotation = args["rotation"] == null ? 0 : RequiredFloat(args, "rotation");
             point.m_Rotation = quaternion.RotateY(math.radians(rotation));
             // An extension built into its owner shares the owner's rotation (FAILURES #116); the caller need not know it.
@@ -48,8 +57,8 @@ namespace CitiesIIAgentBridge
         {
             var w = RequireCity(); RequireControl(); CheckBuildTool(w); var em = w.EntityManager;
             var entity = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
-            // An installed extension (garage, depot, wing) can be removed like a building.
-            if (!em.Exists(entity) || (!em.HasComponent<Game.Buildings.Building>(entity) && !em.HasComponent<Game.Net.Edge>(entity) && !em.HasComponent<Game.Buildings.ServiceUpgrade>(entity))) throw new ArgumentException("target_must_be_building_or_network_edge");
+            // An installed extension (garage, depot, wing) and a transport stop can be removed like a building.
+            if (!em.Exists(entity) || (!em.HasComponent<Game.Buildings.Building>(entity) && !em.HasComponent<Game.Net.Edge>(entity) && !em.HasComponent<Game.Buildings.ServiceUpgrade>(entity) && !em.HasComponent<Game.Routes.TransportStop>(entity))) throw new ArgumentException("target_must_be_building_or_network_edge");
             float3 pos;
             if (em.HasComponent<Game.Objects.Transform>(entity)) pos = em.GetComponentData<Game.Objects.Transform>(entity).m_Position;
             else pos = em.GetComponentData<Game.Net.Curve>(entity).m_Bezier.a;

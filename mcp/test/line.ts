@@ -12,13 +12,18 @@ const op = async (command: string, args: any) => { for (let t = 0; t < 10; t++) 
 const nearestEdge = async (x: number, z: number) => { const edges = (await callOk('get_network_edges', { x, z, radius: R }, 30)).edges ?? []; let best: any = null, bd = 1e9; for (const e of edges) { if (!/Road/.test(e.prefab) || /Highway/.test(e.prefab)) continue; const s = e.curve[0], t = e.curve[e.curve.length - 1]; if (!a.allowSteep && Math.abs(s.y - t.y) > 6 && Math.hypot(t.x - s.x, t.z - s.z) < 130) continue; const dx = t.x - s.x, dz = t.z - s.z, L2 = dx * dx + dz * dz; const k = Math.max(0.15, Math.min(0.85, ((x - s.x) * dx + (z - s.z) * dz) / (L2 || 1))); const px = s.x + dx * k, pz = s.z + dz * k; const d = Math.hypot(x - px, z - pz); if (d < bd) { bd = d; best = { e, k, px, pz, dx: dx / Math.sqrt(L2 || 1), dz: dz / Math.sqrt(L2 || 1) }; } } return best; };
 const placeStop = async (x: number, z: number, edge: any) => op('place_building', { prefabIndex: sp.index, prefabVersion: sp.version, object: true, netSide: true, position: { x, z, index: edge.e.index, version: edge.e.version, curvePosition: edge.k }, rotation: 0, maxCost: 50000, maxSnapDistance: 80, ...(build ? {} : { previewOnly: true }) });
 const out: any[] = [], back: any[] = []; const notes: string[] = [];
+// Existing stops of the same kind are reused (a stop already standing where the game would snap the new one).
+const existing: any[] = ((await callOk('transit_lines', {}, 30)).stops ?? []).filter((s: any) => s.prefab === (a.stop ?? 'NA_BusStop01'));
+const placePreview = async (x: number, z: number, edge: any) => op('place_building', { prefabIndex: sp.index, prefabVersion: sp.version, object: true, netSide: true, position: { x, z, index: edge.e.index, version: edge.e.version, curvePosition: edge.k }, rotation: 0, maxCost: 50000, maxSnapDistance: 80, previewOnly: true });
 for (let i = 0; i < S.length; i++) {
   const [x, z] = S[i]; const edge = await nearestEdge(x, z); if (!edge) { notes.push(`station ${i + 1} (${x},${z}): no road within ${R} m`); continue; }
   // travel direction at this station (towards the next one), projected on the road
   const nx = (S[Math.min(S.length - 1, i + 1)][0] - S[Math.max(0, i - 1)][0]), nz = (S[Math.min(S.length - 1, i + 1)][1] - S[Math.max(0, i - 1)][1]);
   const sign = nx * edge.dx + nz * edge.dz >= 0 ? 1 : -1; const dx = edge.dx * sign, dz = edge.dz * sign; const lx = -dz, lz = dx; // left of travel
   for (const dir of a.oneWay ? [1] : [1, -1]) {
-    const px = edge.px + lx * 12 * dir + dx * 14 * dir, pz = edge.pz + lz * 12 * dir + dz * 14 * dir; const d: any = await placeStop(px, pz, edge);
+    const px = edge.px + lx * 12 * dir + dx * 14 * dir, pz = edge.pz + lz * 12 * dir + dz * 14 * dir;
+    if (build) { const pre: any = await placePreview(px, pz, edge); const sx = pre.snappedPosition?.x, sz = pre.snappedPosition?.z; const have = sx == null ? null : existing.find(s => Math.hypot(s.x - sx, s.z - sz) < 6); if (have) { (dir > 0 ? out : back).push({ index: have.index, version: have.version, x: have.x, z: have.z, reused: true }); continue; } }
+    const d: any = await placeStop(px, pz, edge);
     const id = (d.createdObjects ?? d.createdBuildings ?? [])[0];
     if (d.status !== 'complete' || (build && !id)) { notes.push(`station ${i + 1} ${dir > 0 ? 'out' : 'back'}: ${d.error ?? 'no stop'} ${[...new Set((d.placementErrors ?? []).flatMap((e: any) => e.reasons ?? []))].join(',')}`); continue; }
     (dir > 0 ? out : back).push(build ? { ...id, x: Math.round(d.snappedPosition?.x ?? px), z: Math.round(d.snappedPosition?.z ?? pz) } : { x: Math.round(d.snappedPosition?.x ?? px), z: Math.round(d.snappedPosition?.z ?? pz) });

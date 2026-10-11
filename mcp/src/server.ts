@@ -1,5 +1,6 @@
 // MCP stdio server for the CitiesIIAgentBridge mod. Thin tool layer over bridge.ts.
 // Logs go to stderr only; stdout belongs to the MCP transport.
+import { designAudit } from './design-live.ts';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -470,6 +471,11 @@ server.registerTool('autoplay_cycle', {
     return { content: [{ type: 'text', text: r.line }] };
   } catch (e) { return fail(e); }
 });
+
+server.registerTool('design_audit', {
+  description: 'Urban design audit of the road network on owned land: dead ends, stubs, double junctions, width changes along a corridor, steep ramps, level crossings, highway crossings at grade, sharp angles, districts with a single access. Returns counts by kind, one line, and the defects to fix first (read only, about 5 s).',
+  inputSchema: { top: z.number().int().min(1).max(60).default(10) },
+}, async (a) => { try { return ok(await designAudit(a.top)); } catch (e) { return fail(e); } });
 
 server.registerTool('dev_tree', {
   description: 'Development tree: points available and the nodes that can be bought now (all=true lists every node with why it cannot be bought). unlock=<node name> buys that node through the game and confirms it; many buildings (college, bus lines, wider roads) stay locked until their node is bought.',

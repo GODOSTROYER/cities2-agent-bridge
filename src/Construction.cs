@@ -140,6 +140,10 @@ namespace CitiesIIAgentBridge
                     // replaces that update path, so they must be initialised here or snapping runs
                     // with whatever a previous tool left behind.
                     GetAvailableSnapMask(out var snapOn, out var snapOff);
+                    // A piece that joins an existing node or edge must end exactly there. The 8 m length snap moved
+                    // such ends up to 4 m (a piece asked to reach a node at -759.5 ended at -755.5), and the game then
+                    // draws the node at the average of the curve ends: an overlap or a gap in the road.
+                    if (start.m_OriginalEntity != Entity.Null || end.m_OriginalEntity != Entity.Null) snapOn &= ~Snap.CellLength;
                     ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOnMask", snapOn);
                     ConstructionAccess.Field(typeof(ToolBaseSystem), this, "m_SnapOffMask", snapOff);
                     applyMode = ApplyMode.Clear;

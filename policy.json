@@ -91,5 +91,67 @@
    "z0": -1650,
    "z1": -1150
   }
- ]
+ ],
+ "designStandard": {
+  "_note": "Owner's standing instruction: decide as the city's architect; the city must look good and function well. Recorded per decision in progress.md under 'Design decisions'. Checked by mcp/src/design.ts (audit and plan check).",
+  "decideWithoutAsking": [
+   "removing a few buildings for a trunk road",
+   "moving a park or a utility",
+   "rebuilding a block for a bridge or junction",
+   "parallel link or widening",
+   "where a facility goes",
+   "which road type"
+  ],
+  "askOwnerOnlyFor": [
+   "spending below the cash or net floor",
+   "raising taxes",
+   "anything on the forbidden list",
+   "expansion beyond what a fix needs",
+   "the order of development points",
+   "demolishing something large (a whole district, a major service building)"
+  ],
+  "function": [
+   "clear road hierarchy with continuous trunks and few conflict points",
+   "every district has two or more ways out",
+   "services sit inside the area they serve",
+   "transit on the main desire lines with stops at real destinations",
+   "freight kept apart from housing",
+   "nothing cut off by a river, a railway or a highway"
+  ],
+  "form": [
+   "a recognisable centre, district centres, clean edges",
+   "regular, well proportioned blocks; no slivers, stub roads, dead ends or orphaned lots",
+   "roads meet at clean angles; curves smooth and deliberate"
+  ],
+  "consistency": [
+   "one road type along a corridor; no lane drops or sudden width changes",
+   "consistent junction types along a route"
+  ],
+  "green": [
+   "tree-lined arterials and boulevards",
+   "parks and plazas as focal points and buffers",
+   "waterfronts as amenity (promenades, parks)",
+   "noise barriers or planted buffers along highways and railways"
+  ],
+  "density": [
+   "high density near the centre, transit stops and amenities; gradual step-down",
+   "schools, clinics and shops within walking distance",
+   "no towers behind a single road"
+  ],
+  "infrastructure": [
+   "bridges and underpasses aligned with their corridors",
+   "ramps of 6% or less where a longer one fits, never over 8%",
+   "utilities along roads, not across blocks",
+   "unsightly or noisy things go to Northgate"
+  ],
+  "repairAsYouGo": "when an area is touched: remove redundant stubs and double junctions, merge awkward node pairs, re-zone leftover strips, fill gaps with green",
+  "conflict": "function wins for safety-critical and service items; otherwise look for the design that gives both; a cleaner, lasting solution is preferred over a cheaper one",
+  "limits": {
+   "maxRampPct": 8,
+   "preferredRampPct": 6,
+   "minJunctionSpacingM": 30,
+   "stubMaxM": 60,
+   "singleAccessMinM": 800
+  }
+ }
 }

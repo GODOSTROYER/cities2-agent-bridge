@@ -130,3 +130,15 @@ Before: flow 53-55%, TrafficPenalty -4.3, 24 bottleneck icons. After-numbers go 
 - Sewage: 100% exported through the outside pipe connection at (1470,7168) (trunk pipe from (1300,2500) along x 1470; 7 tiles north of Northgate; stream crossed on a road bridge at z 3600-3920). No outlet and no treatment plant left; both types are forbidden in policy.json.
 - Power: wind 1.55M + solar station (1084,2212) 0.28M; battery stations at (932,2560) and (-1884,-406) on high voltage.
 - Hospital at (-1500,940). Traffic lights removed at 51 junctions and ramp ends where they stopped a main flow for a trickle.
+
+## Design standard (owner's standing instruction, 2026-10-11)
+Decide as the city's architect: the city must look good and function well. Urban-design trade-offs are decided without asking and recorded in journals/progress.md under "Design decisions" (what, why, what was removed or moved). The owner is asked only for what changes the goals or the floors: spending below the cash or net floor, raising taxes, anything on the forbidden list, expansion beyond what a fix needs, the order of development points, demolishing something large. The same text is data in policy.json (designStandard); the audit and the plan check are mcp/src/design.ts.
+- Function: a clear road hierarchy with continuous trunks and few conflict points; every district has two or more ways out; services inside the area they serve; transit on the main desire lines with stops at real destinations; freight apart from housing; nothing cut off by a river, a railway or a highway.
+- Form: a recognisable centre, district centres, clean edges; regular blocks; no slivers, stub roads, dead ends or orphaned lots; clean angles; smooth, deliberate curves.
+- Consistency: one road type along a corridor, no lane drops; the same junction type along a route.
+- Green and public space: tree-lined arterials; parks and plazas as focal points and buffers; waterfronts as promenades and parks; planted buffers along highways and railways.
+- Density: high near the centre, the transit stops and the amenities, stepping down gradually; schools, clinics and shops within walking distance; no towers behind a single road.
+- Tidy infrastructure: bridges and underpasses aligned with their corridors; ramps of 6% or less where a longer one fits (never over 8%); utilities along roads; unsightly or noisy things in Northgate.
+- Repair as you go: when an area is touched, remove redundant stubs and double junctions, merge node pairs, re-zone leftover strips, fill gaps with green.
+- When function and looks conflict, function wins for safety-critical and service items; otherwise the design that gives both, even if it costs more.
+- Checks: the loop runs the urban design audit at every review (REPORT.md system "Urban design", count and trend) and puts the four worst defect kinds into journals/queue.json as design-* items. Road plans are checked before building (checkRoadPlan): dead ends, lane drops, steep ramps and at-grade rail or highway crossings are refused.

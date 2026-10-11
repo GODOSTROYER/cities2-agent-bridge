@@ -79,6 +79,22 @@ export function queueMarkdown(items: QueueItem[], now: number): string {
   return `- ${(queueLine(items, now) || 'queue: every item is done or dropped').replace('queue:', 'QUEUE:')}\n${rows.join('\n')}\n`;
 }
 
+/** Feeds the design audit into the queue: one item per defect kind among the four worst kinds present
+ *  (id design-<kind>), updated in place, closed when the kind is gone. Returns true when the queue changed. */
+export const DESIGN_ORDER = ['level_crossing', 'highway_at_grade', 'single_access', 'steep_ramp', 'width_change', 'double_junction', 'stub', 'dead_end', 'sharp_angle', 'no_trees'];
+export function feedDesignQueue(items: QueueItem[], counts: Record<string, number>, worst: { kind: string; x: number; z: number; detail?: string }[], nowIso: string): boolean {
+  let changed = false; const present = DESIGN_ORDER.filter(k => Number(counts[k] ?? 0) > 0).slice(0, 4);
+  for (const kind of DESIGN_ORDER) {
+    const id = `design-${kind}`; const item = items.find(i => i.id === id); const n = Number(counts[kind] ?? 0);
+    const where = worst.filter(w => w.kind === kind).slice(0, 3).map(w => `(${w.x},${w.z})`).join(', ');
+    const title = `Urban design: ${n} ${kind.replace(/_/g, ' ')}${where ? `, first at ${where}` : ''}`;
+    if (!item && present.includes(kind)) { items.push({ id, title, priority: 6 + DESIGN_ORDER.indexOf(kind), status: 'queued', owner: 'opus', created: nowIso, updated: nowIso }); changed = true; }
+    else if (item && n === 0 && item.status !== 'done' && item.status !== 'dropped') { item.status = 'done'; item.title = `Urban design: no ${kind.replace(/_/g, ' ')} left`; item.updated = nowIso; changed = true; }
+    else if (item && n > 0 && item.title !== title && item.status !== 'dropped') { if (item.status === 'done') { item.status = 'queued'; item.updated = nowIso; } item.title = title; changed = true; }   // a count change alone does not reset the stall clock
+  }
+  return changed;
+}
+
 export const queuePath = (repo: string) => join(repo, 'journals', 'queue.json');
 export async function loadQueue(repo: string): Promise<{ items: QueueItem[]; mtime: number }> {
   try { const raw = JSON.parse(await fs.readFile(queuePath(repo), 'utf8')); const items = (Array.isArray(raw) ? raw : raw.items ?? []) as QueueItem[]; return { items, mtime: statSync(queuePath(repo)).mtimeMs }; } catch { return { items: [], mtime: 0 }; }

@@ -37,6 +37,17 @@ const f = it('p', 1, 'queued', { owner: 'code', code: { tool: 'place_service', a
 check(f.status === 'blocked' && f.owner === 'opus' && /no_site/.test(f.blocker ?? '') && /BLOCKED/.test(n2), 'a step code cannot do is handed to the agent as blocked with the reason, not retried in silence');
 const md = queueMarkdown(q, now);
 check(md.startsWith('- QUEUE: 1 in progress') && md.indexOf(' a (opus)') < md.indexOf(' b (opus)') && /BLOCKED: needs 4 points/.test(md), 'progress.md lists the queue, open items first, with the blocker');
+// design audit feeds the queue
+{
+  const { feedDesignQueue } = await import('../src/queue.ts'); const items: QueueItem[] = [it('a', 1, 'queued')];
+  const ch = feedDesignQueue(items, { dead_end: 9, stub: 4, steep_ramp: 5, level_crossing: 2, width_change: 7, no_trees: 30 }, [{ kind: 'level_crossing', x: 1400, z: -689 }, { kind: 'steep_ramp', x: 1318, z: -521 }], iso(0));
+  check(ch && items.some(i => i.id === 'design-level_crossing' && /2 level crossing, first at \(1400,-689\)/.test(i.title)) && items.some(i => i.id === 'design-steep_ramp'), 'the worst design defects become queue items with count and place');
+  check(items.filter(i => i.id.startsWith('design-')).length === 4 && !items.some(i => i.id === 'design-no_trees'), 'only the four worst kinds present enter the queue (no flood of items)');
+  check(!feedDesignQueue(items, { dead_end: 9, stub: 4, steep_ramp: 5, level_crossing: 2, width_change: 7, no_trees: 30 }, [{ kind: 'level_crossing', x: 1400, z: -689 }, { kind: 'steep_ramp', x: 1318, z: -521 }], iso(5)), 'an unchanged audit changes nothing');
+  const lc = items.find(i => i.id === 'design-level_crossing')!; lc.status = 'in_progress';
+  feedDesignQueue(items, { steep_ramp: 5, width_change: 7 }, [], iso(10));
+  check(lc.status === 'done' && /no level crossing left/.test(lc.title), 'a kind that is gone closes its item');
+}
 // district watch
 {
   const { districtCount, districtLine, districtAttention } = await import('../src/district.ts');
