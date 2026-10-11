@@ -9,8 +9,16 @@ Work directory for every command: `C:\Users\user\Documents\CitiesIIAgentBridge-h
 - The status line format, with the UTC time (HH:MM:SS) in front: `[mode] pop .. cash .. net .. floor .. M.. xp .. unemp .. happy .. | did: .. | ATTENTION: ..`
 - `floor` appears in `improve` mode only. The line shows the first three ATTENTION items. `../journals/progress.md` has up to six.
 
+## The work queue and the inbox
+- `../journals/queue.json` is the single work queue. The loop and the agent both read it. Each item has an id, a title, a priority (1 is first), a status (`queued`, `in_progress`, `blocked`, `done`, `dropped`), a blocker reason, an owner (`code`, `haiku`, `opus`) and created and updated times. An item waiting for a measurement window or for money carries `waitUntil` and `waitFor`.
+- Commands: `node src/queue-cli.ts list`, `node src/queue-cli.ts set <id> <status> [blocker]`, `node src/queue-cli.ts wait <id> <minutes> <what for>`, `node src/queue-cli.ts add <id> <priority> <owner> <title>`.
+- The status line ends with `queue: N in progress, N queued, N blocked (reason)`. The loop never prints `nothing due` while unblocked items exist. It raises `ATTENTION: queue has N unblocked items and nobody is working on them` when none of them is in progress, and `STALLED` after 20 minutes without a build action or a queue change. Items owned by `code` with a `code` step (`fix_services`, `place_service`) are done by the loop itself.
+- The agent's rule: while unblocked items exist, it does not wait. It waits only when every item is done, blocked, or waiting for a measurement window or for money, and writes in `progress.md` what it waits for and until when.
+- `../journals/inbox/WAKE`: the coordinator creates this file with every message it sends. Never use one long sleep. Wait with `node src/wait.ts 60`: it returns after at most 60 seconds, and at once when `WAKE` exists (it deletes the file and prints `WAKE`), when the status line shows a new ATTENTION or STALLED, or when `queue.json` changes.
+- While working, keep foreground tool calls to a minute or two; long builds and tests go in the background, so messages arrive quickly.
+
 ## Your routine (repeat until told otherwise)
-1. One Bash call with timeout 600000: `sleep 560; date -u +%H:%M:%S; cat ../journals/pilot/last-line.txt`. Checks come every 9 to 10 minutes.
+1. One Bash call: `node src/wait.ts 60; date -u +%H:%M:%S`. Repeat it; never one long sleep.
 2. Compare the time from `date` with the time at the start of the status line. A line more than 6 minutes old is stale.
 3. Read the status line. If no escalation trigger applies, write nothing and check again.
 4. At most once every 30 minutes, run `head -n 14 ../journals/REPORT.md`. The first lines hold the definition of done. Keep the last reading to compare against.

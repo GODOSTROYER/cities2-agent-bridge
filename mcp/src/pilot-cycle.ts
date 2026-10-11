@@ -12,10 +12,11 @@ import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
 import { evaluate, effectsTable, effectsLines, undoCandidates, stopRepeating } from './effects.ts';
 import { netFloor, upkeepBudget, waitingFor } from './budget.ts';
+import { loadQueue, saveQueue, queueLine, queueDoing, queueAttention, stalled, nextCodeItem, applyCodeResult, queueMarkdown } from './queue.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
-interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; review?: { t: number; allowance: number; spent: number }; stopRepeating?: string[]; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
+interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; review?: { t: number; allowance: number; spent: number }; stopRepeating?: string[]; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[]; queueLine?: string; stalledSince?: number }
 
 const hhmm = () => new Date().toISOString().slice(11, 16);
 const short = (n: number) => Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -75,10 +76,31 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   while (st.did.length > 40) st.did.shift(); while (st.sticky.length > 6) st.sticky.shift();
   const attention = [...plan.attention, ...stuck, ...st.sticky]; st.cycles++;
 
+  // Work queue (journals/queue.json): every owner-approved item. The loop does the items code can do
+  // (one step per cycle), wakes the agent when unblocked items have nobody on them, and raises STALLED
+  // after 20 minutes without a build action or a queue change.
+  const q = await loadQueue(repo); const qNow = Date.now();
+  const codeItem = snap.pilotMode === 'bank' ? undefined : nextCodeItem(q.items, qNow);
+  if (codeItem) {
+    let result: Record<string, any>;
+    const guard = codeItem.code!.tool === 'fix_services' ? { netFloor: snap.netFloor, reserve: Number(policy.cashReserve ?? 0), upkeepFactor: Number(policy.upkeepRealFactor ?? 2.7), upkeepAllowance: snap.upkeepAllowance } : {};
+    try { result = await tool(codeItem.code!.tool, { ...guard, ...codeItem.code!.args }); } catch (e: any) { result = { ok: false, error: String(e?.message ?? e) }; }
+    if (st.review) st.review.spent += Number(result.addedUpkeep ?? 0) || (result.ok ? Number(result.monthlyUpkeep ?? 0) * Number(policy.upkeepRealFactor ?? 2.7) : 0);
+    const note = applyCodeResult(codeItem, result, new Date().toISOString()); st.did.push(`${hhmm()} ${note}`); done.push(note);
+    await log({ tool: codeItem.code!.tool, args: codeItem.code!.args, why: `queue ${codeItem.id}`, ok: result.ok, reason: result.reason ?? result.error, cost: result.cost });
+    await saveQueue(repo, q.items);
+  }
+  let lastAction = 0; try { const tail = (await fs.readFile(join(repo, 'journals', 'actions.jsonl'), 'utf8')).trimEnd().split('\n').pop() ?? ''; lastAction = Date.parse(JSON.parse(tail).utc) || 0; } catch { /* none yet */ }
+  if (done.some(n => n.startsWith('built ') || n.startsWith('bought') || n.startsWith('queue '))) lastAction = qNow;
+  const stallLine = stalled(q.items, Math.max(lastAction, q.mtime), qNow);
+  if (stallLine && !st.stalledSince) { st.stalledSince = qNow; await log({ event: 'stalled', line: stallLine }); } else if (!stallLine) st.stalledSince = undefined;
+  const queueNote = queueAttention(q.items, qNow); if (queueNote) attention.push(queueNote);
+  const qLine = queueLine(q.items, qNow); const queueChanged = (qLine + (stallLine ? ' STALLED' : '')) !== (st.queueLine ?? ''); st.queueLine = qLine + (stallLine ? ' STALLED' : '');
+
   const status = { utc: new Date().toISOString(), mode: snap.pilotMode, netFloor: snap.netFloor, flow: snap.cityFlow, pop: snap.city.pop, cash: snap.city.money, net: snap.city.net, milestone, xp: `${snap.milestone?.xp}/${snap.milestone?.nextXp}`, unemp: snap.jobs?.unemp, happy: snap.happy, demand: snap.demand, attention, last: st.did.slice(-3) };
   await fs.writeFile(join(dir, 'status.json'), JSON.stringify(status));
   // Checkpoint every 15 minutes, at each milestone and after each district or tile.
-  if (reached || Date.now() - st.lastProgress > 15 * 60_000 || done.some(n => n.startsWith('built ') || n.startsWith('bought'))) {
+  if (reached || queueChanged || Date.now() - st.lastProgress > 15 * 60_000 || done.some(n => n.startsWith('built ') || n.startsWith('bought'))) {
     st.lastProgress = Date.now();
     const grows = plan.actions.find(a => a.key === 'grow');
     const next = [grows ? `grow ${grows.args.zone} by demand` : 'no zone has demand 20+ (or growth is backing off)', 'services, traffic, taxes and development points by the rules'];
@@ -101,7 +123,8 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       for (const c of st.changes.filter(c => c.endsWith('(WORSE)'))) await log({ event: 'status_change', line: c });
     } catch (e: any) { await log({ event: 'report_failed', error: String(e?.message ?? e) }); }
     let notes = ''; try { notes = (await fs.readFile(join(dir, 'notes.md'), 'utf8')).split('\n').slice(0, 14).join('\n'); } catch { /* none */ }
-    await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
+    let top = ''; try { top = (await fs.readFile(join(dir, 'top.md'), 'utf8')).trim() + '\n'; } catch { /* none */ }
+    await fs.writeFile(join(repo, 'journals', 'progress.md'), top + (stallLine ? `- ${stallLine}\n` : '') + queueMarkdown(q.items, qNow) + progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   st.track = [...(st.track ?? []), { t: Date.now(), cash: Number(snap.city.money), net: Number(snap.city.net) }].slice(-15);
@@ -111,7 +134,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
   let waiting = snap.pilotMode === 'improve' ? waitingFor(st.track, Number(policy.cashReserve ?? 0), Number(snap.netFloor ?? 0), plannedUpkeep > 0 ? plannedUpkeep : undefined) : '';
   if (waiting && plannedUpkeep > 0) waiting = waiting.replace('for new upkeep', `for ${planned.map(q => q.name).join(' + ')}`);
   const floorNote = snap.pilotMode === 'improve' ? ` (floor ${short(Number(snap.netFloor))}, spendable ${short(Number(snap.city.net) - Number(snap.netFloor))}) reserve ${short(Number(policy.cashReserve ?? 0))} (spendable ${short(Number(snap.city.money) - Number(policy.cashReserve ?? 0))})` : '';
-  const line = `[${snap.pilotMode ?? 'grow'}] pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))}${floorNote} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${waiting ? ' | ' + waiting : ''}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
+  const line = `[${snap.pilotMode ?? 'grow'}] pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))}${floorNote} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || queueDoing(q.items, qNow) || 'nothing due'}${qLine ? ' | ' + qLine : ''}${stallLine ? ' | ' + stallLine : ''}${waiting ? ' | ' + waiting : ''}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   return { line, attention, milestone, reached };
 }

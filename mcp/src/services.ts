@@ -241,7 +241,7 @@ function parseClusters(res: Json): Cluster[] | undefined {
     .map((c: Json): Cluster => [Number(c[0]), Number(c[1]), Number(c[2])]);
 }
 
-export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number; netFloor?: number; upkeepFactor?: number; skip?: string[]; upkeepAllowance?: number } = {}): Promise<Json> {
+export async function fixServices(opts: { maxPlacements?: number; plan?: boolean; reserve?: number; projectPeople?: number; netFloor?: number; upkeepFactor?: number; skip?: string[]; only?: string[]; upkeepAllowance?: number } = {}): Promise<Json> {
   const t0 = Date.now();
   const [snap, buildings, homeClusters] = await multi([
     { command: 'get_snapshot' }, { command: 'service_buildings' },
@@ -275,7 +275,8 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   const held = all.filter(n => ['investigate', 'waiting'].includes(verdictOf(n.need)?.verdict));
   // Fix types the effects table judged ineffective are not repeated (critical and very-high needs still are).
   const stopped = all.filter(n => !held.includes(n) && (opts.skip ?? []).includes(n.need) && !n.critical && snap?.needs?.[n.need]?.priority !== 'very_high');
-  const needs = all.filter(n => !held.includes(n) && !stopped.includes(n));
+  // only: a queue item asks for one kind of service (journals/queue.json); nothing else is placed by that call.
+  const needs = all.filter(n => !held.includes(n) && !stopped.includes(n) && (!opts.only || opts.only.includes(n.need)));
   const investigate = verdicts.filter(v => v.verdict === 'investigate').map(v => ({ factor: v.factor, value: v.value, actions: v.actions, delta: v.delta, hint: v.fix }));
   const waiting = [...new Set(held.filter(n => verdictOf(n.need)?.verdict === 'waiting').map(n => n.t))];
 
