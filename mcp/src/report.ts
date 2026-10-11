@@ -46,6 +46,7 @@ export interface ReportInput {
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
   worked?: string[]; undo?: string[]; // verify-and-learn: effects per action type, and what to undo first
   reserve?: number; // cash that must stay in the bank
+  garbage?: Record<string, any>; // service_headroom.garbage: full facilities, live processing
   netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
   vehicles?: Record<string, { busyPct?: number; efficiencyPct?: number; buildings?: number }>; // service_headroom.vehicles: stations with no vehicle free, efficiency
   outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
@@ -78,6 +79,8 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     const waitingShare = (label: string, share: number, bad: number, critical: number, where: any) => { outcome = `${label} in ${share}% of buildings${where?.length ? ', worst at ' + where.slice(0, 2).map((c: number[]) => `(${c[0]},${c[1]}) x${c[2]}`).join(' ') : ''}; ${outcome}`; extra = worst(extra, share >= critical ? 'critical' : share >= bad ? 'bad' : 'good'); value = Math.min(value ?? 0, -share / 5); };
     if (s.system === 'Post' && oc.post) waitingShare('mail waiting', Number(oc.post.sharePct ?? 0), 15, 40, oc.post.worst);
     if (s.system === 'Garbage' && oc.garbage) waitingShare('garbage piling', Number(oc.garbage.sharePct ?? 0), 10, 30, oc.garbage.worst);
+    // A full landfill accepts nothing and its trucks stand idle (FAILURES #114): capacity on paper is not capacity.
+    if (s.system === 'Garbage' && i.garbage && Number(i.garbage.full ?? 0) > 0) { outcome = `${i.garbage.full} of ${i.garbage.buildings} facilities FULL (trucks idle), live processing ${i.garbage.processingLive}; ${outcome}`; extra = worst(extra, 'bad'); }
     if (s.system === 'Electricity' && oc.power) { const mix = oc.power.mix ?? {}; const dirty = Number(mix.coal?.n ?? 0) + Number(mix.gas?.n ?? 0); outcome = `clean share of use ${oc.power.cleanShareOfUsePct}% (${Object.entries(mix).map(([k, v]: [string, any]) => `${k} ${v.n}`).join(', ')})${Number(oc.power.heldBack ?? 0) ? `, ${oc.power.heldBack} producers held back` : ''}; ${outcome}`; extra = worst(extra, Number(oc.power.heldBack ?? 0) > 0 ? 'bad' : dirty > 0 ? 'ok' : 'good'); }
     if (s.system === 'Sewage' && oc.sewage) { outcome = `${oc.sewage.rawOutlets} raw outlets; ${outcome}`; extra = worst(extra, Number(oc.sewage.rawOutlets) > 0 ? 'ok' : 'good'); }
     if (s.system === 'Police' && oc.crime) { outcome = `high crime in ${oc.crime.highSharePct}% of buildings; ${outcome}`; extra = worst(extra, Number(oc.crime.highSharePct) >= 30 ? 'bad' : 'good'); }

@@ -8,11 +8,11 @@ namespace CitiesIIAgentBridge
     // Reproduce its state transition explicitly, including the working prefab.
     internal static class ObjectPlacementState
     {
-        internal static void Prepare(Type nativeType, object tool, object emptyEntity, object movingEntity, object selectedPrefab)
+        internal static void Prepare(Type nativeType, object tool, object emptyEntity, object movingEntity, object selectedPrefab, object upgradingEntity = null)
         {
             Set(nativeType, tool, "m_MovingObject", movingEntity);
             Set(nativeType, tool, "m_MovingInitialized", emptyEntity);
-            Set(nativeType, tool, "m_UpgradingObject", emptyEntity);
+            Set(nativeType, tool, "m_UpgradingObject", upgradingEntity ?? emptyEntity);
             Set(nativeType, tool, "m_TransformPrefab", null);
             Set(nativeType, tool, "m_Prefab", selectedPrefab);
         }

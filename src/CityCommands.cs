@@ -18,7 +18,11 @@ namespace CitiesIIAgentBridge
         {
             var w = RequireCity(); RequireControl(); CheckBuildTool(w);
             // object:true places any static object prefab (a roundabout onto a junction), not only buildings.
-            ObjectPrefab prefab = (bool?)args["object"] == true ? BuildPrefab<ObjectPrefab>(w, args) : BuildPrefab<BuildingPrefab>(w, args);
+            // upgradeOf {index, version}: the prefab is an extension installed on that building (truck depot, storage, wing).
+            Entity owner = Entity.Null;
+            if (args["upgradeOf"] is JObject uo) { owner = Mod.CheckedEntity((int)uo["index"], (int)uo["version"]); if (!w.EntityManager.Exists(owner) || !w.EntityManager.HasBuffer<Game.Buildings.InstalledUpgrade>(owner)) throw new ArgumentException("invalid_upgrade_owner"); }
+            ObjectPrefab prefab = (bool?)args["object"] == true || owner != Entity.Null ? BuildPrefab<ObjectPrefab>(w, args) : BuildPrefab<BuildingPrefab>(w, args);
+            if (owner != Entity.Null && !w.EntityManager.HasComponent<ServiceUpgradeData>(w.GetExistingSystemManaged<PrefabSystem>().GetEntity(prefab))) throw new ArgumentException("prefab_is_not_an_extension");
             var point = BuildPoint(w, args["position"] as JObject);
             float rotation = args["rotation"] == null ? 0 : RequiredFloat(args, "rotation");
             point.m_Rotation = quaternion.RotateY(math.radians(rotation));
@@ -33,7 +37,7 @@ namespace CitiesIIAgentBridge
             }
             float snapDistance=args["maxSnapDistance"]==null?32:RequiredFloat(args,"maxSnapDistance");
             if(snapDistance<0 || snapDistance>128)throw new ArgumentException("maxSnapDistance_must_be_0_to_128");
-            w.GetExistingSystemManaged<BridgeObjectTool>().Begin(prefab, point, budget, move,(bool?)args["previewOnly"]==true,candidates,(bool?)args["allowDemolition"]==true,snapDistance);
+            w.GetExistingSystemManaged<BridgeObjectTool>().Begin(prefab, point, budget, move,(bool?)args["previewOnly"]==true,candidates,(bool?)args["allowDemolition"]==true,snapDistance,owner);
             return ConstructionAccess.Status(ConstructionAccess.Active);
         }
         private JObject Demolish(JObject args)

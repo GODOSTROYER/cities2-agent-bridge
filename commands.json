@@ -133,6 +133,13 @@
     "undocumented": true
   },
   {
+    "name": "garbage_system",
+    "description": "",
+    "pausing": false,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "get_batch",
     "description": "",
     "pausing": false,
@@ -473,6 +480,13 @@
     "description": "",
     "pausing": false,
     "control": false,
+    "undocumented": true
+  },
+  {
+    "name": "set_building_option",
+    "description": "",
+    "pausing": true,
+    "control": true,
     "undocumented": true
   },
   {

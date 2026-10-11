@@ -147,6 +147,7 @@ namespace CitiesIIAgentBridge
             // The game's own usage figure per service building (ServiceUsage.m_Usage, what the
             // building panel shows): vans out, beds taken, cells used. A norm per resident said
             // "post 31%" while every post office was at 100% (FAILURES #107).
+            long garbageLive = 0; int garbageFull = 0; // a full landfill accepts nothing: its trucks stand idle (FAILURES #114)
             var usage = new Dictionary<string, (double sum, int n, int full)>();
             void Use(string k, Entity b) { if (!em.HasComponent<ServiceUsage>(b)) return; float u = em.GetComponentData<ServiceUsage>(b).m_Usage; usage.TryGetValue(k, out var t); usage[k] = (t.sum + u, t.n + 1, t.full + (u >= 0.95f ? 1 : 0)); }
             var busy = new Dictionary<string, (int n, int noVehicle, double eff)>();
@@ -184,6 +185,7 @@ namespace CitiesIIAgentBridge
                 if (post) Busy("post", e, em.HasComponent<Game.Buildings.PostFacility>(e) && (em.GetComponentData<Game.Buildings.PostFacility>(e).m_Flags & (PostFacilityFlags.CanDeliverMailWithVan | PostFacilityFlags.CanCollectMailWithVan | PostFacilityFlags.HasAvailableTrucks)) != 0);
                 if (death) Busy("deathcare", e, em.HasComponent<Game.Buildings.DeathcareFacility>(e) && (em.GetComponentData<Game.Buildings.DeathcareFacility>(e).m_Flags & DeathcareFacilityFlags.HasAvailableHearses) != 0);
                 if (garbage) Busy("garbage", e, em.HasComponent<Game.Buildings.GarbageFacility>(e) && (em.GetComponentData<Game.Buildings.GarbageFacility>(e).m_Flags & GarbageFacilityFlags.HasAvailableGarbageTrucks) != 0);
+                if (garbage && em.HasComponent<Game.Buildings.GarbageFacility>(e)) { var gf = em.GetComponentData<Game.Buildings.GarbageFacility>(e); garbageLive += gf.m_ProcessingRate; if ((gf.m_Flags & GarbageFacilityFlags.HasAvailableSpace) == 0) garbageFull++; }
                 if (hospital) Busy("ambulances", e, em.HasComponent<Game.Buildings.Hospital>(e) && (em.GetComponentData<Game.Buildings.Hospital>(e).m_Flags & HospitalFlags.HasAvailableAmbulances) != 0);
             }
             // People by age (residents only), for the eligible counts of each school level.
@@ -204,7 +206,7 @@ namespace CitiesIIAgentBridge
                 ["education"] = new JObject { ["elementary"] = Level(1), ["high"] = Level(2), ["college"] = Level(3), ["university"] = Level(4) },
                 ["health"] = new JObject { ["patients"] = patients, ["capacity"] = patientCap, ["ambulances"] = ambulances, ["buildings"] = clinics },
                 ["deathcare"] = new JObject { ["stored"] = bodiesStored, ["capacity"] = bodyStorage, ["hearses"] = hearses, ["buildings"] = deathcare },
-                ["garbage"] = new JObject { ["capacity"] = garbageCap, ["trucks"] = garbageTrucks, ["processing"] = garbageSpeed, ["buildings"] = garbageSites },
+                ["garbage"] = new JObject { ["capacity"] = garbageCap, ["trucks"] = garbageTrucks, ["processing"] = garbageSpeed, ["processingLive"] = garbageLive, ["full"] = garbageFull, ["buildings"] = garbageSites },
                 ["fire"] = new JObject { ["engines"] = fireEngines, ["buildings"] = fireHouses },
                 ["police"] = new JObject { ["cars"] = patrolCars, ["jail"] = jail, ["buildings"] = policeStations },
                 ["post"] = new JObject { ["vans"] = postVans, ["mailCapacity"] = mailCap, ["buildings"] = postOffices },

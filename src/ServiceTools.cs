@@ -42,12 +42,14 @@ namespace CitiesIIAgentBridge
         private DateTime deadline;
         private HashSet<Entity> before;
         private Entity moved;
+        private Entity upgrading;
+        private HashSet<Entity> upgradesBefore;
         private Entity expectedPrefab;
         private ControlPoint[] candidates;
         private int candidateIndex;
         private bool previewOnly, allowDemolition, applied;
         private float maxSnapDistance;
-        public void Begin(ObjectPrefab building, ControlPoint p, int maxCost, Entity move, bool preview = false, ControlPoint[] alternatives = null, bool demolish = false, float snapDistance = 32)
+        public void Begin(ObjectPrefab building, ControlPoint p, int maxCost, Entity move, bool preview = false, ControlPoint[] alternatives = null, bool demolish = false, float snapDistance = 32, Entity upgradeOf = default)
         {
             var requestedPrefab = World.GetExistingSystemManaged<PrefabSystem>().GetEntity(building);
             if (move != Entity.Null && (!EntityManager.HasComponent<PrefabRef>(move) || EntityManager.GetComponentData<PrefabRef>(move).m_Prefab != requestedPrefab))
@@ -58,7 +60,9 @@ namespace CitiesIIAgentBridge
             expectedPrefab = requestedPrefab;
             candidates = alternatives ?? new[] { p }; candidateIndex = 0; previewOnly = preview; allowDemolition = demolish; applied = false; maxSnapDistance = snapDistance;
             ConstructionAccess.Results[operation]["attempts"] = new JArray();
-            prefab = building; mode = move == Entity.Null ? Mode.Create : Mode.Move;
+            upgrading = upgradeOf; upgradesBefore = new HashSet<Entity>();
+            if (upgrading != Entity.Null) foreach (var u in EntityManager.GetBuffer<Game.Buildings.InstalledUpgrade>(upgrading, true)) upgradesBefore.Add(u.m_Upgrade);
+            prefab = building; mode = upgrading != Entity.Null ? Mode.Upgrade : move == Entity.Null ? Mode.Create : Mode.Move;
             if (move != Entity.Null) StartMoving(move);
             World.GetExistingSystemManaged<ToolSystem>().activeTool = this;
         }
@@ -79,7 +83,7 @@ namespace CitiesIIAgentBridge
                     // ObjectToolSystem.OnUpdate normally resets move/upgrade state and updates
                     // m_Prefab. We bypass that input-driven method, so do it before every preview.
                     ObjectPlacementState.Prepare(typeof(ObjectToolSystem), this, Entity.Null, moved,
-                        World.GetExistingSystemManaged<PrefabSystem>().GetPrefab<ObjectPrefab>(expectedPrefab));
+                        World.GetExistingSystemManaged<PrefabSystem>().GetPrefab<ObjectPrefab>(expectedPrefab), upgrading != Entity.Null ? (object)upgrading : null);
                     point = candidates[candidateIndex];
                     GetAvailableSnapMask(out m_SnapOnMask,out m_SnapOffMask);
                     m_SnapOffMask &= ~(Snap.NetSide | Snap.Shoreline | Snap.ExistingGeometry);
@@ -116,7 +120,7 @@ namespace CitiesIIAgentBridge
                             if(t.m_Original!=Entity.Null && t.m_Original!=moved && (t.m_Flags&TempFlags.Delete)!=0 && EntityManager.HasComponent<Game.Buildings.Building>(t.m_Original))
                                 throw new InvalidOperationException("would_demolish_existing_building");
                     }
-                    ValidateBuildingPreview();
+                    if (upgrading == Entity.Null) ValidateBuildingPreview(); else ValidateUpgradePreview();
                     ConstructionAccess.Results[operation]["previewCost"] = NativeBuild.Cost(World, budget);
                     ConstructionAccess.Results[operation]["snappedPosition"] = new JObject{["x"]=point.m_Position.x,["y"]=point.m_Position.y,["z"]=point.m_Position.z};
                     ConstructionAccess.Results[operation]["snappedRotation"] = new JArray(point.m_Rotation.value.x,point.m_Rotation.value.y,point.m_Rotation.value.z,point.m_Rotation.value.w);
@@ -140,11 +144,33 @@ namespace CitiesIIAgentBridge
                             if (EntityManager.GetComponentData<PrefabRef>(e).m_Prefab == expectedPrefab && math.distance(EntityManager.GetComponentData<Game.Objects.Transform>(e).m_Position.xz, point.m_Position.xz) < 16) created.Add(NativeBuild.Id(e));
                     ConstructionAccess.Results[operation]["createdObjects"] = created;
                 }
+                // An extension is confirmed by the owner's list of installed upgrades.
+                if (upgrading != Entity.Null && EntityManager.Exists(upgrading) && EntityManager.HasBuffer<Game.Buildings.InstalledUpgrade>(upgrading))
+                {
+                    var installed = new JArray();
+                    foreach (var u in EntityManager.GetBuffer<Game.Buildings.InstalledUpgrade>(upgrading, true))
+                        if (!upgradesBefore.Contains(u.m_Upgrade) && EntityManager.Exists(u.m_Upgrade) && EntityManager.HasComponent<PrefabRef>(u.m_Upgrade) && EntityManager.GetComponentData<PrefabRef>(u.m_Upgrade).m_Prefab == expectedPrefab) { installed.Add(NativeBuild.Id(u.m_Upgrade)); created.Add(NativeBuild.Id(u.m_Upgrade)); }
+                    ConstructionAccess.Results[operation]["installedUpgrades"] = installed;
+                }
                 if (created.Count == 0 && !movedSuccessfully) throw new InvalidOperationException("building_change_not_observed");
                 Finish("complete");
             }
             catch (Exception e) { Finish("failed", e.Message); }
             return deps;
+        }
+        // An extension preview: the temp object of the extension exists and nothing else is deleted.
+        private void ValidateUpgradePreview()
+        {
+            bool found = false;
+            using (var q = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<PrefabRef>()))
+            using (var entities = q.ToEntityArray(Allocator.Temp)) foreach (var entity in entities)
+            {
+                var temp = EntityManager.GetComponentData<Temp>(entity);
+                if (EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab == expectedPrefab && (temp.m_Flags & TempFlags.Delete) == 0) found = true;
+                if ((temp.m_Flags & TempFlags.Delete) != 0 && temp.m_Original == upgrading) throw new InvalidOperationException("upgrade_would_remove_owner");
+            }
+            ConstructionAccess.Results[operation]["upgradeOf"] = NativeBuild.Id(upgrading);
+            if (!found) throw new InvalidOperationException("upgrade_preview_missing");
         }
         private void ValidateBuildingPreview()
         {

@@ -1,10 +1,7 @@
-// LIVE helper (read-only): every road edge near a point with traffic volume and flow, busiest first.
-//   node test/tr.ts <x> <z> <radius> [minVolumePct]
+// LIVE helper (read-only): where vehicle time is lost. Edges ranked by delay (or volume / flow), citywide or in an area.
+//   node test/tr.ts [by=delay|volume|flow] [top=30] [x z radius]
 import { callOk } from '../src/bridge.ts';
-const [x, z, r, minVol = 0] = process.argv.slice(2).map(Number);
-const t = await callOk('traffic_hotspots', { top: 5000, minLength: 0 }, 30);
-const by = new Map<number, any>((t.hotspots ?? []).map((h: any) => [h.index, h]));
-const d = await callOk('get_network_edges', { x, z, radius: r }, 30);
-const rows = (d.edges ?? []).map((e: any) => ({ e, h: by.get(e.index) })).filter((q: any) => q.h && Number(q.h.volumePct ?? 0) >= minVol).sort((a: any, b: any) => Number(b.h.volumePct) - Number(a.h.volumePct));
-for (const { e, h } of rows) { const a = e.curve[0], b = e.curve[e.curve.length - 1]; console.log(String(e.index).padEnd(7), String(e.prefab).padEnd(26), `(${Math.round(a.x)},${Math.round(a.z)})->(${Math.round(b.x)},${Math.round(b.z)})`.padEnd(28), `vol ${String(h.volumePct).padStart(3)}% flow ${String(h.flowPct).padStart(3)}% len ${h.length} arms ${h.arms} ${h.class}`); }
-console.log('cityFlow', t.cityFlow, 'edges with data', rows.length, 'of', (d.edges ?? []).length);
+const [by = 'delay', top = '30', x, z, r] = process.argv.slice(2);
+const t = await callOk('traffic_hotspots', { top: Number(top), minLength: 0, by, ...(x !== undefined ? { x: Number(x), z: Number(z), radius: Number(r ?? 500) } : {}) }, 30);
+for (const h of t.hotspots ?? []) console.log(String(h.index).padEnd(8), String(h.prefab).padEnd(26), `(${h.x},${h.z})`.padEnd(16), `delay ${String(h.delayPct).padStart(5)}%  vol ${String(h.volumePct).padStart(3)}%  flow ${String(h.flowPct).padStart(3)}%  len ${String(h.length).padStart(4)}  arms ${h.arms}  ${h.class}`);
+console.log('cityFlow', t.cityFlow, 'flowByVolume', t.flowByVolumePct, 'edges', t.edges, 'noData', t.noData, JSON.stringify(t.classes));

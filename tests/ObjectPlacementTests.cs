@@ -13,6 +13,7 @@ internal static class ObjectPlacementTests
         { m_MovingObject = m_MovingInitialized = entity; m_Prefab = prefab; }
         internal void RetainUpgrade() { m_UpgradingObject = 9; m_TransformPrefab = new object(); }
         internal (int original, object prefab) Definition() => (m_MovingObject, m_Prefab);
+        internal int Upgrading => m_UpgradingObject;
         internal bool OtherStateCleared => m_MovingInitialized == 0 && m_UpgradingObject == 0 && m_TransformPrefab == null;
     }
 
@@ -35,6 +36,10 @@ internal static class ObjectPlacementTests
         // A failed/interrupted move still leaves the native field set; next Begin must reset it.
         ObjectPlacementState.Prepare(typeof(NativeToolFixture), tool, 0, 0, police);
         Check(tool.Definition().original == 0, "create after interrupted relocation clears native target");
+        ObjectPlacementState.Prepare(typeof(NativeToolFixture), tool, 0, 0, fire, 12);
+        Check(tool.Upgrading == 12 && tool.Definition().original == 0, "an extension request names its owner as the upgrading object");
+        ObjectPlacementState.Prepare(typeof(NativeToolFixture), tool, 0, 0, police);
+        Check(tool.Upgrading == 0, "the next plain placement clears the upgrade owner");
         bool missing = false;
         try { ObjectPlacementState.Prepare(typeof(object), new object(), 0, 0, fire); } catch (MissingFieldException) { missing = true; }
         Check(missing, "changed native layout fails closed");

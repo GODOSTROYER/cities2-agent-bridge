@@ -338,8 +338,16 @@ namespace CitiesIIAgentBridge
             if (highway) return volumeShare >= 0.5 ? "ramp_or_merge_capacity" : "queue_from_the_street_it_feeds";
             if (length < 60) return "junction_spacing";
             if (volumeShare >= 0.5) return junctionArms >= 4 ? "junction_capacity" : "link_capacity";
-            if (volumeShare < 0.15) return "blocked_downstream";
+            if (volumeShare < 0.15) return "local_friction";
             return junctionArms >= 4 ? "junction_capacity" : "missing_parallel_link";
+        }
+        // Vehicle time lost on an edge, in arbitrary units: vehicle-distance x (free time / real time - 1).
+        // Ranks hotspots by what they cost drivers, so a slow street nobody uses does not outrank a
+        // busy corridor at half speed.
+        public static double Delay(double vehicleDistance, double flowPct)
+        {
+            double f = Math.Max(1.0, Math.Min(100.0, flowPct)) / 100.0;
+            return Math.Max(0.0, vehicleDistance) * (1.0 / f - 1.0);
         }
         public static string FixFor(string failureClass)
         {
@@ -349,7 +357,7 @@ namespace CitiesIIAgentBridge
                 case "junction_capacity": return "roundabout sized to the roads, or grade separation for the through-flow";
                 case "link_capacity": return "a parallel link or the next road class on the whole corridor";
                 case "missing_parallel_link": return "a second route (river crossing, district-to-district link)";
-                case "blocked_downstream": return "follow the queue downstream: the cause is the next junction or ramp";
+                case "local_friction": return "few vehicles, slow: short blocks, kerb parking and turns; not a capacity problem - fix only where the delay share is high";
                 case "ramp_or_merge_capacity": return "longer or second ramp; another interchange";
                 case "queue_from_the_street_it_feeds": return "the arterial the ramp feeds: first junction set back, roundabout";
                 default: return "none";
