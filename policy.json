@@ -1,13 +1,13 @@
 {
  "_comment": "Owner goals and constraints as data (REDESIGN Phase 4). The loop reads this file every cycle; a change of mind is an edit here, not a code change. mode: grow | bank | improve.",
  "mode": "improve",
- "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 75%+, no problem icons, net at or above the floor",
+ "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow 75%+, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
  "expansion": false,
  "expansionException": "only the minimum for a very-high-priority need (land for a facility that fixes a critical service, jobs if unemployment cannot be fixed otherwise, a milestone that unlocks transit); justify in progress.md",
- "netFloorBaseline": 1600000,
+ "netFloorBaseline": 2300000,
  "netFloorMarginPct": 2,
  "upkeepRealFactor": 2.7,
- "cashReserve": 1000000,
+ "cashReserve": 4000000,
  "bankTarget": 5000000,
  "taxPins": "journals/tax-pins.json (Residential 15, business 10-11); never cut",
  "targets": {
@@ -18,7 +18,9 @@
   "trafficFlowPct": 75,
   "headroomUsagePct": 78,
   "coverageGapPct": 8,
-  "problemIcons": 0
+  "problemIcons": 0,
+  "cleanEnergyPct": 100,
+  "rawSewageDischarge": 0
  },
  "never": [
   "ground cable, pipe or ground road across water",
@@ -31,5 +33,6 @@
   "happiness factors worst first (Tax exempt)",
   "services by the worse of capacity, coverage and outcome",
   "quality upgrades with little or no upkeep"
- ]
+ ],
+ "spending": "one-off costs only from cash above cashReserve; new upkeep only from net above the floor, by projection; below either floor only true emergencies (utility shortage, network warning, fire, water about to run out)"
 }

@@ -80,7 +80,7 @@ const grows = (actions: PilotAction[]) => actions.filter(a => a.key === 'grow');
   const f = load('all-good.json'); const snap = f.snap;
   const r = buildReport({ snap, netFloor: snap.netFloor, mode: snap.pilotMode, when: f.when });
   const doneLines = r.markdown.split('\n').filter(l => /^- \[(x| )\]/.test(l));
-  check(doneLines.length === 5 && doneLines.every(l => l.startsWith('- [x]')), 'the definition of done has all five lines checked');
+  check(!r.markdown.split('## Definition of done')[1].split('## ')[0].includes('- [ ]') && (r.markdown.match(/- \[x\]/g) ?? []).length >= 5, 'the definition of done has every line checked');
   check(r.markdown.includes('- [x] every system good: all good'), 'every system is good');
   const plan = decide(snap, fresh(), NOW);
   check(!has(plan.actions, 'grow'), 'decide plans no growth while demand is low');

@@ -45,6 +45,7 @@ export interface ReportInput {
   snap: Record<string, any>; table?: Record<string, { pct: number | null; projected: number | null; status: string }>; coverage?: Record<string, number>;
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
   worked?: string[]; undo?: string[]; // verify-and-learn: effects per action type, and what to undo first
+  reserve?: number; // cash that must stay in the bank
   netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
   vehicles?: Record<string, { busyPct?: number; efficiencyPct?: number; buildings?: number }>; // service_headroom.vehicles: stations with no vehicle free, efficiency
   outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
@@ -97,7 +98,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   add({ system: 'Population and happiness', status: Number(snap.happy ?? 0) >= 65 ? 'good' : Number(snap.happy ?? 0) >= 50 ? 'ok' : 'bad', outcome: `pop ${snap.city?.pop}, happiness ${snap.happy}, health ${snap.health}`, capacity: '-', coverage: '-', trend: '', action: '-', blocked: '', value: Number(snap.happy ?? 0) / 10 });
   const cash = Number(snap.city?.money ?? 0), net = Number(snap.city?.net ?? 0);
   const floor = Number(i.netFloor ?? 0);
-  add({ system: 'Budget', status: net < 0 || (floor > 0 && net < floor) ? 'critical' : cash < 1_000_000 ? 'ok' : 'good', outcome: `${floor > 0 ? `net floor ${floor}, margin ${net - floor}; ` : ''}cash ${cash}, net ${net}/month, taxes ${JSON.stringify(snap.tax ?? {})}, Tax factor ${factors.Tax ?? '-'} (exempt)`, capacity: '-', coverage: '-', trend: '', action: 'reserve 1,000,000; taxes pinned', blocked: '', value: net / 100000 });
+  add({ system: 'Budget', status: net < 0 || (floor > 0 && net < floor) || (Number(i.reserve ?? 0) > 0 && cash < Number(i.reserve)) ? 'critical' : 'good', outcome: `${floor > 0 ? `net floor ${floor}, spendable upkeep ${net - floor}; ` : ''}${i.reserve ? `cash reserve ${i.reserve}, spendable cash ${cash - Number(i.reserve)}; ` : ''}cash ${cash}, net ${net}/month, taxes ${JSON.stringify(snap.tax ?? {})}, Tax factor ${factors.Tax ?? '-'} (exempt)`, capacity: '-', coverage: '-', trend: '', action: 'reserve 1,000,000; taxes pinned', blocked: '', value: net / 100000 });
   add({ system: 'Milestone', status: 'ok', outcome: `milestone ${snap.milestone?.achieved}, XP ${snap.milestone?.xp}/${snap.milestone?.nextXp}`, capacity: '-', coverage: '-', trend: '', action: 'grow population and happiness', blocked: '', value: Number(snap.milestone?.xp ?? 0) / 1000 });
   for (const n of NOT_READ) rows.push({ system: n, status: 'unknown', outcome: 'not read by the bridge yet', capacity: '-', coverage: '-', trend: '', action: 'add a reader', blocked: 'harness', value: null });
   // Diagnosis (Phase 4): the cause class of every bad row, and root causes before knock-on effects.
@@ -118,6 +119,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     ['traffic flow 75% or better', Number.isFinite(flowNow) && flowNow >= 75, `${Number.isFinite(flowNow) ? flowNow : '?'}%`],
     ['no problem icons', iconTotal === 0, `${iconTotal} icons`],
     ['net at or above the floor', floor <= 0 || net >= floor, floor > 0 ? `net ${net}, floor ${floor}` : 'no floor set'],
+    ['cash at or above the reserve', !i.reserve || cash >= Number(i.reserve), i.reserve ? `cash ${cash}, reserve ${i.reserve}` : 'no reserve set'],
   ];
   const md = [`# City report ${i.when}${i.mode ? ' (mode ' + i.mode + ')' : ''}`, '', '## Definition of done', ...done.map(([name, pass, detail]) => `- [${pass ? 'x' : ' '}] ${name}: ${detail}`), '', '## Top problems and what is being done',
     ...(top.length ? top.map((r, k) => `${k + 1}. **${r.system}** (${r.status}; cause: ${r.cause}${r.rootOf?.length ? '; root of ' + r.rootOf.join(', ') : ''}${r.drivenBy ? '; driven by ' + r.drivenBy : ''}): ${r.outcome}${r.capacity !== '-' ? ', capacity ' + r.capacity : ''}. ${r.cause && !['none', 'unknown'].includes(r.cause) ? r.fix : r.action}${r.blocked ? '. Blocked by: ' + r.blocked : ''}`) : ['Nothing critical or bad.']),

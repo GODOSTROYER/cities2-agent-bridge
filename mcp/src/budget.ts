@@ -109,3 +109,15 @@ export function floorVerdict(i: { net: number; floor: number; monthlyUpkeep: num
   if (i.critical) return { ok: true, projected, floor: i.floor, margin, reason: 'critical_despite_floor' };
   return { ok: false, projected, floor: i.floor, margin, reason: 'net_floor' };
 }
+
+// PURE. What the improve loop is waiting for and roughly how long (owner: waiting, not cutting, is
+// the answer to "cannot afford it yet"). track = recent readings {t (ms), cash, net}; rates come
+// from the first and last reading. Returns '' when both floors are met with room to spend.
+export function waitingFor(track: { t: number; cash: number; net: number }[], reserve: number, floor: number, minUpkeepRoom = 30_000): string {
+  if (!track.length) return ''; const last = track[track.length - 1], first = track[0]; const minutes = Math.max(1 / 60, (last.t - first.t) / 60000);
+  const eta = (missing: number, perMinute: number) => missing <= 0 ? '' : perMinute > 0 ? `about ${Math.max(1, Math.round(missing / perMinute))} min` : 'not rising yet';
+  const m = (n: number) => (n / 1e6).toFixed(2) + 'M'; const parts: string[] = [];
+  if (last.cash < reserve) parts.push(`cash ${m(last.cash)} of ${m(reserve)}, ${eta(reserve - last.cash, (last.cash - first.cash) / minutes)}`);
+  if (last.net < floor + minUpkeepRoom) parts.push(`net ${m(last.net)} needs ${m(floor + minUpkeepRoom)} for new upkeep, ${eta(floor + minUpkeepRoom - last.net, (last.net - first.net) / minutes)}`);
+  return parts.length ? 'waiting: ' + parts.join('; ') : '';
+}

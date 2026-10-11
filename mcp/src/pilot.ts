@@ -72,7 +72,8 @@ export function growthSet(demand: Record<string, any> | undefined, jobsState: 'o
 // What to buy with development points, in the order that unblocks growth: education (college for
 // the college-level vacancies), transport (bus lines), roads (wider roads, highways), then the
 // services whose needs escalate most (health, deathcare, garbage, fire, police), then anything.
-export const WISH: RegExp[] = [/postsorting/i, /college/i, /universit/i, /bus/i, /road|highway|roundabout|bridge/i, /hospital|health|clinic/i, /cremat|death/i, /recycl|incinerat|garbage/i, /fire/i, /police/i, /park|transport|train|tram|subway|taxi/i, /telecom|server|post|welfare/i, /./];
+// Order for the improve goal: what fixes a failing service or a negative happiness factor first.
+export const WISH: RegExp[] = [/postsorting/i, /advancedelectric|solar|geotherm|battery/i, /watertreat/i, /recycl/i, /hospital/i, /welfare/i, /policehead/i, /college/i, /universit/i, /bus/i, /road|highway|roundabout|bridge/i, /health|clinic/i, /cremat|death/i, /incinerat|garbage/i, /fire/i, /police/i, /park|transport|train|tram|subway|taxi/i, /telecom|server|post|welfare/i, /./];
 export function wishedNode(nodes: Record<string, any>[], points: number): Record<string, any> | null {
   // Parking nodes cost many points and unblock nothing: only when nothing else is left.
   const fits = nodes.filter(n => n.canBuy && Number(n.cost ?? 0) <= points); const useful = fits.filter(n => !/parking/i.test(String(n.name)));
@@ -162,7 +163,7 @@ export function decide(snap: Record<string, any>, memo: PilotMemo, now: number, 
   const planned = actions.filter(a => a.key === 'grow').map(a => ({ zone: String(a.args.zone), cols: Number(a.args.cols), rows: Number(a.args.rows) }));
   const people = plannedPeople(planned);
   if (due(memo, 'services', now, 3) || people > 0)
-    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: improve ? { maxPlacements: 3, netFloor: floor, upkeepFactor: Number(snap.policy?.upkeepRealFactor ?? 2.7) } : bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: improve ? `improve mode: services by condition, net floor ${floor}` : bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
+    actions.splice(Math.min(servicesAt, actions.length), 0, { key: 'services', tool: 'fix_services', args: improve ? { maxPlacements: 3, netFloor: floor, reserve, upkeepFactor: Number(snap.policy?.upkeepRealFactor ?? 2.7) } : bank ? { maxPlacements: 2, reserve: 1_000_000_000 } : { maxPlacements: 4, ...(people > 0 ? { projectPeople: people } : {}) }, why: improve ? `improve mode: services by condition, net floor ${floor}` : bank ? 'bank mode: only over-capacity and very-high needs' : `services ahead of need${people ? ` (+${people} people planned)` : ''}` });
 
   // 3b. Development points: buy the next node on the wish list (what unblocks growth first).
   const tree = snap.devTree;
@@ -216,7 +217,7 @@ export function progressBlock(snap: Record<string, any>, did: string[], next: st
   const icons = Object.entries(snap.icons ?? {}).map(([k, v]) => `${k.replace(/ Notification$/, '')} ${v}`).join(', ') || 'none';
   const lines = [
     `# Progress ${when}`,
-    `- MODE ${snap.pilotMode ?? 'grow'}${snap.pilotMode === 'improve' ? `: net floor ${snap.netFloor} (baseline ${snap.policy?.netFloorBaseline}), margin ${Number(snap.city?.net ?? 0) - Number(snap.netFloor ?? 0)}` : ''}`,
+    `- MODE ${snap.pilotMode ?? 'grow'}${snap.pilotMode === 'improve' ? `: net ${snap.city?.net} against floor ${snap.netFloor} (baseline ${snap.policy?.netFloorBaseline}) = spendable upkeep ${Number(snap.city?.net ?? 0) - Number(snap.netFloor ?? 0)}; cash ${snap.city?.money} against reserve ${snap.policy?.cashReserve} = spendable cash ${Number(snap.city?.money ?? 0) - Number(snap.policy?.cashReserve ?? 0)}` : ''}`,
     `- pop ${snap.city?.pop}, cash ${snap.city?.money}, net ${snap.city?.net}, milestone ${snap.milestone?.achieved} (XP ${snap.milestone?.xp}/${snap.milestone?.nextXp})`,
     `- unemployment ${snap.jobs?.unemp}%, vacancies by education ${JSON.stringify(snap.jobs?.vacantByEdu ?? [])}, demand ${JSON.stringify(snap.demand ?? {})}`,
     ...(diagnosis ? [`- jobs: ${diagnosis}`] : []),

@@ -1,5 +1,5 @@
 // Offline checks: the owner's reserve rule, the growth blockers and the utility postcondition.
-import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, sustainedNet, netFloor, floorVerdict, RESERVE } from '../src/budget.ts';
+import { spendVerdict, growClass, blockingNeeds, utilityOutcome, looseFrom, linePoints, wetSpan, spansWater, sustainedNet, netFloor, floorVerdict, waitingFor, RESERVE } from '../src/budget.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 
 check(RESERVE === 1_000_000, 'the working reserve is 1,000,000');
@@ -50,4 +50,9 @@ fv = floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 75_000 });
 check(!fv.ok && fv.reason === 'net_floor' && fv.projected === 1_797_500, 'a college (75,000 listed) would take net under the floor and is refused');
 check(floorVerdict({ net: 2_000_000, floor: 1_960_000, monthlyUpkeep: 75_000, critical: true }).reason === 'critical_despite_floor', 'a critical fix goes ahead and the breach is named');
 check(floorVerdict({ net: 1_900_000, floor: 1_960_000, monthlyUpkeep: 0 }).ok === false, 'with net already under the floor nothing that is not critical is added, even at zero upkeep');
+const t0 = 1_000_000_000_000;
+check(waitingFor([{ t: t0, cash: 3_400_000, net: 2_230_000 }, { t: t0 + 10 * 60000, cash: 3_600_000, net: 2_250_000 }], 4_000_000, 2_300_000) === 'waiting: cash 3.60M of 4.00M, about 20 min; net 2.25M needs 2.33M for new upkeep, about 40 min', 'THE OWNER EXAMPLE: the status line says what the loop waits for and roughly how long');
+check(waitingFor([{ t: t0, cash: 5_000_000, net: 2_460_000 }, { t: t0 + 60000, cash: 5_030_000, net: 2_460_000 }], 4_000_000, 2_410_000) === '', 'nothing is waited for when cash is above the reserve and net has room above the floor');
+check(waitingFor([{ t: t0, cash: 3_600_000, net: 2_500_000 }, { t: t0 + 60000, cash: 3_500_000, net: 2_500_000 }], 4_000_000, 2_300_000) === 'waiting: cash 3.50M of 4.00M, not rising yet', 'a falling balance is reported as not rising, never as an ETA');
+check(waitingFor([], 4_000_000, 2_300_000) === '', 'no readings, no claim');
 process.exit(failed ? 1 : 0);

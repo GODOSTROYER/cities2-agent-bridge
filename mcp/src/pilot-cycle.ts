@@ -11,11 +11,11 @@ import { join } from 'node:path';
 import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
 import { evaluate, effectsTable, effectsLines, undoCandidates } from './effects.ts';
-import { sustainedNet, netFloor } from './budget.ts';
+import { sustainedNet, netFloor, waitingFor } from './budget.ts';
 import type { PilotMemo } from './pilot.ts';
 
 export type ToolFn = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
-interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; netRecent?: number[]; netSustainedMax?: number; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
+interface State { memo: PilotMemo; did: string[]; sticky: string[]; lastProgress: number; cycles: number; netRecent?: number[]; netSustainedMax?: number; track?: { t: number; cash: number; net: number }[]; reportValues?: Record<string, number>; reportStatus?: Record<string, string>; reportSince?: string; changes?: string[] }
 
 const hhmm = () => new Date().toISOString().slice(11, 16);
 const short = (n: number) => Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -87,7 +87,7 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       const jsonl = async (file: string) => { try { return (await fs.readFile(join(repo, 'journals', file), 'utf8')).split('\n').filter(Boolean).slice(-600).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { return []; } };
       let worked: string[] = [], undo: string[] = [];
       try { const ev = evaluate(await jsonl('actions.jsonl'), await jsonl('metrics-history.jsonl'), Date.now()); worked = effectsLines(effectsTable(ev), 8); undo = undoCandidates(ev).slice(0, 4).map(u => `${u.why}: ${u.details.slice(0, 4).join(', ')}`); } catch { /* history not ready */ }
-      const rep = buildReport({ snap, outcomes, vehicles, worked, undo, netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
+      const rep = buildReport({ snap, outcomes, vehicles, worked, undo, reserve: Number(policy.cashReserve ?? 0), netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
       const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
       st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);
       st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));
@@ -100,7 +100,10 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
     await fs.writeFile(join(repo, 'journals', 'progress.md'), progressBlock(snap, st.did, next, attention, new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', plan.diagnosis, memo.servicesLine) + `- REPORT.md (every system ranked worst first) is live since ${st.reportSince ?? 'now'}; status changes this review: ${(st.changes ?? []).join('; ') || 'none'}\n` + (notes ? notes + '\n' : ''));
   }
   await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
-  const floorNote = snap.pilotMode === 'improve' ? ` floor ${short(Number(snap.netFloor))}` : '';
-  const line = `[${snap.pilotMode ?? 'grow'}] pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))}${floorNote} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
+  st.track = [...(st.track ?? []), { t: Date.now(), cash: Number(snap.city.money), net: Number(snap.city.net) }].slice(-15);
+  const waiting = snap.pilotMode === 'improve' ? waitingFor(st.track, Number(policy.cashReserve ?? 0), Number(snap.netFloor ?? 0)) : '';
+  const floorNote = snap.pilotMode === 'improve' ? ` (floor ${short(Number(snap.netFloor))}, spendable ${short(Number(snap.city.net) - Number(snap.netFloor))}) reserve ${short(Number(policy.cashReserve ?? 0))} (spendable ${short(Number(snap.city.money) - Number(policy.cashReserve ?? 0))})` : '';
+  const line = `[${snap.pilotMode ?? 'grow'}] pop ${short(Number(snap.city.pop))} cash ${short(Number(snap.city.money))} net ${short(Number(snap.city.net))}${floorNote} M${milestone} xp ${snap.milestone?.xp}/${snap.milestone?.nextXp} unemp ${snap.jobs?.unemp}% happy ${snap.happy} | did: ${done.join('; ') || 'nothing due'}${waiting ? ' | ' + waiting : ''}${reached ? ' | MILESTONE ' + milestone : ''}${attention.length ? ' | ATTENTION: ' + attention.slice(0, 3).join(' / ') : ''}`;
+  await fs.writeFile(join(dir, 'state.json'), JSON.stringify(st));
   return { line, attention, milestone, reached };
 }
