@@ -273,6 +273,13 @@
     "undocumented": true
   },
   {
+    "name": "get_policies",
+    "description": "",
+    "pausing": true,
+    "control": false,
+    "undocumented": true
+  },
+  {
     "name": "get_prefab_details",
     "description": "",
     "pausing": false,
@@ -554,6 +561,13 @@
   },
   {
     "name": "set_parking_fee",
+    "description": "",
+    "pausing": true,
+    "control": true,
+    "undocumented": true
+  },
+  {
+    "name": "set_policy",
     "description": "",
     "pausing": true,
     "control": true,

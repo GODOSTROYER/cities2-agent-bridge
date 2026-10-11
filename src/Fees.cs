@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Game.Buildings;
@@ -23,6 +24,54 @@ namespace CitiesIIAgentBridge
             using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<BuildingOptionData>()))
             using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var p in es) if (BuildingUtils.HasOption(em.GetComponentData<BuildingOptionData>(p), BuildingOption.PaidParking)) return p;
             return Entity.Null;
+        }
+
+        // get_policies {}: every city and district policy of the game (name, scope, slider range) and what is active on the city.
+        private JObject GetPolicies(JObject args)
+        {
+            var w = RequireCity(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>(); var rows = new JArray();
+            var city = w.GetExistingSystemManaged<Game.Simulation.CitySystem>().City; var active = new Dictionary<Entity, float>();
+            if (city != Entity.Null && em.HasBuffer<Game.Policies.Policy>(city)) foreach (var pol in em.GetBuffer<Game.Policies.Policy>(city, true)) if ((pol.m_Flags & Game.Policies.PolicyFlags.Active) != 0) active[pol.m_Policy] = pol.m_Adjustment;
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<PolicyData>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var pe in es)
+            {
+                bool cityScope = em.HasComponent<CityOptionData>(pe) || em.HasBuffer<CityModifierData>(pe), districtScope = em.HasComponent<DistrictOptionData>(pe) || em.HasBuffer<DistrictModifierData>(pe);
+                if (!cityScope && !districtScope) continue;
+                var row = new JObject { ["name"] = ps.GetPrefabName(pe), ["scope"] = cityScope ? "city" : "district" };
+                if (em.HasComponent<PolicySliderData>(pe)) { var sl = em.GetComponentData<PolicySliderData>(pe); row["slider"] = new JObject { ["min"] = sl.m_Range.min, ["max"] = sl.m_Range.max, ["default"] = sl.m_Default, ["step"] = sl.m_Step }; }
+                if (cityScope) { row["active"] = active.ContainsKey(pe); if (active.ContainsKey(pe)) row["value"] = active[pe]; }
+                rows.Add(row);
+            }
+            return new JObject { ["policies"] = rows };
+        }
+
+        // set_policy {name, active, value?, scope?: "city" (default) | "district", index?, version? (the district)}: the game's own policy call.
+        private JObject SetPolicyCommand(JObject args)
+        {
+            var w = RequireCity(); RequireControl(); var em = w.EntityManager; var ps = w.GetExistingSystemManaged<PrefabSystem>();
+            string name = (string)args["name"]; if (string.IsNullOrEmpty(name)) throw new ArgumentException("name_required");
+            Entity policy = Entity.Null;
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>(), ComponentType.ReadOnly<PolicyData>()))
+            using (var es = q.ToEntityArray(Allocator.Temp)) foreach (var pe in es) if (string.Equals(ps.GetPrefabName(pe), name, StringComparison.OrdinalIgnoreCase)) policy = pe;
+            if (policy == Entity.Null) throw new ArgumentException("policy_not_found");
+            bool district = string.Equals((string)args["scope"], "district", StringComparison.OrdinalIgnoreCase); Entity target;
+            if (district)
+            {
+                target = Mod.CheckedEntity(RequiredInt(args, "index"), RequiredInt(args, "version"));
+                if (!em.Exists(target) || !em.HasComponent<Game.Areas.District>(target)) throw new ArgumentException("not_a_district");
+                if (!em.HasComponent<DistrictOptionData>(policy) && !em.HasBuffer<DistrictModifierData>(policy)) throw new ArgumentException("not_a_district_policy");
+            }
+            else
+            {
+                target = w.GetExistingSystemManaged<Game.Simulation.CitySystem>().City;
+                if (!em.HasComponent<CityOptionData>(policy) && !em.HasBuffer<CityModifierData>(policy)) throw new ArgumentException("not_a_city_policy");
+            }
+            float value = args["value"] == null ? (em.HasComponent<PolicySliderData>(policy) ? em.GetComponentData<PolicySliderData>(policy).m_Default : 0f) : RequiredFloat(args, "value");
+            var ui = w.GetExistingSystemManaged<Game.UI.InGame.PoliciesUISystem>();
+            var set = typeof(Game.UI.InGame.PoliciesUISystem).GetMethod("SetPolicy", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(Entity), typeof(Entity), typeof(bool), typeof(float) }, null);
+            if (ui == null || set == null) throw new MissingMethodException("PoliciesUISystem.SetPolicy");
+            bool on = (bool?)args["active"] != false; set.Invoke(ui, new object[] { target, policy, on, value });
+            return new JObject { ["ok"] = true, ["name"] = ps.GetPrefabName(policy), ["scope"] = district ? "district" : "city", ["active"] = on, ["value"] = value };
         }
 
         // get_fees {}: service fees and parking sites.
