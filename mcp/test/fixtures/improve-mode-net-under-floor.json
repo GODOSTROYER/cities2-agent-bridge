@@ -1,0 +1,22 @@
+{
+  "scenario": "Improve mode: net 1,900,000 is under the floor of 1,960,000, housing demand is high",
+  "when": "2026-10-11 02:30 UTC",
+  "snap": {
+    "pilotMode": "improve",
+    "netFloor": 1960000,
+    "policy": { "netFloorBaseline": 1960000, "upkeepRealFactor": 2.7 },
+    "city": { "money": 2400000, "pop": 17000, "net": 1900000 },
+    "happy": 72,
+    "health": 60,
+    "cityFlow": 79,
+    "jobs": { "unemp": 6, "eligible": 9000, "workers": 8460, "vacant": 300, "vacantByEdu": [120, 60, 20, 50, 50] },
+    "demand": { "rL": 100, "rM": 100, "rH": 100, "c": 0, "i": 0, "o": 0 },
+    "needs": {},
+    "happiness": { "Tax": -5, "TrafficPenalty": 0.8, "Leisure": 2.1, "Education": 1.5 },
+    "happinessPriority": { "very_high": [], "priority": [] },
+    "milestone": { "achieved": 8, "xp": 61571, "nextXp": 65700 },
+    "ui": { "blocker": "none" },
+    "icons": {},
+    "shortages": {}
+  }
+}

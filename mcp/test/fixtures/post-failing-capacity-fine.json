@@ -1,0 +1,21 @@
+{
+  "scenario": "Post has capacity to spare and a good Mail factor, but mail waits in 70% of buildings",
+  "when": "2026-10-11 02:10 UTC",
+  "snap": {
+    "city": { "money": 2100000, "pop": 17000, "net": 1050000 },
+    "happy": 67,
+    "health": 57,
+    "cityFlow": 78,
+    "jobs": { "unemp": 9, "eligible": 9000, "workers": 8200, "vacant": 150, "vacantByEdu": [60, 30, 10, 25, 25] },
+    "demand": { "rL": 60, "rM": 40, "rH": 30, "c": 10, "i": 10, "o": 10 },
+    "needs": {},
+    "happiness": { "Tax": -4.9, "Mail": 6, "Leisure": 1.1, "Entertainment": 3.9, "Education": 2.4, "Crime": 2 },
+    "happinessPriority": { "very_high": [], "priority": [] },
+    "milestone": { "achieved": 8, "xp": 61571, "nextXp": 65700 },
+    "ui": { "blocker": "none" },
+    "icons": {},
+    "shortages": {}
+  },
+  "table": { "post": { "pct": 20, "projected": 23, "status": "ok" } },
+  "outcomes": { "post": { "sharePct": 70, "avgMail": 21000, "worst": [[-548, 1746, 201]] } }
+}

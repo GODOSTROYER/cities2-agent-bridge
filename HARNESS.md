@@ -219,6 +219,50 @@ Typed tool layer for agents. Code in `mcp\`: `src\server.ts` (tools), `src\bridg
   - `node test/live.ts concurrency 90`: live; `run` while polling `snapshot`.
   - `node test/live.ts call <tool> '<json>'`: one live tool call.
 
+### City manager loop (Phase 3-4)
+
+Code: `mcp\src\pilot.ts` (rules), `pilot-cycle.ts` (one cycle), `pilot-run.ts` (daemon), `budget.ts`, `headroom.ts`, `report.ts`. Owner policy: `policy.json`. Paths start at the repository root.
+
+- **Modes** (`policy.json` `mode`; `journals\pilot\mode.json` overrides any key). The current file says `improve`.
+- `grow`: nothing switched off. Districts of 4 x 3 cells when cash is at least 1,300,000 (3 x 2 otherwise); up to 4 districts a cycle at 1,600,000 (2 otherwise). Tile purchases on. Services: 4 placements, with `projectPeople`.
+- `bank`: no tile purchases. Up to 2 districts a cycle. Services: 2 placements with reserve 1,000,000,000, so only critical and `very_high` needs are placed. Ends at `bankTarget` (5,000,000): that cycle runs as `grow` and `mode.json` is deleted. The mode then comes from `policy.json` again.
+- `improve`: no districts, no tile purchases. Services: 3 placements with the net floor. The starved-demand warning is not raised.
+- Keys the code reads: `mode`, `bankTarget` (or `target`), `netFloorBaseline`, `netFloorMarginPct`, `upkeepRealFactor`. `expansion`, `expansionException`, `cashReserve`, `targets`, `never` and `priority` are not read. The reserve is `RESERVE` (1,000,000) in `budget.ts`.
+- **Net floor.** Each cycle adds the snapshot's `net` to the last 12 readings. Sustained net is the lowest of the last 8 readings (6 needed). The highest sustained value is kept as `netSustainedMax` in `state.json`. `floor = round(max(netFloorBaseline, netSustainedMax) x 0.98)`: 1,568,000 at the baseline.
+- Upkeep check: projected net = net minus listed monthly upkeep x 2.7 (`upkeepRealFactor`, the measured real cost). A `fix_services` placement is deferred (reason `net_floor`) when the projection is under the floor. Each placement in one call lowers the running net.
+- Critical needs and `very_high` factors skip the check. `add_power`, `clear_ruins`, `fix_traffic`, `tax_autopilot` and `dev_tree` are not checked. Net under the floor adds an ATTENTION line with full numbers.
+- **One `autoplay_cycle`, in order:**
+   1. Read `state.json`. Keep a background `run` going (7200 s, speed 4) when none runs or under 900 s remain.
+   2. `snapshot`, `dev_tree`, `traffic_hotspots` (city flow); read `policy.json` and `mode.json`; check the bank target and the floor. Self-check: a zone type at demand 60+ for 5 cycles with nothing zoned, or a need on `watch` that rose 3 cycles in a row, logged as `self_check`.
+   3. Decide, then run: `add_power` (power past 78%, every 8 min), `clear_ruins` (5 min), `fix_services` (3 min, or planned housing), `fix_traffic` (6 min; flow under 75% or traffic a priority), `tax_autopilot` (10 min), `buy_tile` (a district came out under half size), `grow` (1.5 min; demand 50+, or 20+ if none), `dev_tree` unlock (1 min), `save` (30 min or milestone).
+   4. A `grow` with `no_free_site` buys two tiles and retries once (not in `bank`). Refusals `not_utility_connected`, `previous_district_unserved`, `loose_end` and `crosses_water` stay in ATTENTION (newest six). Then write `status.json`, the checkpoint files when due, and `state.json`, and return the status line.
+- **Files** (repository root):
+   - `journals\progress.md`: checkpoint every 15 min, at a milestone, and after a district or tile. Scorecard, factors under -3, icons, services, did, next, ATTENTION (six at most). Adds the first 14 lines of `journals\pilot\notes.md`.
+   - `journals\REPORT.md`: every system, worst first; the definition of done at the top. Same checkpoints.
+   - `journals\metrics-history.jsonl`: one line per checkpoint: pop, flow, unemployment, education, vacancies, values, status.
+   - `journals\pilot\status.json`: after every cycle: mode, floor, flow, pop, cash, net, milestone, XP, unemployment, happiness, demand, ATTENTION, last 3 did lines.
+   - `journals\pilot\last-line.txt`: the last status line, with the UTC time (HH:MM:SS) in front. Written by the daemon.
+   - `journals\pilot\log.jsonl`: every action with args, reason, cost and site; also `self_check`, `status_change` (WORSE), `report_failed` and daemon errors.
+   - `journals\pilot\state.json`: memo, last 40 did lines, `sticky` ATTENTION (newest 6), net history, last report values. Read at the start of each cycle. Remove a `sticky` line to clear it.
+- **Daemon.** From `mcp`: `node src/pilot-run.ts 60` (seconds per cycle, minimum 20). It sends `autoplay_cycle` through the file queue in `journals\mcp-session`; the session's `alive` file must be under 5 s old. An old `journals\pilot\STOP` is deleted at start, so create `STOP` after start to stop after the current cycle. After 5 failed cycles it writes an ATTENTION line to `journals\progress.md` and exits.
+- **Headroom rule** (`headroom.ts`, target 78%). Use is judged on projected use: current use x (population + residents of planned districts) / population.
+   - `over` above 100% (critical; the reserve does not hold it back). `low` above 78% (`fix_services` adds capacity). Otherwise `ok`.
+   - Each row takes the worse of the planning norm (per 10,000 residents: fire 5, police 5, deathcare 3, health 4, garbage 8, post 5) and the stations' own state (share of stations with no vehicle free, or game usage for schools, colleges, universities and health).
+   - Planned districts add residents per cell: `res` 180, `resmed` 450, `resmid` 700, `mixed` 600, `reshigh` 1,500. Power, water and sewage rows that are not `ok` raise ATTENTION.
+- **Report grading** (`report.ts`). A system takes the worst of three grades:
+   - capacity: `over` or no capacity is critical; `low` is bad.
+   - coverage: homes uncovered above 30% bad; above 8% ok.
+   - outcome: factor below -5 critical, below -3 bad, below 1 ok; 20+ icons bad; flow below 50% critical, below 75% bad; an unserved need critical.
+   - Definition of done, at each checkpoint: every factor except Tax at 0 or better; every system good (zones, Milestone, LandValue and Tourism excluded); flow 75% or better; no icons; net at or above the floor.
+- **Tools.**
+   - `autoplay_cycle`: no arguments. Runs one cycle and returns its status line. The daemon calls it.
+   - `add_power`: `plan`. One small coal plant, a transformer and the HV cable between them, sited by the polluter rules.
+   - `upgrade_corridor`: `fromX`, `fromZ`, `toX`, `toZ`, `road` (default Large Road), `plan`. Upgrades every road edge on the network path; highways are skipped.
+   - `build_line`: `kind`, `fromX`, `fromZ`, `toX`, `toZ`, `viaX`, `viaZ`, `plan`. One cable or pipe, previewed. Ground cables and pipes are refused across water. A loose end returns partial with its position.
+   - `relocate_building`: `index`, `version`, `x`, `z`, `radius` (50-2000, default 400), `plan`. Moves one placed building to a roadside site under the site rules.
+   - `dev_tree`: `all`, `unlock`. Without arguments: points and buyable nodes. `unlock=<name>` buys one node.
+   - `fix_services`: `maxPlacements` (1-8, default 2), `plan`, `reserve`, `netFloor` (placements under it are deferred; critical and `very_high` go ahead), `upkeepFactor` (default 2.7), `projectPeople` (residents the planned districts bring; services are sized for them).
+
 ## 5. Typical agent loop
 
 The MCP loop is in PLAY.md. The script loop below is for manual debugging.

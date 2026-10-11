@@ -1,0 +1,17 @@
+{
+  "scenario": "Housing demand maxed, 16% unemployed, 1,351 vacancies: an education mismatch, not a jobs shortage",
+  "when": "2026-10-11 02:20 UTC",
+  "snap": {
+    "city": { "money": 3400000, "pop": 12598, "net": 995000 },
+    "jobs": { "unemp": 16, "eligible": 6900, "workers": 5800, "vacant": 1351, "vacantByEdu": [581, 168, 56, 208, 338] },
+    "demand": { "rL": 100, "rM": 100, "rH": 100, "c": 0, "i": 0, "o": 0 },
+    "needs": {},
+    "servicePenalties": { "byFactor": { "NotEnoughEmployees": 6 } },
+    "happiness": { "Tax": -5, "TrafficPenalty": -3.3, "Education": 1.2, "NoisePollution": -2 },
+    "happinessPriority": { "very_high": [], "priority": ["TrafficPenalty"] },
+    "milestone": { "achieved": 8, "xp": 47815, "nextXp": 65700 },
+    "ui": { "blocker": "none" },
+    "icons": { "Noise Pollution": 59 },
+    "shortages": {}
+  }
+}

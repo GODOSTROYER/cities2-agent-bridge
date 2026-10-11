@@ -1,0 +1,20 @@
+{
+  "scenario": "A new district has no power: growth stops, and the loop names the place to connect",
+  "when": "2026-10-11 02:00 UTC",
+  "snap": {
+    "city": { "money": 3400000, "pop": 12598, "net": 995000 },
+    "jobs": { "unemp": 9, "eligible": 6900, "workers": 6300, "vacant": 120, "vacantByEdu": [40, 20, 10, 25, 25] },
+    "demand": { "rL": 80, "rM": 90, "rH": 100, "c": 0, "i": 5, "o": 0 },
+    "needs": {
+      "power": { "unserved": 65, "action": "connect", "say": "connect district at (-1512,-175)", "at": [-1512, -175], "priority": "very_high" }
+    },
+    "servicePenalties": { "byFactor": {} },
+    "happiness": { "Tax": -5, "TrafficPenalty": -1.2, "Electricity": -4.2, "Education": 2.4, "Mail": 1.5 },
+    "happinessPriority": { "very_high": [], "priority": [] },
+    "milestone": { "achieved": 7, "xp": 40000, "nextXp": 65700 },
+    "ui": { "blocker": "none" },
+    "icons": {},
+    "shortages": {}
+  },
+  "table": { "power": { "pct": 55, "projected": 66, "status": "ok" } }
+}

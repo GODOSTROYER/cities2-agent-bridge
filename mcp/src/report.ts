@@ -4,8 +4,9 @@
 // happiness factor the game computes, icons on the map, traffic flow, people waiting).
 // "Post at 20% of capacity" read fine while the owner saw the service failing.
 // PURE: buildReport() takes plain data and the previous values and returns markdown.
+import { diagnose, rankRootCauses } from './diagnose.ts';
 export type Grade = 'critical' | 'bad' | 'ok' | 'good' | 'unknown';
-export interface SystemRow { system: string; status: Grade; outcome: string; capacity: string; coverage: string; trend: string; action: string; blocked: string; value: number | null }
+export interface SystemRow { system: string; status: Grade; outcome: string; capacity: string; coverage: string; trend: string; action: string; blocked: string; value: number | null; cause?: string; why?: string; fix?: string; raw?: Record<string, any> }
 interface Spec { system: string; factors?: string[]; table?: string[]; cov?: string; icons?: RegExp; need?: string; action: string; view?: string }
 
 // One entry per infoview of the game (names as the game shows them) plus the budget rows.
@@ -44,6 +45,7 @@ export interface ReportInput {
   snap: Record<string, any>; table?: Record<string, { pct: number | null; projected: number | null; status: string }>; coverage?: Record<string, number>;
   blocked?: Record<string, string>; did?: string[]; diagnosis?: string; when: string; prev?: Record<string, number>;
   netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
+  vehicles?: Record<string, { busyPct?: number; efficiencyPct?: number; buildings?: number }>; // service_headroom.vehicles: stations with no vehicle free, efficiency
   outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
 }
 
@@ -75,7 +77,8 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     if (s.system === 'Post' && oc.post) waitingShare('mail waiting', Number(oc.post.sharePct ?? 0), 15, 40, oc.post.worst);
     if (s.system === 'Garbage' && oc.garbage) waitingShare('garbage piling', Number(oc.garbage.sharePct ?? 0), 10, 30, oc.garbage.worst);
     if (s.system === 'Police' && oc.crime) { outcome = `high crime in ${oc.crime.highSharePct}% of buildings; ${outcome}`; extra = worst(extra, Number(oc.crime.highSharePct) >= 30 ? 'bad' : 'good'); }
-    add({ system: s.system, status: gradeOf(factor, t?.status ?? null, cov, extra), outcome: outcome || '-', capacity: t ? `${t.pct ?? '-'}%${t.projected !== null && t.projected !== t.pct ? ' -> ' + t.projected + '% planned' : ''}` : '-', coverage: cov === null ? '-' : `${cov}% homes uncovered`, trend: '', action: s.action, blocked: i.blocked?.[s.need ?? ''] ?? '', value: value ?? (t?.pct !== null && t?.pct !== undefined ? -t.pct / 20 : null) });
+    const vk = (s.table ?? []).map(k => i.vehicles?.[k]).filter(Boolean)[0];
+    add({ raw: { capacityPct: t?.pct ?? null, projectedPct: t?.projected ?? null, uncoveredPct: cov, factor, busyPct: vk?.busyPct ?? null, efficiencyPct: vk?.efficiencyPct ?? null, icons: iconCount }, system: s.system, status: gradeOf(factor, t?.status ?? null, cov, extra), outcome: outcome || '-', capacity: t ? `${t.pct ?? '-'}%${t.projected !== null && t.projected !== t.pct ? ' -> ' + t.projected + '% planned' : ''}` : '-', coverage: cov === null ? '-' : `${cov}% homes uncovered`, trend: '', action: s.action, blocked: i.blocked?.[s.need ?? ''] ?? '', value: value ?? (t?.pct !== null && t?.pct !== undefined ? -t.pct / 20 : null) });
   }
   const oc = i.outcomes;
   if (oc?.parking) { const full = Number(oc.parking.kerbLanesFullPct ?? 0); const g = Number(oc.parking.garageCapacity ?? 0) > 0 ? Math.round(100 * Number(oc.parking.garageCars) / Number(oc.parking.garageCapacity)) : null;
@@ -96,8 +99,13 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   add({ system: 'Budget', status: net < 0 || (floor > 0 && net < floor) ? 'critical' : cash < 1_000_000 ? 'ok' : 'good', outcome: `${floor > 0 ? `net floor ${floor}, margin ${net - floor}; ` : ''}cash ${cash}, net ${net}/month, taxes ${JSON.stringify(snap.tax ?? {})}, Tax factor ${factors.Tax ?? '-'} (exempt)`, capacity: '-', coverage: '-', trend: '', action: 'reserve 1,000,000; taxes pinned', blocked: '', value: net / 100000 });
   add({ system: 'Milestone', status: 'ok', outcome: `milestone ${snap.milestone?.achieved}, XP ${snap.milestone?.xp}/${snap.milestone?.nextXp}`, capacity: '-', coverage: '-', trend: '', action: 'grow population and happiness', blocked: '', value: Number(snap.milestone?.xp ?? 0) / 1000 });
   for (const n of NOT_READ) rows.push({ system: n, status: 'unknown', outcome: 'not read by the bridge yet', capacity: '-', coverage: '-', trend: '', action: 'add a reader', blocked: 'harness', value: null });
+  // Diagnosis (Phase 4): the cause class of every bad row, and root causes before knock-on effects.
+  const flowPct = Number.isFinite(Number(snap.cityFlow)) ? Number(snap.cityFlow) : null;
+  for (const r of rows) { const d = diagnose({ system: r.system, status: r.status, blocked: r.blocked || null, flowPct, ...(r.raw ?? {}) }); r.cause = d.cause; r.why = d.why; r.fix = d.fix; }
   rows.sort((a, b) => rank[a.status] - rank[b.status] || (a.value ?? 0) - (b.value ?? 0));
-  const top = rows.filter(r => r.status === 'critical' || r.status === 'bad').slice(0, 5);
+  const ranked = rankRootCauses(rows.map(r => ({ system: r.system, status: r.status, cause: (r.cause ?? 'unknown') as any })));
+  const byName = new Map(rows.map(r => [r.system, r]));
+  const top = ranked.slice(0, 5).map(k => ({ ...byName.get(k.system)!, rootOf: k.rootOf, drivenBy: k.drivenBy }));
   // Definition of done (owner): checked at every review.
   const negative = Object.entries(factors).filter(([k, v]) => k !== 'Tax' && Number(v) < 0).map(([k, v]) => `${k} ${v}`);
   const notGood = rows.filter(r => r.status !== 'good' && r.status !== 'unknown' && !['Zones: housing (demand low/medium/high)', 'Zones: commercial/industrial/office (demand)', 'Milestone', 'LandValue', 'Tourism'].includes(r.system)).map(r => r.system);
@@ -111,9 +119,9 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     ['net at or above the floor', floor <= 0 || net >= floor, floor > 0 ? `net ${net}, floor ${floor}` : 'no floor set'],
   ];
   const md = [`# City report ${i.when}${i.mode ? ' (mode ' + i.mode + ')' : ''}`, '', '## Definition of done', ...done.map(([name, pass, detail]) => `- [${pass ? 'x' : ' '}] ${name}: ${detail}`), '', '## Top problems and what is being done',
-    ...(top.length ? top.map((r, k) => `${k + 1}. **${r.system}** (${r.status}): ${r.outcome}${r.capacity !== '-' ? ', capacity ' + r.capacity : ''}. ${r.action}${r.blocked ? '. Blocked by: ' + r.blocked : ''}`) : ['Nothing critical or bad.']),
+    ...(top.length ? top.map((r, k) => `${k + 1}. **${r.system}** (${r.status}; cause: ${r.cause}${r.rootOf?.length ? '; root of ' + r.rootOf.join(', ') : ''}${r.drivenBy ? '; driven by ' + r.drivenBy : ''}): ${r.outcome}${r.capacity !== '-' ? ', capacity ' + r.capacity : ''}. ${r.cause && !['none', 'unknown'].includes(r.cause) ? r.fix : r.action}${r.blocked ? '. Blocked by: ' + r.blocked : ''}`) : ['Nothing critical or bad.']),
     '', `Last actions: ${(i.did ?? []).slice(-6).join('; ') || '-'}`, '',
-    '| system | status | outcome | use / capacity | coverage | trend | action | blocked by |', '|---|---|---|---|---|---|---|---|',
-    ...rows.map(r => `| ${r.system} | ${r.status} | ${r.outcome} | ${r.capacity} | ${r.coverage} | ${r.trend || '-'} | ${r.action} | ${r.blocked || '-'} |`), ''].join('\n');
+    '| system | status | cause | outcome | use / capacity | coverage | trend | action | blocked by |', '|---|---|---|---|---|---|---|---|---|',
+    ...rows.map(r => `| ${r.system} | ${r.status} | ${r.cause && r.cause !== 'none' ? r.cause : '-'} | ${r.outcome} | ${r.capacity} | ${r.coverage} | ${r.trend || '-'} | ${r.action} | ${r.blocked || '-'} |`), ''].join('\n');
   return { markdown: md, values, rows };
 }

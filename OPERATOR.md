@@ -1,38 +1,50 @@
 # Operator playbook (Haiku) - Cities: Skylines II harness
 
-You watch a city that a code loop is already playing. You do NOT play by hand unless the loop is down.
-Work directory for every command: C:\Users\user\Documents\CitiesIIAgentBridge-harness\mcp
+You watch a city that the code loop already plays. You read and report. You do not act on the city.
+Work directory for every command: `C:\Users\user\Documents\CitiesIIAgentBridge-harness\mcp`
 
 ## The loop (already running)
-- A daemon calls the MCP tool `autoplay_cycle` once a minute. One cycle = snapshot, self-check, needs (ruins, services, traffic, taxes), growth by the demand bars, development points, save every 30 min, checkpoint to journals/progress.md.
-- Watch it with:  `cat ../journals/pilot/last-line.txt`   (one line: pop, cash, net, milestone, XP, what it did, ATTENTION items)
-- If the time at the start of that line is more than 5 minutes old the daemon is down. Check `node test/send.ts run_status '{}' 200`. If that answers, run one cycle yourself with `node test/send.ts autoplay_cycle '{}' 600`, sleep 60 s, repeat. If it does NOT answer, escalate (do not relaunch anything).
+- A daemon calls the `autoplay_cycle` tool about once a minute. Each cycle reads the city, applies the rules in `policy.json` and writes one status line to `../journals/pilot/last-line.txt`.
+- The default mode is `improve`: no new districts and no tile purchases. Services are still placed by their rules. Net must stay at or above the floor.
+- The status line format, with the UTC time (HH:MM:SS) in front: `[mode] pop .. cash .. net .. floor .. M.. xp .. unemp .. happy .. | did: .. | ATTENTION: ..`
+- `floor` appears in `improve` mode only. The line shows the first three ATTENTION items. `../journals/progress.md` has up to six.
 
 ## Your routine (repeat until told otherwise)
-1. `sleep 240` then read last-line.txt. Nothing else if there is no ATTENTION and cash is above 1,000,000.
-2. Every 15 minutes read `../journals/progress.md` (it is short).
+1. One Bash call with timeout 600000: `sleep 560; date -u +%H:%M:%S; cat ../journals/pilot/last-line.txt`. Checks come every 9 to 10 minutes.
+2. Compare the time from `date` with the time at the start of the status line. A line more than 6 minutes old is stale.
+3. Read the status line. If no escalation trigger applies, write nothing and check again.
+4. At most once every 30 minutes, run `head -n 14 ../journals/REPORT.md`. The first lines hold the definition of done. Keep the last reading to compare against.
 
-## Standing rules (the tools enforce them; never work around a refusal)
-- Utilities (power, water, sewage) and network warnings (loose cable, pipe, road) are immediate.
-- Happiness factor worse than -3 = priority, worse than -5 = very high. Tax is exempt.
-- Follow the demand bars: whatever bar is high gets zoned. Never hold housing because of unemployment.
-- Keep 1,000,000 cash in reserve. Taxes are pinned (homes 15%, business 10-11%): never call set_tax.
-- Site rules: homes away from noise, pollution and downwind of plants. Never lay a ground cable or pipe across water; never cross a highway at grade.
-- Never kill, quit or relaunch the game. Never touch saves named test or Olympia.
+## Standing rules
+- Growth is off in `improve`. Do not ask for districts or tiles.
+- Net must stay at or above `floor`. The status line shows short numbers (for example `1.57M`), which can hide a small gap. The ATTENTION item `net N is under the floor M` has the full figures.
+- A happiness factor worse than -5 is very high and goes to ATTENTION. Tax is exempt.
+- Taxes are pinned in `journals\tax-pins.json`. The loop moves them only inside the pins.
+- Site rules (homes away from noise and pollution, no ground cable or pipe across water, no highway crossing at grade) are enforced by the tools.
+- Never touch the saves named test or Olympia.
+- Never launch, quit, kill or restart the game or any process. Never run `upgrade.ps1`, `build.ps1` or git.
+- Never call `set_tax`, `grow`, `buy_tile`, `place_service`, `remove_road` or `relocate_building`.
 
-## What you may do yourself for an ATTENTION item
-- "network: ... Powerline Not Connected at [type,x,z]": `node test/send.ts build_line '{"kind":"power_low","fromX":X,"fromZ":Z,"toX":X2,"toZ":Z2,"plan":true}' 400` to the nearest road (get one with `node test/edges.ts X Z 60`), then without plan. If it answers crosses_water or partial, escalate.
-- "factor Crime/Healthcare/... worse than -5": `node test/send.ts fix_services '{"maxPlacements":3}' 600` once, then wait two cycles.
-- "ruins": `node test/send.ts clear_ruins '{}' 300`.
-- Anything else: escalate.
+## What the operator may do itself
+- Nothing that changes the city or the game. The loop handles ruins, services, power, traffic, taxes and development points by its own rules.
+- Reads only: `../journals/pilot/last-line.txt`, `../journals/pilot/status.json`, `../journals/progress.md`, `../journals/REPORT.md`.
 
 ## Escalate (stop and return your summary) when
-- a tool answers partial or failed twice for the same thing; a need is still raised after two actions
-- "power/water/sewage: connect district at (x,z)" (an unserved district), "no free site ... build an arterial", "not_utility_connected"
-- anything about water damage, flooding, a crash, a hang, the daemon down and run_status silent
-- cash under 1,000,000, or net income negative
-- a rule conflict: an instruction contradicts the demand bars, vacancies, icons or happiness factors
-- a new milestone (the agent decides unlocks and where the next districts go)
+- The status line is older than 6 minutes on two checks in a row.
+- Net is under the floor on two checks in a row.
+- ATTENTION contains "connect district", "Not Connected", "flood", "Water Damage", "worse than -5" or "under the reserve".
+- The line contains a MILESTONE.
+- A definition-of-done line was checked in the last reading and is now unchecked.
+- Other ATTENTION text: list it in your summary and do not act on it.
+
+## Ignore
+- Power, water or sewage "of capacity" below 100%.
+- "growth refused".
+- "no free site".
 
 ## Your summary (at most 15 lines)
-time span, pop/cash/net/milestone/XP at start and end, what the loop did (from progress.md), each ATTENTION item and what you did, why you stopped.
+- Time span and mode.
+- Pop, cash, net, floor, milestone and XP at the start and at the end.
+- What the loop did (the `did:` parts of the lines read).
+- Each ATTENTION item seen, and that you took no action on it.
+- Why you stopped.

@@ -1,0 +1,18 @@
+{
+  "scenario": "Bank mode: saving for the next expansion, housing demand high, cash 1,300,000",
+  "when": "2026-10-11 02:40 UTC",
+  "snap": {
+    "pilotMode": "bank",
+    "city": { "money": 1300000, "pop": 12598, "net": 995000 },
+    "jobs": { "unemp": 9, "eligible": 6900, "workers": 6300, "vacant": 200, "vacantByEdu": [80, 40, 20, 30, 30] },
+    "demand": { "rL": 100, "rM": 100, "rH": 100, "c": 0, "i": 0, "o": 0 },
+    "needs": {},
+    "servicePenalties": { "byFactor": {} },
+    "happiness": { "Tax": -5, "TrafficPenalty": 0.5, "Education": 1.2 },
+    "happinessPriority": { "very_high": [], "priority": [] },
+    "milestone": { "achieved": 8, "xp": 61571, "nextXp": 65700 },
+    "ui": { "blocker": "none" },
+    "icons": {},
+    "shortages": {}
+  }
+}

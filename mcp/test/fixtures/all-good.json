@@ -1,0 +1,26 @@
+{
+  "scenario": "Everything in order: no negative factor except Tax, flow 80%, no icons, net above the floor, demand low",
+  "when": "2026-10-11 03:00 UTC",
+  "snap": {
+    "pilotMode": "improve",
+    "netFloor": 1000000,
+    "city": { "money": 2000000, "pop": 17000, "net": 1100000 },
+    "happy": 72,
+    "health": 60,
+    "cityFlow": 80,
+    "jobs": { "unemp": 4, "eligible": 9000, "workers": 8640, "vacant": 180, "vacantByEdu": [60, 30, 10, 40, 40] },
+    "demand": { "rL": 10, "rM": 5, "rH": 0, "c": 5, "i": 0, "o": 0 },
+    "needs": {},
+    "happiness": {
+      "Tax": -5, "TrafficPenalty": 1.5, "Mail": 6.3, "Leisure": 1.1, "Entertainment": 3.9, "Education": 2.4,
+      "Crime": 2, "Healthcare": 1.2, "DeathPenalty": 1.4, "Garbage": 1.6, "Electricity": 2, "Water": 2.2,
+      "Sewage": 2, "Telecom": 1.3, "AirPollution": 1.8, "GroundPollution": 1.1, "NoisePollution": 1.5,
+      "Welfare": 1.2, "Homelessness": 1.1
+    },
+    "happinessPriority": { "very_high": [], "priority": [] },
+    "milestone": { "achieved": 8, "xp": 61571, "nextXp": 65700 },
+    "ui": { "blocker": "none" },
+    "icons": {},
+    "shortages": {}
+  }
+}
