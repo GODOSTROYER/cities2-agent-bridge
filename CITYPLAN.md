@@ -125,3 +125,8 @@ Before: flow 53-55%, TrafficPenalty -4.3, 24 bottleneck icons. After-numbers go 
 - Energy: 24 wind turbines, 1.40M produced for 0.77M used; no coal plant left.
 - Sewage: treatment plant at (-152,1696) on the river downstream (tile x -312..311, z 1558..2181); no raw outlet left.
 - Traffic: inbound exits now exist at the north (-1032,1325), the centre (spur and z -224), and the south (tunnel exit to (-1401,-2445)); 21 needless signals removed.
+
+### Status 2026-10-11 12:35
+- Sewage: 100% exported through the outside pipe connection at (1470,7168) (trunk pipe from (1300,2500) along x 1470; 7 tiles north of Northgate; stream crossed on a road bridge at z 3600-3920). No outlet and no treatment plant left; both types are forbidden in policy.json.
+- Power: wind 1.55M + solar station (1084,2212) 0.28M; battery stations at (932,2560) and (-1884,-406) on high voltage.
+- Hospital at (-1500,940). Traffic lights removed at 51 junctions and ramp ends where they stopped a main flow for a trickle.
