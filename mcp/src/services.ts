@@ -270,7 +270,7 @@ export async function fixServices(opts: { maxPlacements?: number; plan?: boolean
   // Headroom: capacity against use for every service, projected for the districts about to be
   // zoned. The table is returned as one line; utilities past the target are raised.
   let table: Record<string, any> = {}; let servicesLine = ''; let alerts: string[] = [];
-  try { table = serviceTable(await callOk('service_headroom', {}, 20), snap, Number(opts.projectPeople ?? 0)); servicesLine = tableLine(table); alerts = utilityAlerts(table); } catch { /* older mod: coverage and escalation only */ }
+  try { table = serviceTable(await callOk('service_headroom', {}, 20), snap, Number(opts.projectPeople ?? 0)); servicesLine = tableLine(table); alerts = utilityAlerts(table, (loadPolicy().forbiddenPrefabs ?? []).includes('WastewaterTreatment') ? ['sewage'] : []); } catch { /* older mod: coverage and escalation only */ }
   const all = decideServices({ snap, buildings, gaps, cooldown: liveCooldown, nowMs: Date.now(), clusters, perRule: 3, policy: loadPolicy(), headroom: Object.keys(table).length ? headroomFor(table) : undefined });
   const held = all.filter(n => ['investigate', 'waiting'].includes(verdictOf(n.need)?.verdict));
   // Fix types the effects table judged ineffective are not repeated (critical and very-high needs still are).

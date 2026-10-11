@@ -82,6 +82,7 @@ export function tableLine(table: Record<string, Row>): string {
 }
 
 // Utilities the planner cannot site by itself: what to raise.
-export function utilityAlerts(table: Record<string, Row>): string[] {
-  return ['power', 'water', 'sewage'].filter(k => table[k] && table[k].status !== 'ok').map(k => `${k} at ${table[k].pct}% of capacity (projected ${table[k].projected}%): add capacity before it passes 100%`);
+// exported: sewage leaves through an outside pipe connection (no local capacity to compare with), so no capacity alert.
+export function utilityAlerts(table: Record<string, Row>, exported: string[] = []): string[] {
+  return ['power', 'water', 'sewage'].filter(k => table[k] && table[k].status !== 'ok' && !(exported.includes(k) && table[k].cap === 0)).map(k => `${k} at ${table[k].pct}% of capacity (projected ${table[k].projected}%): add capacity before it passes 100%`);
 }

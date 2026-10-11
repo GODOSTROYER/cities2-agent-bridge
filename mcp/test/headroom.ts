@@ -41,4 +41,5 @@ check(tu.post.pct === 100 && tu.post.status === 'low' && tu.post.unit.startsWith
 check(serviceTable(hu, snap, 8000).post.status === 'over', 'and with the planned growth post is over capacity');
 check(tu.fire.unit === 'engines' && tu.fire.pct === 133, 'fire: ServiceUsage reads a constant 100% for vehicle services and is ignored; engines are free, so the norm stays the measure');
 check(tu.highschool.pct === 98 && tu.highschool.unit === 'usage %', 'schools use the usage figure of the game (98%)');
+check(utilityAlerts({ sewage: { use: 241678, cap: 0, pct: null, projected: null, status: 'none', unit: 'm3' } } as any, ['sewage']).length === 0 && utilityAlerts({ sewage: { use: 241678, cap: 0, pct: null, projected: null, status: 'none', unit: 'm3' } } as any).length === 1, 'THE LIVE CASE: exported sewage has no local capacity and raises no capacity alert; without export it does');
 process.exit(failed ? 1 : 0);
