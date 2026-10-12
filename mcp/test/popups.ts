@@ -61,7 +61,13 @@ async function main(): Promise<number> {
   };
 
   // Fake mod: every 30 ms take each request file, delete it, answer with the same id.
+  // One tick at a time: under load two overlapping ticks answered the same request and the second rename failed (ENOENT).
+  let ticking = false;
   const mod = setInterval(async () => {
+    if (ticking) return; ticking = true;
+    try { await tick(); } finally { ticking = false; }
+  }, 30);
+  const tick = async () => {
     let names: string[];
     try { names = (await fs.readdir(join(mailbox, 'requests'))).filter(n => n.endsWith('.json')); }
     catch { return; }
@@ -74,9 +80,9 @@ async function main(): Promise<number> {
       const reply = handle(packet.command, packet.args);
       const out = join(mailbox, 'responses', packet.id + '.json');
       await fs.writeFile(out + '.tmp', JSON.stringify(reply), 'utf8');
-      await fs.rename(out + '.tmp', out);
+      await fs.rename(out + '.tmp', out).catch(() => {});
     }
-  }, 30);
+  };
 
   let timer: NodeJS.Timeout | undefined;
   try {
