@@ -146,14 +146,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     // Outcome measures from the buildings themselves: what is actually waiting.
     const oc = i.outcomes ?? {};
     const waitingShare = (label: string, share: number, bad: number, critical: number, where: any) => { outcome = `${label} in ${share}% of buildings${where?.length ? ', worst at ' + where.slice(0, 2).map((c: number[]) => `(${c[0]},${c[1]}) x${c[2]}`).join(' ') : ''}; ${outcome}`; extra = worst(extra, share >= critical ? 'critical' : share >= bad ? 'bad' : 'good'); value = Math.min(value ?? 0, -share / 5); };
-    // Post: "mail above the tolerance of 5" is true of nearly every building even when the game's own
-    // Mail factor is strongly positive (13 Oct: 96.6% "waiting" with Mail +7.5 and no mail icon), so the
-    // share only grades the row when the game also signals trouble (negative Mail factor or mail icons).
-    if (s.system === 'Post' && oc.post) {
-      const share = Number(oc.post.sharePct ?? 0), trouble = fs.some(f => f < 0) || iconCount > 0;
-      if (trouble) waitingShare('mail waiting', share, 15, 40, oc.post.worst);
-      else outcome = `mail above tolerance in ${share}% of buildings (not a complaint: Mail factor is not negative and there are no mail icons); ${outcome}`;
-    }
+    if (s.system === 'Post' && oc.post) waitingShare('mail waiting', Number(oc.post.sharePct ?? 0), 15, 40, oc.post.worst);
     if (s.system === 'Garbage' && oc.garbage) waitingShare('garbage piling', Number(oc.garbage.sharePct ?? 0), 10, 30, oc.garbage.worst);
     // A full landfill accepts nothing and its trucks stand idle (FAILURES #114): capacity on paper is not capacity.
     if (s.system === 'Garbage' && i.garbage && Number(i.garbage.full ?? 0) > 0) { outcome = `${i.garbage.full} of ${i.garbage.buildings} facilities FULL (trucks idle), live processing ${i.garbage.processingLive}; ${outcome}`; extra = worst(extra, 'bad'); }
