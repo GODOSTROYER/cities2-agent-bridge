@@ -146,7 +146,15 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     // Outcome measures from the buildings themselves: what is actually waiting.
     const oc = i.outcomes ?? {};
     const waitingShare = (label: string, share: number, bad: number, critical: number, where: any) => { outcome = `${label} in ${share}% of buildings${where?.length ? ', worst at ' + where.slice(0, 2).map((c: number[]) => `(${c[0]},${c[1]}) x${c[2]}`).join(' ') : ''}; ${outcome}`; extra = worst(extra, share >= critical ? 'critical' : share >= bad ? 'bad' : 'good'); value = Math.min(value ?? 0, -share / 5); };
-    if (s.system === 'Post' && oc.post) waitingShare('mail waiting', Number(oc.post.sharePct ?? 0), 15, 40, oc.post.worst);
+    // Post: the share counts buildings holding more mail than a tolerance of 5, which is nearly every
+    // building even when post works (13 Oct: 96.6% with the Mail factor at +7.5, no mail icon, average
+    // mail flat over 10 minutes, vans 10-15% busy). So it grades in full only when the game also signals
+    // trouble (a negative Mail factor or mail icons); otherwise it is shown and the row is at most ok.
+    if (s.system === 'Post' && oc.post) {
+      const share = Number(oc.post.sharePct ?? 0), trouble = fs.some(f => f < 0) || iconCount > 0;
+      const before = extra; waitingShare('mail waiting', share, 15, 40, oc.post.worst);
+      if (!trouble) { extra = worst(before, share >= 15 ? 'ok' : 'good'); outcome = outcome.replace('; ', ' (no game signal: Mail factor not negative, no mail icons; watch the trend); '); }
+    }
     if (s.system === 'Garbage' && oc.garbage) waitingShare('garbage piling', Number(oc.garbage.sharePct ?? 0), 10, 30, oc.garbage.worst);
     // A full landfill accepts nothing and its trucks stand idle (FAILURES #114): capacity on paper is not capacity.
     if (s.system === 'Garbage' && i.garbage && Number(i.garbage.full ?? 0) > 0) { outcome = `${i.garbage.full} of ${i.garbage.buildings} facilities FULL (trucks idle), live processing ${i.garbage.processingLive}; ${outcome}`; extra = worst(extra, 'bad'); }
