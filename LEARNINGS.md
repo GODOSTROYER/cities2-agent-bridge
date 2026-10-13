@@ -140,3 +140,13 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - Never clear the STOP latch without fresh permission. The "Allow local bridge controls" checkbox resets on every city load.
 - Leave the city paused and saved at the end.
 - GPU/driver trouble or a hang (FAILURES #43): save, quit, report; do not keep relaunching. The trigger is not established.
+
+## Player notes (Haiku)
+- 2026-10-13 00:50 UTC: place_service (site finder) cannot see cleared lots; it returns no_roadside_site even where a park fits. Use placeany with the exact point: `node test/placeany.ts '{"prefab":"TennisCourt01","x":-340,"z":-1210,"rotation":0}'` (dry run, then `build`); the game snaps it to the nearest road and block.ts shows `road <edge>`. OverlapExisting at a point means a home's footprint reaches it; remove the nearest home (demolish.ts) and retry.
+- 2026-10-13: zone.ts has no clear option; dezone.ts build clears zoning on cleared cells (it may need two runs).
+- 2026-10-13: linepolicy.ts does not read the slider back; re-read the line list after 15 minutes to confirm a VehicleInterval change.
+- 2026-10-13 01:06 UTC: demolished homes on residential-zoned lots regrow within minutes (corner (-215,-302) and (-215,-322)); dezone.ts refuses while they stand. For a clear lot, de-zone first (dezone.ts dry run, then build), then demolish, then place.
+- 2026-10-13 01:12 UTC: de-zone only clears empty cells; a home still standing on the lot stops it (refused with reasons). Regrown homes need a second removal before the zone clear; placeany still overlaps when zoned cells remain. Bus depot extra garage is refused everywhere in this city (overlap or ExceedsCityLimits).
+- 2026-10-13 02:50 UTC: buy_tile default cost cap is 300000; pass "max":400000 for District tiles (exact:true works with the sheet's centres). build_line kind "Medium Road Divided" snaps ends to nodes; a piece that ends mid-edge reports a loose end at the midpoint only.
+- 2026-10-13: K6-style junction got traffic lights automatically; remove with roadopt.ts (Traffic Lights, remove:true). Roundabouts LargeRoundabout01, MediumRoundabout01, SmallRoundabout01 all refused on a crescent node with OverlapExisting and NoRoadAccess.
+- 2026-10-13: zone tool is radius-only; there is no rectangle zoning helper, so block zoning needs a new tool before District 3 zoning.
