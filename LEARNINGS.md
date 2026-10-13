@@ -171,3 +171,11 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 
 ### OverlapExisting: read the blockers before blaming the tunnel (13 Oct)
 A refused road preview lists the objects in the way in `placementErrors` (entries with a `position`). `node test/road.ts` now prints them as `blockers`. Look each one up with `get_buildings {x,z,radius}`. In South Bank the boulevard was thought to be blocked by the subway track at -20; the real blocker was a BusDepot01 (lot 144 x 72 m) across the axis. Surface roads cross a -20 subway tunnel without trouble.
+- Player notes (Haiku), 2026-10-13 06:35 UTC: when a road preview is refused OverlapExisting, read the `blockers` list from test/road.ts (index, x, z) and look the object up with get_buildings {x,z,radius:60} before diagnosing. The South Bank boulevard was blocked by a bus depot, not the subway track.
+
+### Overpass over the highway: what works (13 Oct, District 5 links)
+- Build in three pieces with `node test/road.ts`: ramp (`startElevation` 0, `endElevation` 8-10), one span of 70 m or less at constant height, ramp down. Elevations are relative to the ground. 8-10 m clears the highway.
+- A span longer than about 72 m gets a pier in the middle; a pier on a carriageway is refused as OverlapExisting, and the `blockers` it lists are the preview's own piers (their index changes on every preview, and `get_buildings` finds nothing there). Put the piece joints 25 m or more from each carriageway centre line.
+- The existing highway edges keep their ids when the deck is right (no at-grade junction was made): check with `get_network_edges`.
+- A wider road on an old Small Road line can overlap the lot of a building fronting it; shift the line a few metres away or start with a short Small Road piece.
+- `node test/buildings.ts <x> <z> <radius>` lists buildings (id, prefab, position) near a point.
