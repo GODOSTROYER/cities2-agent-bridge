@@ -179,3 +179,5 @@ A refused road preview lists the objects in the way in `placementErrors` (entrie
 - The existing highway edges keep their ids when the deck is right (no at-grade junction was made): check with `get_network_edges`.
 - A wider road on an old Small Road line can overlap the lot of a building fronting it; shift the line a few metres away or start with a short Small Road piece.
 - `node test/buildings.ts <x> <z> <radius>` lists buildings (id, prefab, position) near a point.
+- Player notes (Haiku), 2026-10-13 07:10 UTC: an elevated highway link's deck end is not a ground node. A ground piece built from it with build_line reports partial loose_end at the deck point; road.ts with startElevation 0 refuses no_valid_road_preview. Check the deck's own height (node read) before extending a ground road from it.
+- **Elevated roads and bridges carry no power, water or sewage.** A district reached only over decks has none: lay `build_line` `power_low` and `pipe` (Combined Small Pipe) from a ground road on one side to a ground road on the other, under the obstacle (done under the west highway for District 5). Plan this with the trunk links, before services.
