@@ -154,7 +154,7 @@ namespace CitiesIIAgentBridge
                 throw new InvalidOperationException("control_disabled: enable it in Options > Cities II Agent Bridge");
         }
 
-        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "utility_check", "dev_tree", "service_headroom", "get_metrics", "civic_metrics", "people_metrics", "environment_metrics", "network_ends", "pollution_sources", "garbage_system", "junction_info", "building_upgrades", "outside_connections", "get_fees", "transit_lines", "service_buildings", "home_clusters", "crime_map", "notifications", "transit_status", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
+        private static readonly string[] NonPausingReads = { "multi", "find_free_lots", "grid_connectors", "find_roadside_lots", "corridor", "coverage_gaps", "traffic_hotspots", "project", "plan_grid", "connected", "utility_check", "dev_tree", "service_headroom", "get_metrics", "civic_metrics", "people_metrics", "environment_metrics", "line_stops", "mail_stats", "network_ends", "pollution_sources", "garbage_system", "junction_info", "building_upgrades", "outside_connections", "get_fees", "transit_lines", "service_buildings", "home_clusters", "crime_map", "notifications", "transit_status", "tile_options", "zone_area_count", "get_city_state", "get_city_management", "get_services", "get_prefab_details", "get_build_prefabs", "get_tiles", "sample_terrain" };
 
         // multi {commands:[{command,args}]}: up to 16 non-pausing reads in one mailbox round trip.
         private JObject Multi(JObject args)
@@ -270,7 +270,7 @@ namespace CitiesIIAgentBridge
                 case "get_metrics": return GetMetrics(args);
                 case "civic_metrics": return CivicMetrics();
                 case "people_metrics": return PeopleMetrics();
-                case "environment_metrics": return EnvironmentMetrics();
+                case "environment_metrics": return EnvironmentMetrics(); case "line_stops": return LineStops(args); case "mail_stats": return MailStats(args);
                 case "purchase_dev_node": return PurchaseDevNode(args);
                 case "network_ends": return NetworkEnds(args);
                 case "pollution_sources": return PollutionSources(args);
