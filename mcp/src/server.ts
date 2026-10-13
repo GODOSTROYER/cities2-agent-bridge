@@ -362,12 +362,13 @@ server.registerTool('buy_tile', {
     x: z.number().optional(), z: z.number().optional(), plan: z.boolean().optional(),
     reserve: z.number().int().min(0).optional().describe('cash to keep (default 1,000,000)'),
     allowUnreachable: z.boolean().optional().describe('buy a tile no road can reach yet (behind a highway or water); only for road work the agent has planned'),
+    exact: z.boolean().optional().describe('buy the one tile whose polygon contains x,z (nearest unowned centre within 320 m if none does), chosen by position, not by the dry/flat ranking; n is forced to 1 and the reachability search is skipped. Needs x and z. Price, max and reserve checks still apply; plan=true previews only.'),
   },
 }, async (a) => {
   try {
     const cleared = await ensureClear();
     assertIdle();
-    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan, reserve: a.reserve, allowUnreachable: a.allowUnreachable }), cleared));
+    return ok(withCleared(await buyTile({ n: a.n, max: a.max, x: a.x, z: a.z, plan: a.plan, reserve: a.reserve, allowUnreachable: a.allowUnreachable, exact: a.exact }), cleared));
   } catch (e) { return fail(e); }
 });
 
@@ -600,7 +601,7 @@ server.registerTool('query', {
   inputSchema: {
     command: z.enum([
       'get_city_state', 'get_city_management', 'get_city_diagnostics', 'get_services', 'get_buildings',
-      'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities',
+      'diagnose_connections', 'get_city_map', 'get_network_edges', 'get_tiles', 'get_water_facilities', 'civic_metrics', 'people_metrics', 'environment_metrics',
       'find_building_sites', 'get_prefab_details', 'get_build_prefabs', 'sample_terrain', 'get_zone_cells', 'service_buildings', 'plan_grid', 'connected', 'zone_area_count', 'grid_connectors', 'home_clusters', 'crime_map', 'tile_options', 'notifications', 'transit_status', 'dev_tree', 'service_headroom', 'get_metrics', 'utility_check', 'network_ends', 'pollution_sources', 'garbage_system', 'junction_info', 'outside_connections', 'building_upgrades', 'get_fees', 'transit_lines', 'find_free_lots', 'find_roadside_lots',
       'get_capabilities',
     ]),

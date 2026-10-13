@@ -17,7 +17,7 @@ const RECORD_GAP_MS = 60 * 1000;
 
 export function priorityOf(value: number): 'very_high' | 'priority' | 'normal' {
   if (value < -5) return 'very_high';
-  if (value < -3) return 'priority';
+  if (value < -2) return 'priority'; // owner, 2026-10-13: nothing worse than -2 except Tax
   return 'normal';
 }
 

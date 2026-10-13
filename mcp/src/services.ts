@@ -14,19 +14,70 @@ import { placeService } from './city.ts';
 export interface Rule { t: string; need: string; rx: RegExp; prefabs: string[]; cov?: string; minPop: number; spacing: number }
 
 export const RULES: Rule[] = [
-  { t: 'health', need: 'health', rx: /^(MedicalClinic|Hospital)/, prefabs: ['MedicalClinic01', 'MedicalClinic02'], cov: 'Healthcare', minPop: 300, spacing: 700 },
+  { t: 'health', need: 'health', rx: /^(MedicalClinic|Hospital|DiseaseControl)/, prefabs: ['MedicalClinic01', 'MedicalClinic02'], cov: 'Healthcare', minPop: 300, spacing: 700 },
   { t: 'deathcare', need: 'deathcare', rx: /^(Cemetery|Crematorium)/, prefabs: ['Crematorium01', 'Cemetery02', 'Cemetery01'], minPop: 500, spacing: 2500 },
-  { t: 'fire', need: 'fire', rx: /^(FireHouse|RS_FireHouse|FireStation)/, prefabs: ['FireHouse01', 'RS_FireHouse01', 'FireHouse02'], cov: 'FireRescue', minPop: 600, spacing: 900 },
-  { t: 'police', need: 'police', rx: /^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation)/, prefabs: ['PoliceStation02', 'PoliceStation01'], cov: 'Police', minPop: 800, spacing: 900 },
-  { t: 'school', need: 'education', rx: /^ElementarySchool/, prefabs: ['ElementarySchool01', 'ElementarySchool02'], cov: 'Education', minPop: 600, spacing: 900 },
-  { t: 'highschool', need: 'education_high', rx: /^HighSchool/, prefabs: ['HighSchool02', 'HighSchool01'], minPop: 2500, spacing: 2000 },
+  { t: 'fire', need: 'fire', rx: /^(FireHouse|RS_FireHouse|FireStation|RS_FireStation)/, prefabs: ['FireHouse01', 'RS_FireHouse01', 'FireHouse02'], cov: 'FireRescue', minPop: 600, spacing: 900 },
+  { t: 'police', need: 'police', rx: /^(PoliceStation|RS_PoliceStation|CCP5_PoliceStation|PoliceHeadquarters)/, prefabs: ['PoliceStation02', 'PoliceStation01'], cov: 'Police', minPop: 800, spacing: 900 },
+  { t: 'school', need: 'education', rx: /^(ElementarySchool|CCP5_ElementarySchool)/, prefabs: ['ElementarySchool01', 'ElementarySchool02'], cov: 'Education', minPop: 600, spacing: 900 },
+  { t: 'highschool', need: 'education_high', rx: /^(HighSchool|CCP5_HighSchool)/, prefabs: ['HighSchool02', 'HighSchool01'], minPop: 2500, spacing: 2000 },
   { t: 'college', need: 'education_college', rx: /College/, prefabs: ['College01'], minPop: 6000, spacing: 3000 },
   { t: 'university', need: 'education_university', rx: /University/, prefabs: ['RS_University01', 'TechnicalUniversity01'], minPop: 9000, spacing: 3000 },
   { t: 'post', need: 'post', rx: /^(PostOffice|PostSorting)/, prefabs: ['PostOffice01', 'PostOffice02'], cov: 'PostService', minPop: 1500, spacing: 1500 },
-  { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['RecyclingCenter01', 'Landfill01', 'IncinerationPlant01'], minPop: 1000, spacing: 3000 },
-  { t: 'entertainment', need: 'entertainment', rx: /Park|Playground|Plaza/, prefabs: ['ChirperPark01', 'Playground01', 'CityPark05', 'CityPark01'], cov: 'Park', minPop: 300, spacing: 350 },
+  { t: 'garbage', need: 'garbage', rx: /^(Landfill|Incinerat|Recycling)/, prefabs: ['RecyclingCenter01'], minPop: 1000, spacing: 3000 }, // forbidden types are never candidates (policy.json)
+  { t: 'entertainment', need: 'entertainment', rx: /Park|Playground|Plaza|CommunityPool|BasketballCourt|TennisCourt|BotanicalGarden/, prefabs: ['ChirperPark01', 'Playground01', 'CityPark05', 'CityPark01'], cov: 'Park', minPop: 300, spacing: 350 },
   { t: 'telecom', need: 'telecom', rx: /RadioMast|ServerFarm|Telecom/, prefabs: ['RadioMast01'], minPop: 1000, spacing: 1500 },
 ];
+
+// policy.json quality.bestAvailable: the owner's standing order, best available version of every service
+// building. Each list runs best first (highest capacity or tier; for parks the lot area, the size proxy).
+// Lock state is not known here: a locked or missing type fails with prefab_locked / prefab_not_found and
+// the fix loop moves on to the next, or bestFirst() is given the known locks. Checked by test/services.ts.
+export const BEST_AVAILABLE: Record<string, string[]> = {
+  // Hospital01 500 patients; DiseaseControlCenter01 250; clinics 100 and 25.
+  health: ['Hospital01', 'DiseaseControlCenter01', 'MedicalClinic01', 'MedicalClinic02'],
+  // Crematorium01 cremates (tier above burial); Cemetery01 storage 5000; Cemetery02 storage 1500.
+  deathcare: ['Crematorium01', 'Cemetery01', 'Cemetery02'],
+  // FireStation01 10 engines; RS_FireStation01 7; FireHouse02 6; FireHouse01 4; RS_FireHouse01 3.
+  fire: ['FireStation01', 'RS_FireStation01', 'FireHouse02', 'FireHouse01', 'RS_FireHouse01'],
+  // HQ 20 cars and 100 jail; PoliceStation03 16 cars; RS 8; PoliceStation01 6 cars 25 jail; 02 6 cars 10 jail; CCP5 4 cars.
+  police: ['PoliceHeadquarters01', 'PoliceStation03', 'RS_PoliceStation01', 'PoliceStation01', 'PoliceStation02', 'CCP5_PoliceStation'],
+  // 1500 students; 1000 students; 400 students.
+  school: ['ElementarySchool03', 'ElementarySchool01', 'CCP5_ElementarySchool', 'ElementarySchool02'],
+  // 800 students each (vanilla first); 400 students.
+  highschool: ['HighSchool01', 'HighSchool03', 'CCP5_HighSchool', 'HighSchool02'],
+  college: ['College01'],
+  // 15000 students (the three full universities, then RS_University01 8500).
+  university: ['University01', 'TechnicalUniversity01', 'MedicalUniversity01', 'RS_University01'],
+  // Sorting facility is the large mail tier; post offices after.
+  post: ['PostSortingFacility01', 'PostOffice01', 'PostOffice02'],
+  garbage: ['RecyclingCenter01'],
+  // Parks by lot area, largest first (CCP4_Park06 25x32 ... playgrounds 3x3). The head is rotated by spreadHead().
+  entertainment: [
+    'CCP4_Park06', 'BotanicalGarden01', 'CityPark04', 'CCP4_Park05', 'CCP4_Park03', 'CityPark11', 'CCP4_Park02', 'CCP4_Park07',
+    'CityPark07', 'ChirperPark04', 'CityPark03', 'CityPark08', 'DogPark02', 'CommunityPool01', 'BasketballCourt04', 'CityPark10',
+    'ChirperPark03', 'CityPark09', 'CityPark02', 'CCP4_Park04', 'CCP4_Park01', 'SkatePark01', 'TennisCourt01', 'CityPark06',
+    'ChirperPark02', 'CityPark01', 'Playground04', 'BasketballCourt01', 'Playground02', 'DogPark01', 'Playground03', 'Playground05',
+    'CityPark05', 'GymPark01', 'ChirperPark01', 'Playground01',
+  ],
+  // TelecomTower01 is the upgrade of RadioMast01 (locked at the last check: falls through to the mast).
+  telecom: ['TelecomTower01', 'RadioMast01'],
+};
+
+// PURE. Unlocked candidates first, each group in its own rank order; a known-locked type falls behind the rest.
+export function bestFirst(prefabs: string[], locked?: Record<string, boolean>): string[] {
+  if (!locked) return prefabs;
+  return [...prefabs.filter(p => !locked[p]), ...prefabs.filter(p => locked[p])];
+}
+
+// PURE. Park variety: the first `head` candidates rotate by `by` (so successive parks start with different
+// large types); the smaller ones keep their order after them. Deterministic in `by`.
+export function spreadHead(prefabs: string[], by: number, head = 4): string[] {
+  const h = Math.min(head, prefabs.length);
+  if (h <= 1) return prefabs;
+  const k = ((by % h) + h) % h;
+  const top = prefabs.slice(0, h);
+  return [...top.slice(k), ...top.slice(0, k), ...prefabs.slice(h)];
+}
 
 export interface Center { n: number; x: number; z: number }
 export interface Gap { uncoveredPct: number; gapClusters: { x: number; z: number; homes: number }[] }
@@ -47,7 +98,8 @@ export interface ServicesInput {
   uncoveredShare?: number;
   clusters?: Cluster[];
   perRule?: number; // placements per rule in one call (only entertainment uses more than one)
-  policy?: Json; // policy.json: forbiddenPrefabs are never proposed
+  policy?: Json; // policy.json: forbiddenPrefabs are never proposed; quality.bestAvailable orders candidates best first
+  locked?: Record<string, boolean>; // known locked prefabs (name -> true); they go last in bestAvailable order
 }
 
 export interface Need {
@@ -161,7 +213,10 @@ export function decideServices(input: ServicesInput): Need[] {
     if (net < 0 && !isEsc && !short) continue; // upkeep discipline: no new permanent upkeep while losing money
 
     const pct = Math.round(share * 100);
-    const rulePrefabs = allowed(input.policy, rule.prefabs); if (!rulePrefabs.length) continue; // every type of this rule is forbidden by policy
+    // policy quality.bestAvailable: the best-first list (unlocked first); otherwise the rule's own order.
+    const best = input.policy?.quality?.bestAvailable === true;
+    const base = best ? (BEST_AVAILABLE[rule.t] ?? rule.prefabs) : rule.prefabs;
+    const rulePrefabs = allowed(input.policy, best ? bestFirst(base, input.locked) : base); if (!rulePrefabs.length) continue; // every type of this rule is forbidden by policy
     const existing: Pt[] = have.map(s => ({ x: Number(s[1]), z: Number(s[2]) }));
     const planned: Pt[] = [];
     // Several placements only for entertainment (parks spread out); each pick counts as a building for the next.
@@ -170,8 +225,8 @@ export function decideServices(input: ServicesInput): Need[] {
       const pick = placement(rule, existing, planned, gap, share, uncoveredShare, input.clusters, buildings);
       if (!pick) break;
       planned.push(pick.at);
-      // Park variety: rotate the prefab list so successive parks differ.
-      const prefabs = rule.t === 'entertainment' ? rotate(rulePrefabs, have.length + i) : rulePrefabs;
+      // Park variety: rotate the prefab list so successive parks differ (bestAvailable: rotate the largest four).
+      const prefabs = rule.t === 'entertainment' ? (best ? spreadHead(rulePrefabs, have.length + i) : rotate(rulePrefabs, have.length + i)) : rulePrefabs;
       const base = short && !isEsc ? `capacity ${room!.pct ?? '-'}% now, ${room!.projected ?? '-'}% with planned growth (target under 78%)`
         : isEsc ? `escalated ${needs[rule.need]?.score ?? ''}`.trim()
         : have.length === 0 && i === 0 ? 'none built'

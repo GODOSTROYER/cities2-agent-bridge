@@ -35,23 +35,22 @@ export const SYSTEMS: Spec[] = [
   { system: 'Welfare', factors: ['Welfare'], action: 'welfare office (development tree)' },
   { system: 'Homelessness', factors: ['Homelessness'], action: 'housing by demand' },
 ];
-// Infoviews the bridge does not read yet: listed so nothing is silently missing.
-// Names are the game's own InfoviewPrefab names (get_metrics.infoviews); parking has no infoview of its own.
-// Transport and Outside connections are read now (report-extra.ts): their own rows below.
-export const NOT_READ = ['Bicycles', 'DisasterControl', 'Administration', 'Wealth', 'Level', 'Extractors', 'WaterPollution'];
-// What each unread infoview needs from the mod (the row outcome says it, prefixed "needs a mod reader: ").
-const NEEDS: Record<string, string> = {
-  Bicycles: 'bicycle lanes, bicycle parking and bicycle trips per district',
-  DisasterControl: 'disaster response buildings and active disasters (fire, flood, earthquake) with their damage',
-  Administration: 'district administration buildings: capacity and coverage',
-  Wealth: 'citizen wealth classes and household income per district',
-  Level: 'city-wide building level counts (building_upgrades reads one building at a time)',
-  Extractors: 'extractor buildings (mines, oil, forestry, fishing): output, workers and pollution',
-  WaterPollution: 'water pollution per district or per water source (sample_terrain samples single points only)',
-};
+// The civic, people and environment readers (civic_metrics, people_metrics, environment_metrics, src/Metrics*.cs)
+// are graded below. Until the game restarts with the mod update they answer "unknown command": their rows are
+// unknown with NOT_YET, never an error. Transport and Outside connections are read via report-extra.ts.
+export const NOT_YET = 'reader not installed yet (restart the game after the mod update)';
+/** A share of people with an emergency shelter place below this is "short" (chosen here; the owner gave no figure). */
+export const SHELTER_SHORT_PCT = 5;
+/** Pumping-station intake pollution above this grades the water pollution row bad (native units, chosen here: not a percentage). */
+export const WATER_INTAKE_BAD = 5;
 // Systems whose happiness factor is absent from the snapshot when it is small: absent means 0 (no effect), graded on icons.
 const ZERO_IF_ABSENT = new Set(['Telecom', 'Air pollution', 'Ground pollution', 'Noise pollution', 'Welfare', 'Homelessness']);
+// Pollution systems and the key of their reading in environment_metrics.
+const POLLUTION_KEY: Record<string, 'air' | 'ground' | 'noise'> = { 'Air pollution': 'air', 'Ground pollution': 'ground', 'Noise pollution': 'noise' };
 const unread = (system: string, outcome: string, action = 'add a reader'): SystemRow => ({ system, status: 'unknown', outcome, capacity: '-', coverage: '-', trend: '', action, blocked: 'harness', value: null });
+/** Why a reader's data is missing: not installed yet (unknown command), or a read that failed (its text is kept). */
+const gap = (err?: string) => NOT_YET + (err && !/unknown/i.test(err) ? `; read failed: ${err}` : '');
+const notYet = (system: string, action: string, err?: string): SystemRow => ({ system, status: 'unknown', outcome: gap(err), capacity: '-', coverage: '-', trend: '', action, blocked: 'harness', value: null });
 
 const rank: Record<Grade, number> = { critical: 0, bad: 1, ok: 2, good: 3, unknown: 4 };
 const worst = (a: Grade, b: Grade): Grade => rank[a] <= rank[b] ? a : b;
@@ -70,7 +69,8 @@ export interface ReportInput {
   netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
   vehicles?: Record<string, { busyPct?: number; efficiencyPct?: number; buildings?: number }>; // service_headroom.vehicles: stations with no vehicle free, efficiency
   outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
-  extra?: ExtraInput; // report-extra.ts: transit_lines, outside_connections and telecom headroom (read-only, failure-tolerant)
+  extra?: ExtraInput; // report-extra.ts: transit_lines, outside_connections, telecom headroom and the civic, people and environment readers (read-only, failure-tolerant)
+  cycling?: boolean; // the cycling policy is on: no bicycle at all is then bad (policy.json has no cycling key yet)
 }
 
 export function gradeOf(factor: number | null, tableStatus: string | null, uncoveredPct: number | null, extra: Grade = 'good'): Grade {
@@ -90,10 +90,13 @@ export const GAME_FLOW_TARGET = 90;
 export function buildReport(i: ReportInput): { markdown: string; values: Record<string, number>; rows: SystemRow[] } {
   const snap = i.snap; const factors = snap.happiness ?? {}; const icons = snap.icons ?? {}; const rows: SystemRow[] = []; const values: Record<string, number> = {};
   const add = (r: SystemRow) => { if (r.value !== null) values[r.system] = r.value; r.trend = arrow(r.value, i.prev?.[r.system]); rows.push(r); };
+  // Homeless citizens: the people reader's census count when it answered, else the snapshot's.
+  const readerHomeless = Number(i.extra?.people?.homeless?.citizens);
+  const hlCount = Number.isFinite(readerHomeless) ? readerHomeless : snap.jobs?.homeless !== undefined ? Number(snap.jobs.homeless) : undefined;
   for (const s of SYSTEMS) {
     const fs = (s.factors ?? []).filter(f => factors[f] !== undefined).map(f => Number(factors[f]));
     // Homelessness is graded on the count only when the census has it; the other zero-if-absent systems need a non-empty happiness list.
-    const hlKnown = s.system === 'Homelessness' && snap.jobs?.homeless !== undefined && Number(snap.city?.pop ?? 0) > 0;
+    const hlKnown = s.system === 'Homelessness' && hlCount !== undefined && Number(snap.city?.pop ?? 0) > 0;
     const absent = ZERO_IF_ABSENT.has(s.system) && Object.keys(factors).length > 0 && fs.length === 0 && (s.system !== 'Homelessness' || hlKnown);
     const listed = fs.length ? Math.min(...fs) : null; const factor = listed ?? (absent ? 0 : null);
     const ts = (s.table ?? []).map(k => i.table?.[k]).filter(Boolean) as { pct: number | null; projected: number | null; status: string }[];
@@ -104,6 +107,32 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     let extra: Grade = iconCount >= 20 ? 'bad' : 'good'; let outcome = [factor !== null ? `factor ${factor}${listed === null ? ' (not listed: below 0.5, no effect)' : ''}` : '', iconCount ? `${iconCount} icons` : '', waiting ? `${waiting} waiting` : ''].filter(Boolean).join(', ');
     let value: number | null = factor;
     if (s.system === 'Telecom' && i.extra?.telecom) outcome = [`${i.extra.telecom.buildings} telecom buildings, network capacity ${i.extra.telecom.capacity}`, outcome].filter(Boolean).join(', ');
+    // Environment reader (environment_metrics): pollution at the homes against the game's harmful level, and telecom coverage.
+    // Civic reader (civic_metrics): welfare offices, their usage and efficiency. Absent readers keep the factor grade and say so.
+    const env = i.extra?.environment, civ = i.extra?.civic;
+    const pollKey = POLLUTION_KEY[s.system];
+    if (pollKey) {
+      const pol = env?.[pollKey];
+      if (!env) outcome = [outcome, `homes: ${gap(i.extra?.environmentError)}`].filter(Boolean).join(', ');
+      else if (pol && pol.levelConfirmed) {
+        const share = Number(pol.harmfulSharePct ?? 0), clusters = (pol.worst ?? []).slice(0, 2).map((c: number[]) => `(${c[0]},${c[1]}) x${c[2]}`).join(' ');
+        outcome = [`${share}% of homes above the harmful level ${pol.harmfulLevel}${clusters ? `, worst clusters at ${clusters}` : ''}`, outcome].filter(Boolean).join(', ');
+        extra = worst(extra, share >= 25 ? 'bad' : share >= 10 ? 'ok' : 'good');
+      } else if (pol) outcome = [`threshold not confirmed (no harmful level read; 90th percentile ${pol.p90}), graded on the factor and icons`, outcome].filter(Boolean).join(', ');
+    }
+    if (s.system === 'Telecom') {
+      const tc = env?.telecom;
+      if (tc && Number(tc.homes) > 0) { outcome = [`zero network quality in ${tc.zeroQualitySharePct}% of homes, 10th percentile ${tc.qualityP10}`, outcome].filter(Boolean).join(', '); extra = worst(extra, Number(tc.zeroQualitySharePct) > 5 ? 'bad' : 'good'); }
+      else if (!env) outcome = [outcome, `coverage: ${gap(i.extra?.environmentError)}`].filter(Boolean).join(', ');
+    }
+    if (s.system === 'Welfare') {
+      const cw = civ?.welfare;
+      if (cw && Number.isFinite(Number(cw.buildings))) {
+        const n = Number(cw.buildings), use = Number(cw.usageAvgPct ?? 0), eff = civ?.efficiency?.welfare?.avgPct, pop = Number(snap.city?.pop ?? 0);
+        outcome = [n ? `${n} welfare office(s), usage ${use}%${eff !== undefined ? `, efficiency ${eff}%` : ''}` : 'no welfare office', outcome].filter(Boolean).join(', ');
+        extra = worst(extra, (n === 0 && pop > 10000) || use >= 100 ? 'bad' : 'good');
+      } else if (!civ) outcome = [outcome, `offices and usage: ${gap(i.extra?.civicError)}`].filter(Boolean).join(', ');
+    }
     // Headline: flow weighted by vehicles (how fast the average vehicle moves against free speed).
     // The game's own citywide figure is an unweighted mean over road edges, in which an empty small
     // street reads about 45% and a free highway 93%: it cannot reach 75% in a street grid and it hides
@@ -126,7 +155,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     if (s.system === 'Police' && oc.crime) { outcome = `high crime in ${oc.crime.highSharePct}% of buildings; ${outcome}`; extra = worst(extra, Number(oc.crime.highSharePct) >= 30 ? 'bad' : 'good'); }
     // Homelessness: the census count against the population. Good at 0, ok when small, bad above 0.5% or when rising.
     if (hlKnown) {
-      const hl = Number(snap.jobs.homeless), pop = Number(snap.city.pop), share = 100 * hl / pop, v = -share * 10;
+      const hl = Number(hlCount), pop = Number(snap.city.pop), share = 100 * hl / pop, v = -share * 10;
       const rising = i.prev?.[s.system] !== undefined && v < Number(i.prev[s.system]) - 0.2;
       outcome = [`${hl} homeless (${share.toFixed(2)}% of ${pop})`, outcome].filter(Boolean).join(', ');
       extra = worst(extra, share > 0.5 || rising ? 'bad' : share > 0 ? 'ok' : 'good'); value = v;
@@ -176,7 +205,59 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     add({ system: 'Outside connections', status, outcome: `${oc2.transport} transport (road ${oc2.byMode.road ?? 0}, train ${oc2.byMode.train ?? 0}, ship ${oc2.byMode.ship ?? 0}, air ${oc2.byMode.air ?? 0}), ${oc2.power} power, ${oc2.pipe} water pipe; no link by ${absent.join(', ') || 'none'}; use per connection not read`,
       capacity: '-', coverage: '-', trend: '', action: 'a road or rail link if transport is 0; a power or water link if the grid or water needs imports; per-connection use needs a mod reader (traffic on each outside road)', blocked: '', value: null });
   } else rows.push(unread('Outside connections', `not read: ${i.extra?.outsideError ?? 'no outside connection reading in this report'}`, 'retry at the next review'));
-  for (const n of NOT_READ) rows.push(unread(n, `needs a mod reader: ${NEEDS[n]}`));
+  // Civic, people and environment readers: one row each, graded from the data; absent data is unknown with NOT_YET.
+  const civ = i.extra?.civic, ppl = i.extra?.people, env = i.extra?.environment;
+  const pop = Number(snap.city?.pop ?? 0);
+  const cGap = i.extra?.civicError, pGap = i.extra?.peopleError, eGap = i.extra?.environmentError;
+  // Administration: city hall buildings and their efficiency; no city hall is ok (the development tree unlocks it).
+  if (civ?.administration?.buildings !== undefined) {
+    const n = Number(civ.administration.buildings), eff = civ.efficiency?.administration;
+    add({ system: 'Administration', status: n === 0 ? 'ok' : Number(eff?.avgPct ?? 0) >= 99 ? 'good' : 'ok', outcome: n === 0 ? 'no city hall' : `${n} administration building(s), efficiency ${eff?.avgPct ?? 0}%${Number(eff?.below100 ?? 0) ? `, ${eff.below100} below 100%` : ''}`, capacity: '-', coverage: '-', trend: '', action: n === 0 ? 'city hall (development tree)' : 'keep at full efficiency', blocked: '', value: n === 0 ? -1 : Number(eff?.avgPct ?? 0) / 100 });
+  } else rows.push(notYet('Administration', 'city hall (development tree)', cGap));
+  // Disaster control: shelter places against population (the share of people with a place), early warning and
+  // disaster control buildings, fire helicopters and active events. Critical when an event is on and shelters are short;
+  // bad when a city above 20,000 people has no shelter at all.
+  if (civ?.disaster?.shelters) {
+    const d = civ.disaster, sh = d.shelters, nSh = Number(sh.buildings ?? 0), cap = Number(sh.capacity ?? 0);
+    const share = pop > 0 ? Math.round(1000 * cap / pop) / 10 : null;
+    const active = Number(d.events?.active ?? 0), short = share !== null && share < SHELTER_SHORT_PCT;
+    const status: Grade = active > 0 && short ? 'critical' : nSh === 0 && pop > 20000 ? 'bad' : short ? 'ok' : 'good';
+    const hp = d.helicopters ?? {}, weather = Object.entries(d.events?.weather ?? {}).map(([k, v]) => `${k} ${v}`).join(', ');
+    add({ system: 'Disaster control', status, outcome: `${share ?? '?'}% of ${pop} people have a shelter place (${cap} places in ${nSh} shelter(s), ${sh.occupants ?? 0} inside); ${d.disasterControl ?? 0} disaster control, ${d.earlyWarning ?? 0} early warning; ${hp.available ?? 0} of ${hp.capacity ?? 0} fire helicopters available at ${hp.stations ?? 0} station(s); ${active} active event(s)${weather ? ` (${weather})` : ''}${Number(d.events?.floods ?? 0) ? `, ${d.events.floods} flood(s)` : ''}`,
+      capacity: share === null ? '-' : `${share}% of people`, coverage: '-', trend: '', action: 'emergency shelters sized to population before an event; early warning and disaster control buildings; helicopters at fire stations', blocked: '', value: share === null ? null : share / 10 });
+  } else rows.push(notYet('Disaster control', 'emergency shelters sized to population; early warning and disaster control buildings', cGap ?? (civ ? 'no shelter reading in civic_metrics' : undefined)));
+  // Building levels by zone kind (people_metrics.levels): the share at the top level is the owner's "max out" measure.
+  if (ppl?.levels) {
+    const kinds = Object.entries(ppl.levels) as [string, any][];
+    const total = kinds.reduce((a, [, v]) => a + Number(v.n ?? 0), 0), top = kinds.reduce((a, [, v]) => a + Number(v.byLevel?.[4] ?? 0), 0);
+    const topPct = total ? Math.round(1000 * top / total) / 10 : 0;
+    add({ system: 'Level', status: total === 0 ? 'ok' : topPct >= 80 ? 'good' : topPct >= 50 ? 'ok' : 'bad', outcome: total === 0 ? 'no zoned buildings yet' : `${topPct}% of ${total} zoned buildings at the top level; ${kinds.filter(([, v]) => Number(v.n) > 0).map(([k, v]) => `${k} avg ${v.avgLevel}, top ${v.maxLevelPct}%`).join('; ')}`, capacity: '-', coverage: '-', trend: '', action: 'land value, services, education and low pollution raise levels', blocked: '', value: topPct / 10 });
+  } else rows.push(notYet('Level', 'land value, services, education and low pollution raise levels', pGap));
+  // Wealth: households by class (a sample); the poorest class above 15% is bad.
+  if (ppl?.wealth && Number(ppl.wealth.sampled ?? 0) > 0) {
+    const wl = ppl.wealth, cs = wl.classSharePct ?? {}, poorest = Number(cs.wretched ?? wl.poorestSharePct ?? 0);
+    add({ system: 'Wealth', status: poorest > 15 ? 'bad' : 'good', outcome: `households: ${['wretched', 'poor', 'modest', 'comfortable', 'wealthy'].map(k => `${k} ${cs[k] ?? 0}%`).join(', ')} (sample of ${wl.sampled}, every ${wl.everyNth}th household)`, capacity: '-', coverage: '-', trend: '', action: 'jobs and education (income follows them); housing the poorest class can afford', blocked: '', value: -poorest / 10 });
+  } else rows.push(notYet('Wealth', 'jobs and education; housing the poorest class can afford', pGap ?? (ppl ? 'no households sampled' : undefined)));
+  // Water pollution at the pumps (environment_metrics.water): the intake's own value; bad above WATER_INTAKE_BAD.
+  // The river is not swept, only the pump positions are read.
+  if (env?.water?.pumps !== undefined) {
+    const wat = env.water, pumps = Number(wat.pumps), mx = Number(wat.maxIntake ?? 0);
+    const top = (wat.intakes ?? []).reduce((best: any, r: any[]) => !best || Number(r[2]) > Number(best[2]) ? r : best, null);
+    const at = top && mx > 0 && Number(top[2]) === mx ? ` at (${top[0]},${top[1]})` : '';
+    add({ system: 'Water pollution', status: pumps === 0 || mx <= 0 ? 'good' : mx > WATER_INTAKE_BAD ? 'bad' : 'ok', outcome: pumps === 0 ? 'no pumping station' : `${pumps} pumping station(s), highest intake pollution ${mx}${at}; surface at the pumps ${wat.maxSurfaceAtPumps ?? '?'}${wat.surfaceAvailable ? '' : ' (surface not sampled)'}; river not swept`, capacity: '-', coverage: '-', trend: '', action: 'intakes upstream of outfalls; sewage treated or exported (sewage row)', blocked: '', value: -mx / 10 });
+  } else rows.push(notYet('Water pollution', 'intakes upstream of outfalls; sewage treated or exported', eGap));
+  // Bicycles (environment_metrics.bicycles): the flags the game exposes. Informational (ok) unless nothing at all exists
+  // where the cycling policy is on.
+  if (env?.bicycles?.bicyclePathMetres !== undefined) {
+    const bk = env.bicycles, path = Number(bk.bicyclePathMetres ?? 0), road = Number(bk.roadWithBicycleAccessMetres ?? 0), sites = Number(bk.parkingBuildings ?? 0), bikes = Number(bk.bicyclesPresent ?? 0);
+    add({ system: 'Bicycles', status: i.cycling && path + road + sites + bikes === 0 ? 'bad' : 'ok', outcome: `${path} m of bicycle path, ${road} m of road with bicycle access, ${sites} bicycle parking site(s), ${bikes} bicycles present; not exposed by the game: parking capacity, whether a bicycle is moving`, capacity: '-', coverage: '-', trend: '', action: 'bicycle paths on arterials and parking near the centre, when the cycling policy is on', blocked: '', value: null });
+  } else rows.push(notYet('Bicycles', 'bicycle paths and parking, when the cycling policy is on', eGap));
+  // Extractor areas (environment_metrics.extractors): informational; ok when some areas have no resource left.
+  if (env?.extractors?.byResource !== undefined) {
+    const ex = env.extractors, by = Object.entries(ex.byResource) as [string, any][];
+    const areas = by.reduce((a, [, v]) => a + Number(v.areas ?? 0), 0), left = by.reduce((a, [, v]) => a + Number(v.withResourceLeft ?? 0), 0);
+    add({ system: 'Extractors', status: areas > left ? 'ok' : 'good', outcome: areas === 0 ? `no extractor areas; ${ex.facilityBuildings ?? 0} extractor building(s)` : `${by.map(([k, v]) => `${k} ${v.areas} area(s), ${v.withResourceLeft} with resource left`).join('; ')}; ${areas - left} used up; ${ex.facilityBuildings ?? 0} extractor building(s)`, capacity: '-', coverage: '-', trend: '', action: 'the areas with resource left; used-up areas yield nothing', blocked: '', value: null });
+  } else rows.push(notYet('Extractors', 'extractor areas with resource left', eGap));
   // Diagnosis (Phase 4): the cause class of every bad row, and root causes before knock-on effects.
   const flowPct = Number.isFinite(Number(snap.cityFlow)) ? Number(snap.cityFlow) : null;
   for (const r of rows) { const d = diagnose({ system: r.system, status: r.status, blocked: r.blocked || null, flowPct, ...(r.raw ?? {}) }); r.cause = d.cause; r.why = d.why; r.fix = d.fix; }
@@ -188,7 +269,7 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   const top = ranked.slice(0, 5).map(k => ({ ...byName.get(k.system)!, rootOf: k.rootOf, drivenBy: k.drivenBy }));
   // Definition of done (owner): checked at every review.
   const negative = Object.entries(factors).filter(([k, v]) => k !== 'Tax' && Number(v) < 0).map(([k, v]) => `${k} ${v}`);
-  const notGood = rows.filter(r => r.status !== 'good' && r.status !== 'unknown' && !['Zones: housing (demand low/medium/high)', 'Zones: commercial/industrial/office (demand)', 'Milestone', 'LandValue', 'Tourism'].includes(r.system)).map(r => r.system);
+  const notGood = rows.filter(r => r.status !== 'good' && r.status !== 'unknown' && !['Zones: housing (demand low/medium/high)', 'Zones: commercial/industrial/office (demand)', 'Milestone', 'LandValue', 'Tourism', 'Bicycles', 'Extractors'].includes(r.system)).map(r => r.system);
   const iconTotal = Object.values(icons).reduce((a: number, v: any) => a + Number(v), 0);
   const flowNow = Number(snap.cityFlow ?? NaN);
   const done: [string, boolean, string][] = [

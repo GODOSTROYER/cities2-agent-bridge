@@ -1,10 +1,13 @@
 // Inputs for journals/REPORT.md from reads the bridge ALREADY answers (read-only query commands):
-// transit_lines (lines and stops), outside_connections (connections by kind and prefab) and
-// get_metrics.headroom.telecom. The summarizers are PURE; readExtra() makes the reads and never throws:
-// a failed read leaves its row unknown with the error text (report.ts).
-// Pausing: transit_lines, outside_connections and get_metrics are in the mod's NonPausingReads list.
+// transit_lines (lines and stops), outside_connections (connections by kind and prefab),
+// get_metrics.headroom.telecom, and the three readers of the mod update: civic_metrics, people_metrics and
+// environment_metrics (whole replies, graded in report.ts). The summarizers are PURE; readExtra() makes the
+// reads and never throws: a failed read leaves its row unknown with the error text (report.ts).
+// Pausing: all of these are in the mod's NonPausingReads list.
 
 export type Reader = (name: string, args?: Record<string, any>) => Promise<Record<string, any>>;
+/** A whole reply of a mod reader, as the mod sends it (field names: src/Metrics*.cs). */
+export type Reply = Record<string, any>;
 
 /** A stop with at least this many passengers waiting is a queue the report grades bad. */
 export const STOP_QUEUE_BAD = 200;
@@ -21,6 +24,9 @@ export interface ExtraInput {
   transit?: TransitSummary; transitError?: string;
   outside?: OutsideSummary; outsideError?: string;
   telecom?: { capacity: number; buildings: number };
+  civic?: Reply; civicError?: string; // civic_metrics: welfare, administration, disaster response, efficiency
+  people?: Reply; peopleError?: string; // people_metrics: building levels, wealth, homelessness
+  environment?: Reply; environmentError?: string; // environment_metrics: pollution at homes, water, telecom, bicycles, extractors
 }
 
 const num = (v: any) => Number.isFinite(Number(v)) ? Number(v) : 0;
@@ -72,6 +78,18 @@ function listOf(r: any, key: string): any[] {
   return a;
 }
 
+const short = (e: any) => String(e?.message ?? e).slice(0, 160);
+
+/** One whole reply of a mod reader: no fields, so nothing is projected out; 20000 chars is the query tool's maximum.
+ *  Throws on a failed call, an {ok:false} or {error} reply (unknown command until the game restarts), or a cut reply. */
+async function wholeReply(tool: Reader, command: string): Promise<Reply> {
+  const r = await tool('query', { command, args: {}, maxChars: 20000 });
+  if (!r || typeof r !== 'object') throw new Error(`${command}: no reply`);
+  if (r.ok === false || r.error !== undefined) throw new Error(`${command}: ${String(r.error ?? 'failed')}`);
+  if (r.truncated) throw new Error(`${command} read was cut (${r.chars ?? '?'} chars)`);
+  return r;
+}
+
 /** Makes the read-only calls. Each read is independent: one failure leaves only its own row unknown. */
 export async function readExtra(tool: Reader): Promise<ExtraInput> {
   const out: ExtraInput = {};
@@ -84,5 +102,9 @@ export async function readExtra(tool: Reader): Promise<ExtraInput> {
   catch (e: any) { out.outsideError = String(e?.message ?? e); }
   try { const t = (await tool('query', { command: 'get_metrics', args: {}, fields: ['headroom.telecom'], maxChars: 400 })).headroom?.telecom; if (t) out.telecom = { capacity: num(t.capacity), buildings: num(t.buildings) }; }
   catch { /* optional: the Telecom outcome is then the factor alone */ }
+  // The three readers of the mod update: an unknown command (not installed yet) is recorded, never thrown.
+  try { out.civic = await wholeReply(tool, 'civic_metrics'); } catch (e: any) { out.civicError = short(e); }
+  try { out.people = await wholeReply(tool, 'people_metrics'); } catch (e: any) { out.peopleError = short(e); }
+  try { out.environment = await wholeReply(tool, 'environment_metrics'); } catch (e: any) { out.environmentError = short(e); }
   return out;
 }

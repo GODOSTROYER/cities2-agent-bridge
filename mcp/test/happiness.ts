@@ -33,7 +33,7 @@ try {
   check('priorityOf(-5.1) is very_high', H.priorityOf(-5.1) === 'very_high');
   check('priorityOf(-5) is priority', H.priorityOf(-5) === 'priority');
   check('priorityOf(-3.1) is priority', H.priorityOf(-3.1) === 'priority');
-  check('priorityOf(-3) is normal', H.priorityOf(-3) === 'normal');
+  check('priorityOf(-3) is priority and -2 is normal (owner limit -2)', H.priorityOf(-3) === 'priority' && H.priorityOf(-2) === 'normal');
   check('priorityOf(0) is normal', H.priorityOf(0) === 'normal');
 
   // assess with no actions: sorted worst first, positives absent

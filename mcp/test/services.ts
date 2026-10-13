@@ -1,6 +1,7 @@
 // Offline checks for decideServices(): no game, no bridge calls. Run: node test/services.ts
-import { decideServices } from '../src/services.ts';
+import { decideServices, BEST_AVAILABLE, RULES, bestFirst, spreadHead } from '../src/services.ts';
 import type { Need, Buildings, Gap } from '../src/services.ts';
+import { loadPolicy, forbiddenBy } from '../src/policy.ts';
 import type { Json } from '../src/bridge.ts';
 
 const NOW = Date.parse('2026-10-10T12:00:00.000Z');
@@ -169,6 +170,78 @@ const deathcareWatch = { deathcare: { action: 'watch', score: '1/3' } };
   check('e: traffic/tax/jobs keys produce no needs and change nothing',
     !withIgnored.some(n => ['traffic', 'tax', 'jobs'].includes(n.need) || ['traffic', 'tax', 'jobs'].includes(n.t))
     && JSON.stringify(withIgnored) === JSON.stringify(decide({})));
+}
+
+// (f) bestAvailable (policy.json quality.bestAvailable): best-first candidates, unlocked first, forbidden never.
+const realPolicy = loadPolicy();
+const bestPolicy = { ...realPolicy, quality: { bestAvailable: true } };
+function decideWith(o: { policy?: Json; locked?: Record<string, boolean>; services?: [string, number, number][]; snap?: Json; clusters?: [number, number, number][]; perRule?: number } = {}): Need[] {
+  const buildings: Buildings = { services: o.services ?? SERVICES, homes: { n: 1200, x: 1000, z: -500 }, industry: { n: 0, x: 0, z: 0 } };
+  return decideServices({ snap: o.snap ?? snapOf({}), buildings, gaps: {}, cooldown: {}, nowMs: NOW, clusters: o.clusters, perRule: o.perRule, policy: o.policy, locked: o.locked });
+}
+const noClinic = SERVICES.filter(s => !s[0].startsWith('MedicalClinic'));
+
+// (f1) ordering: the large type leads each rule; lists are unique; no forbidden name.
+{
+  const lists = Object.entries(BEST_AVAILABLE);
+  check('f1: best-first leads: hospital, large police, large fire, large school, mail sorting, recycling',
+    BEST_AVAILABLE.health[0] === 'Hospital01' && BEST_AVAILABLE.police[0] === 'PoliceHeadquarters01' && BEST_AVAILABLE.fire[0] === 'FireStation01'
+    && BEST_AVAILABLE.school[0] === 'ElementarySchool03' && BEST_AVAILABLE.post[0] === 'PostSortingFacility01' && BEST_AVAILABLE.garbage[0] === 'RecyclingCenter01');
+  check('f1: every best list is unique, and parks have 20+ types',
+    lists.every(([, l]) => new Set(l).size === l.length) && BEST_AVAILABLE.entertainment.length >= 20);
+  check('f1: no forbidden type in any best list (policy.json as loaded)',
+    lists.every(([, l]) => l.every(p => !forbiddenBy(realPolicy, p))), lists.flatMap(([, l]) => l.filter(p => forbiddenBy(realPolicy, p))).join(','));
+  check('f1: garbage rule candidates are recycling only (landfill and incinerator removed)',
+    JSON.stringify(RULES.find(r => r.t === 'garbage')?.prefabs) === '["RecyclingCenter01"]' && JSON.stringify(BEST_AVAILABLE.garbage) === '["RecyclingCenter01"]');
+}
+
+// (f2) lock fixtures: a locked top type falls behind the unlocked ones, keeping their order.
+{
+  check('f2: bestFirst moves a locked top type last', JSON.stringify(bestFirst(['A', 'B', 'C'], { A: true })) === '["B","C","A"]');
+  check('f2: bestFirst with no locks keeps the order', JSON.stringify(bestFirst(['A', 'B', 'C'], {})) === '["A","B","C"]');
+  const hosp = decideWith({ policy: bestPolicy, services: noClinic, locked: { Hospital01: true } }).find(n => n.need === 'health');
+  check('f2: health with Hospital01 locked tries DiseaseControlCenter01 first and Hospital01 last',
+    hosp?.prefabs[0] === 'DiseaseControlCenter01' && hosp.prefabs.at(-1) === 'Hospital01', JSON.stringify(hosp?.prefabs));
+  const hospOpen = decideWith({ policy: bestPolicy, services: noClinic }).find(n => n.need === 'health');
+  check('f2: health with nothing locked tries Hospital01 first', hospOpen?.prefabs[0] === 'Hospital01', JSON.stringify(hospOpen?.prefabs));
+  const teleLocked = decideWith({ policy: bestPolicy, snap: snapOf({ pop: 3000 }), locked: { TelecomTower01: true } }).find(n => n.need === 'telecom');
+  check('f2: telecom with TelecomTower01 locked falls back to RadioMast01', teleLocked?.prefabs[0] === 'RadioMast01', JSON.stringify(teleLocked?.prefabs));
+  const teleOpen = decideWith({ policy: bestPolicy, snap: snapOf({ pop: 3000 }) }).find(n => n.need === 'telecom');
+  check('f2: telecom with nothing locked tries TelecomTower01 first', teleOpen?.prefabs[0] === 'TelecomTower01', JSON.stringify(teleOpen?.prefabs));
+}
+
+// (f3) forbidden never placed: a policy forbidding the top type, and the real policy with every need open.
+{
+  const forb = { ...bestPolicy, forbiddenPrefabs: ['Hospital', 'Landfill', 'Incinerat', 'Coal', 'Gas', 'SewageOutlet', 'Wastewater'] };
+  const h = decideWith({ policy: forb, services: noClinic }).find(n => n.need === 'health');
+  check('f3: forbidden-by-policy Hospital01 is dropped and the next type leads', h?.prefabs[0] === 'DiseaseControlCenter01' && !h.prefabs.includes('Hospital01'), JSON.stringify(h?.prefabs));
+  const open = ['health', 'deathcare', 'fire', 'police', 'education', 'education_high', 'education_college', 'education_university', 'post', 'garbage', 'entertainment', 'telecom'];
+  const needs = Object.fromEntries(open.map(n => [n, { action: 'build', score: '4/3', factor: -6 }]));
+  const many = decideWith({ policy: bestPolicy, snap: snapOf({ pop: 12000, needs }), services: SERVICES.filter(s => !s[0].startsWith('Landfill')), perRule: 3, clusters: [[0, 0, 200], [600, 0, 90], [0, 900, 70], [1500, 1500, 50]] });
+  const names = many.flatMap(n => n.prefabs);
+  check('f3: with every need open under the real policy, some types are proposed and none is forbidden',
+    names.length > 0 && names.every(p => !forbiddenBy(realPolicy, p)), names.filter(p => forbiddenBy(realPolicy, p)).join(','));
+  check('f3: garbage with no landfill proposes only the recycling centre', many.filter(n => n.t === 'garbage').every(n => n.prefabs.join() === 'RecyclingCenter01'));
+}
+
+// (f4) park rotation: deterministic, varied, the largest types lead; the default path keeps its own rotation.
+{
+  const list = BEST_AVAILABLE.entertainment;
+  const heads = [0, 1, 2, 3].map(k => spreadHead(list, k)[0]);
+  check('f4: spreadHead by 0..3 leads with the four largest types, all distinct', new Set(heads).size === 4 && heads.join() === list.slice(0, 4).join(), heads.join(','));
+  check('f4: spreadHead is a permutation (nothing lost) and repeats every 4',
+    [...spreadHead(list, 2)].sort().join() === [...list].sort().join() && spreadHead(list, 4)[0] === spreadHead(list, 0)[0]);
+  const clusters: [number, number, number][] = [[0, 0, 200], [600, 0, 90], [0, 900, 70], [100, 100, 50]];
+  const needs = { entertainment: { action: 'build', score: '2/3', factor: -4 } };
+  const run = () => decideWith({ policy: bestPolicy, snap: snapOf({ needs }), services: [...SERVICES, ['ChirperPark01', 0, 0]], clusters, perRule: 3 }).filter(n => n.need === 'entertainment');
+  const a = run(); const b = run();
+  check('f4: entertainment placements are deterministic across calls', JSON.stringify(a) === JSON.stringify(b) && a.length >= 2, JSON.stringify(a.map(n => n.prefabs[0])));
+  const firsts = a.map(n => n.prefabs[0]);
+  check('f4: successive parks in one call start with different large types', new Set(firsts).size === firsts.length && firsts.every(p => list.slice(0, 4).includes(p)), firsts.join(','));
+  check('f4: each park need carries the full best list', a.every(n => n.prefabs.length === list.length));
+  const legacy = decideWith({ snap: snapOf({ needs }), services: [...SERVICES, ['ChirperPark01', 0, 0]], clusters, perRule: 1 }).find(n => n.need === 'entertainment');
+  check('f4: default (no policy) park list is unchanged and rotated by the one park already built',
+    JSON.stringify(legacy?.prefabs) === '["Playground01","CityPark05","CityPark01","ChirperPark01"]', JSON.stringify(legacy?.prefabs));
 }
 
 console.log(failures ? `${failures} FAILED` : 'all checks PASS');

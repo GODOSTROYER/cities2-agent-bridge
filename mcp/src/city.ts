@@ -450,42 +450,107 @@ export async function unlockNode(name: string): Promise<Json> {
 
 // Tile purchase: adjacency/dryness ranking in the mod, the game's own price for the selection
 // previewed first (so a purchase never fails on funds), then the purchase.
-export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean; reserve?: number; cls?: SpendClass; allowUnreachable?: boolean }): Promise<Json> {
-  const t = now(); const n = Math.max(1, Math.min(3, o.n ?? 1));
-  const [opts, city0] = await multi([{ command: 'tile_options', args: { top: Math.max(3, n), ...(o.x !== undefined && o.z !== undefined ? { x: o.x, z: o.z } : {}) } }, { command: 'get_city_state' }]);
-  // Never buy land that cannot be reached (FAILURES #98: 316,000 went into tiles behind the
-  // highway and the lake). A tile counts as reachable when a lot-free connector of up to 950 m
-  // from the existing road network ends inside it; highways are barriers for connectors and
-  // connectors over deep water are dropped. allowUnreachable is for road work the agent plans.
-  let options: Json[] = opts.tiles ?? []; const skipped: Json[] = [];
-  if (!o.allowUnreachable) {
-    const keep: Json[] = [];
-    // An unowned tile is "outside" for the connector search, so reachability is judged from the
-    // owned side: a local road edge within 950 m of the tile's edge, with no deep water between.
-    for (const t of options.slice(0, 6)) {
-      if (keep.length >= n) break;
-      const cx = (t.x0 + t.x1) / 2, cz = (t.z0 + t.z1) / 2;
-      const near = await callOk('get_network_edges', { x: cx, z: cz, radius: Math.hypot(t.x1 - t.x0, t.z1 - t.z0) / 2 + 950 }, 30);
-      let reachable = false;
-      for (const e of (near.edges ?? []).filter((q: Json) => !/Highway|Cable|Line|Pipe/.test(String(q.prefab))).slice(0, 400)) {
-        const a = e.curve[e.curve.length - 1]; const px = Math.max(t.x0, Math.min(t.x1, a.x)), pz = Math.max(t.z0, Math.min(t.z1, a.z));
-        if (Math.hypot(px - a.x, pz - a.z) > 950) continue;
-        const wet = await waterUnder({ x: a.x, z: a.z }, { x: px, z: pz }); if (wet.wet && wet.deepest > 2) continue;
-        reachable = true; break;
-      }
-      if (reachable) keep.push(t); else skipped.push({ x: [t.x0, t.x1], z: [t.z0, t.z1] });
-    }
-    options = keep;
-    if (!options.length) return { ok: false, reason: 'no_reachable_tile', skipped, hint: 'every adjacent tile is behind a highway or water: build a crossing (underpass, bridge) first, or pass allowUnreachable for planned road work', phases: { plan: now() - t } };
+// exact:true buys the single tile whose polygon holds (x,z) (nearest unowned centre within 320 m
+// as a fallback), skipping the ranking and the reachability search. Price, reserve and max checks
+// are the same as the ranked path.
+const EXACT_RADIUS = 320;
+const EPS = 0.01;
+function onSegment(px: number, pz: number, ax: number, az: number, bx: number, bz: number): boolean {
+  const len = Math.hypot(bx - ax, bz - az);
+  if (len === 0) return Math.hypot(px - ax, pz - az) < EPS;
+  if (Math.abs((bx - ax) * (pz - az) - (bz - az) * (px - ax)) / len > EPS) return false;
+  const dot = (px - ax) * (bx - ax) + (pz - az) * (bz - az);
+  return dot >= -EPS * len && dot <= len * len + EPS * len;
+}
+// Ray casting in the xz plane; a point on any edge counts as inside.
+function pointInPolygon(x: number, z: number, poly: Json[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const ax = Number(poly[i].x), az = Number(poly[i].z), bx = Number(poly[j].x), bz = Number(poly[j].z);
+    if (onSegment(x, z, ax, az, bx, bz)) return true;
+    if ((az > z) !== (bz > z) && x < (bx - ax) * (z - az) / (bz - az) + ax) inside = !inside;
   }
-  const picks: Json[] = options.slice(0, n);
-  if (!picks.length) return { ok: false, reason: 'no_adjacent_tile', phases: { plan: now() - t } };
+  return inside;
+}
+export function tileBounds(poly: Json[]): { x0: number; x1: number; z0: number; z1: number } {
+  const xs = poly.map(p => Number(p.x)), zs = poly.map(p => Number(p.z));
+  return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs) };
+}
+function centreDistance(tile: Json, x: number, z: number): number {
+  const b = tileBounds(tile.polygon); return Math.hypot((b.x0 + b.x1) / 2 - x, (b.z0 + b.z1) / 2 - z);
+}
+// Which tile holds the point (x,z). A point inside a tile returns that tile (by 'contains'); on a
+// shared edge the unowned tile is preferred, so the tile the agent named is the one bought. A point
+// in no tile falls back to the nearest unowned tile centre within radius metres (by 'nearest').
+// Returns null when there is no such tile. Pure: needs only get_tiles entries.
+export function tileAt(tiles: Json[], x: number, z: number, radius = EXACT_RADIUS): { tile: Json; by: 'contains' | 'nearest'; distance: number } | null {
+  const polys = tiles.filter(p => Array.isArray(p.polygon) && p.polygon.length >= 3);
+  const inside = polys.filter(p => pointInPolygon(x, z, p.polygon));
+  if (inside.length) {
+    const free = inside.filter(p => p.purchased !== true);
+    const pool = free.length ? free : inside;
+    const tile = pool.reduce((a, b) => (centreDistance(a, x, z) <= centreDistance(b, x, z) ? a : b));
+    return { tile, by: 'contains', distance: 0 };
+  }
+  const unowned = polys.filter(p => p.purchased !== true);
+  if (!unowned.length) return null;
+  const tile = unowned.reduce((a, b) => (centreDistance(a, x, z) <= centreDistance(b, x, z) ? a : b));
+  const distance = centreDistance(tile, x, z);
+  return distance <= radius ? { tile, by: 'nearest', distance } : null;
+}
+
+export async function buyTile(o: { n?: number; max?: number; x?: number; z?: number; plan?: boolean; reserve?: number; cls?: SpendClass; allowUnreachable?: boolean; exact?: boolean }): Promise<Json> {
+  const t = now();
+  const n = o.exact ? 1 : Math.max(1, Math.min(3, o.n ?? 1));
+  if (o.exact && (o.x === undefined || o.z === undefined)) return { ok: false, reason: 'exact_needs_point', hint: 'exact:true buys the tile at x and z: pass both', phases: { plan: now() - t } };
+  let picks: Json[]; let city0: Json; let alternatives = 0; let note: string | undefined;
+  if (o.exact) {
+    const [gt, c0] = await multi([{ command: 'get_tiles', args: {} }, { command: 'get_city_state' }]);
+    city0 = c0;
+    const hit = tileAt(gt.tiles ?? [], Number(o.x), Number(o.z));
+    if (hit?.tile.purchased === true) return { ok: false, reason: 'tile_already_owned', index: hit.tile.index, phases: { plan: now() - t } };
+    if (!hit) return { ok: false, reason: 'no_tile_at_point', x: o.x, z: o.z, phases: { plan: now() - t } };
+    if (gt.availablePurchases === 0) return { ok: false, reason: 'no_purchases_left_at_this_milestone', phases: { plan: now() - t } };
+    picks = [{ index: hit.tile.index, version: hit.tile.version, ...tileBounds(hit.tile.polygon) }];
+    note = 'tile chosen by position (x,z), not by the dry/flat ranking' + (hit.by === 'nearest' ? '; no tile contains the point, so the nearest unowned tile centre was used' : '');
+  } else {
+    const [opts, c0] = await multi([{ command: 'tile_options', args: { top: Math.max(3, n), ...(o.x !== undefined && o.z !== undefined ? { x: o.x, z: o.z } : {}) } }, { command: 'get_city_state' }]);
+    city0 = c0;
+    // Never buy land that cannot be reached (FAILURES #98: 316,000 went into tiles behind the
+    // highway and the lake). A tile counts as reachable when a lot-free connector of up to 950 m
+    // from the existing road network ends inside it; highways are barriers for connectors and
+    // connectors over deep water are dropped. allowUnreachable is for road work the agent plans.
+    let options: Json[] = opts.tiles ?? []; const skipped: Json[] = [];
+    if (!o.allowUnreachable) {
+      const keep: Json[] = [];
+      // An unowned tile is "outside" for the connector search, so reachability is judged from the
+      // owned side: a local road edge within 950 m of the tile's edge, with no deep water between.
+      for (const t of options.slice(0, 6)) {
+        if (keep.length >= n) break;
+        const cx = (t.x0 + t.x1) / 2, cz = (t.z0 + t.z1) / 2;
+        const near = await callOk('get_network_edges', { x: cx, z: cz, radius: Math.hypot(t.x1 - t.x0, t.z1 - t.z0) / 2 + 950 }, 30);
+        let reachable = false;
+        for (const e of (near.edges ?? []).filter((q: Json) => !/Highway|Cable|Line|Pipe/.test(String(q.prefab))).slice(0, 400)) {
+          const a = e.curve[e.curve.length - 1]; const px = Math.max(t.x0, Math.min(t.x1, a.x)), pz = Math.max(t.z0, Math.min(t.z1, a.z));
+          if (Math.hypot(px - a.x, pz - a.z) > 950) continue;
+          const wet = await waterUnder({ x: a.x, z: a.z }, { x: px, z: pz }); if (wet.wet && wet.deepest > 2) continue;
+          reachable = true; break;
+        }
+        if (reachable) keep.push(t); else skipped.push({ x: [t.x0, t.x1], z: [t.z0, t.z1] });
+      }
+      options = keep;
+      if (!options.length) return { ok: false, reason: 'no_reachable_tile', skipped, hint: 'every adjacent tile is behind a highway or water: build a crossing (underpass, bridge) first, or pass allowUnreachable for planned road work', phases: { plan: now() - t } };
+    }
+    picks = options.slice(0, n);
+    if (!picks.length) return { ok: false, reason: 'no_adjacent_tile', phases: { plan: now() - t } };
+    alternatives = (opts.tiles ?? []).length;
+  }
   const tiles = picks.map(p => ({ index: p.index, version: p.version }));
   const view = picks.map(p => ({ x: [p.x0, p.x1], z: [p.z0, p.z1], dry: p.dry, relief: p.relief }));
   return mutate(async () => {
     const pv = await callOk('purchase_tiles', { tiles, maxCost: 0, previewOnly: true }, 15); const price = await waitOperation(pv.id, 30);
     const cost = Number(price.cost ?? 0), upkeep = Number(price.upkeep ?? 0), money = Number(city0.money), max = o.max ?? 300000;
-    const base = { cost, monthlyUpkeep: upkeep, money, tiles: view, alternatives: (opts.tiles ?? []).length, phases: { plan: now() - t } };
+    const base = { cost, monthlyUpkeep: upkeep, money, tiles: view, ...(o.exact ? { note } : { alternatives }), phases: { plan: now() - t } };
     if (price.status !== 'complete') return { ok: false, reason: price.error ?? 'price_preview_failed', ...base };
     if (o.plan) return { ok: true, plan: true, affordable: cost <= money, ...base };
     if (cost > money) return { ok: false, reason: 'not_enough_money', short: cost - money, ...base };

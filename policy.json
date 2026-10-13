@@ -1,178 +1,194 @@
 {
- "_comment": "Owner goals and constraints as data (REDESIGN Phase 4). The loop reads this file every cycle; a change of mind is an edit here, not a code change. mode: grow | bank | improve.",
- "mode": "improve",
- "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow weighted by vehicles 60% as the first mark and rising, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
- "expansion": false,
- "expansionException": "below happiness 80: only the minimum a fix needs (land for a facility, a joining street, rehousing); at 80+ see expansionRule",
- "netFloor": 2300000,
- "netFloorNote": "fixed by the owner; no ratchet. Spendable upkeep = net - netFloor. Waiting and earning is the answer to \"cannot afford it yet\"; services are never cut for money.",
- "upkeepShareOfMarginPerReview": 0.5,
- "reviewMinutes": 15,
- "upkeepRealFactor": 2.7,
- "cashReserve": 20000000,
- "bankTarget": 5000000,
- "taxPins": "journals/tax-pins.json (Residential 15, business 10-11); never cut",
- "targets": {
-  "factorMin": 0,
-  "factorExempt": [
-   "Tax"
-  ],
-  "trafficFlowPct": 60,
-  "headroomUsagePct": 78,
-  "coverageGapPct": 8,
-  "problemIcons": 0,
-  "cleanEnergyPct": 100,
-  "rawSewageDischarge": 0,
-  "trafficFlowNote": "owner, 2026-10-12: the headline is the flow weighted by vehicles (what drivers experience); 60 is the first mark, then as high as real improvements take it. The game's unweighted figure is shown beside it for reference only. No Alley conversions and no lower speed limits to lift a number; speed bumps only where they also cut noise and accidents in residential districts. Only changes that make vehicles faster or take vehicles off the road count.",
-  "prisonUsagePct": 78
- },
- "never": [
-  "ground cable, pipe or ground road across water",
-  "highway crossing at grade",
-  "buying a tile no road can reach",
-  "housing beside noise or in a pollution plume"
- ],
- "priority": [
-  "critical: utilities, network warnings, fires, dead or sick waiting",
-  "happiness factors worst first (Tax exempt)",
-  "services by the worse of capacity, coverage and outcome",
-  "quality upgrades with little or no upkeep"
- ],
- "spending": "one-off costs only from cash above cashReserve; new upkeep only from net above the floor, by projection; below either floor only true emergencies (utility shortage, network warning, fire, water about to run out)",
- "forbiddenPrefabs": [
-  "SewageOutlet",
-  "CoalPowerPlant",
-  "GasPowerPlant",
-  "Landfill",
-  "IncinerationPlant",
-  "WastewaterTreatment"
- ],
- "forbiddenNote": "name parts; no placement path may build these (owner: zero raw sewage, clean power only, recycling only - no landfill, no incinerator)",
- "allowedCleanPower": [
-  "WindTurbine",
-  "SolarPowerStation",
-  "EmergencyBatteryStation",
-  "GeothermalPowerPlant",
-  "HydroelectricPowerPlant"
- ],
- "sewagePolicy": "export only through the outside pipe connection at (1470,7168); no raw outlet and no treatment plant may be placed",
- "devPointsFor": [
-  "SubwayNode"
- ],
- "devPointsNote": "owner 2026-10-11: Subway first (4 points); points are saved until it can be bought; nothing else is bought; after Subway ask the owner again",
- "fees": {
-  "occupancyBand": [
-   70,
-   85
-  ],
-  "raiseAbovePct": 85,
-  "lowerBelowPct": 50,
-  "parking": {
-   "min": 1,
-   "max": 50,
-   "start": 10,
-   "step": 2
+  "_comment": "Owner goals and constraints as data (REDESIGN Phase 4). The loop reads this file every cycle; a change of mind is an edit here, not a code change. mode: grow | bank | improve.",
+  "mode": "improve",
+  "goal": "maximum happiness: every happiness factor except Tax at 0 or better, every system good in REPORT.md, traffic flow weighted by vehicles 60% as the first mark and rising, no problem icons, net at or above the floor; energy 100% clean and renewable (new capacity verified before a coal plant is removed); zero raw sewage discharge",
+  "expansion": false,
+  "expansionException": "below happiness 80: only the minimum a fix needs (land for a facility, a joining street, rehousing); at 80+ see expansionRule",
+  "netFloor": 2300000,
+  "netFloorNote": "fixed by the owner; no ratchet. Spendable upkeep = net - netFloor. Waiting and earning is the answer to \"cannot afford it yet\"; services are never cut for money.",
+  "upkeepShareOfMarginPerReview": 0.5,
+  "reviewMinutes": 15,
+  "upkeepRealFactor": 2.7,
+  "cashReserve": 20000000,
+  "bankTarget": 5000000,
+  "taxPins": "journals/tax-pins.json (Residential 15, business 10-11); never cut",
+  "targets": {
+    "factorMin": 0,
+    "factorExempt": [
+      "Tax"
+    ],
+    "trafficFlowPct": 60,
+    "headroomUsagePct": 78,
+    "coverageGapPct": 8,
+    "problemIcons": 0,
+    "cleanEnergyPct": 100,
+    "rawSewageDischarge": 0,
+    "trafficFlowNote": "owner, 2026-10-12: the headline is the flow weighted by vehicles (what drivers experience); 60 is the first mark, then as high as real improvements take it. The game's unweighted figure is shown beside it for reference only. No Alley conversions and no lower speed limits to lift a number; speed bumps only where they also cut noise and accidents in residential districts. Only changes that make vehicles faster or take vehicles off the road count.",
+    "prisonUsagePct": 78
   },
-  "service": {},
-  "reviewMinutes": 20,
-  "note": "service fees stay at the game's default unless the owner lists them here with bounds: above the default the game applies a happiness penalty (owner constraint: no negative factor except Tax). Parking fees are tuned to keep occupancy at 70-85%."
- },
- "watchDistricts": [
-  {
-   "name": "east high-density (towers)",
-   "x0": 1000,
-   "x1": 1620,
-   "z0": -950,
-   "z1": 200,
-   "note": "owner's screenshot: garbage and hearse icons on every dense building"
+  "never": [
+    "ground cable, pipe or ground road across water",
+    "highway crossing at grade",
+    "buying a tile no road can reach",
+    "housing beside noise or in a pollution plume"
+  ],
+  "priority": [
+    "critical: utilities, network warnings, fires, dead or sick waiting",
+    "happiness factors worst first (Tax exempt)",
+    "services by the worse of capacity, coverage and outcome",
+    "quality upgrades with little or no upkeep"
+  ],
+  "spending": "one-off costs only from cash above cashReserve; new upkeep only from net above the floor, by projection; below either floor only true emergencies (utility shortage, network warning, fire, water about to run out)",
+  "forbiddenPrefabs": [
+    "SewageOutlet",
+    "CoalPowerPlant",
+    "GasPowerPlant",
+    "Landfill",
+    "IncinerationPlant",
+    "WastewaterTreatment"
+  ],
+  "forbiddenNote": "name parts; no placement path may build these (owner: zero raw sewage, clean power only, recycling only - no landfill, no incinerator)",
+  "quality": {
+    "bestAvailable": true,
+    "note": "owner standing order: always the best available version of every service building (hospital over clinic, large police, fire and school types), and parks of varied types. Candidates are ordered best first in mcp/src/services.ts (BEST_AVAILABLE); a locked or missing type falls through to the next. Forbidden types are still never placed."
   },
-  {
-   "name": "south-east block",
-   "x0": 1700,
-   "x1": 2200,
-   "z0": -1650,
-   "z1": -1150
+  "allowedCleanPower": [
+    "WindTurbine",
+    "SolarPowerStation",
+    "EmergencyBatteryStation",
+    "GeothermalPowerPlant",
+    "HydroelectricPowerPlant"
+  ],
+  "sewagePolicy": "export only through the outside pipe connection at (1470,7168); no raw outlet and no treatment plant may be placed",
+  "devPointsFor": [
+    "SubwayNode"
+  ],
+  "devPointsNote": "owner 2026-10-11: Subway first (4 points); points are saved until it can be bought; nothing else is bought; after Subway ask the owner again",
+  "fees": {
+    "occupancyBand": [
+      70,
+      85
+    ],
+    "raiseAbovePct": 85,
+    "lowerBelowPct": 50,
+    "parking": {
+      "min": 1,
+      "max": 50,
+      "start": 10,
+      "step": 2
+    },
+    "service": {},
+    "reviewMinutes": 20,
+    "note": "service fees stay at the game's default unless the owner lists them here with bounds: above the default the game applies a happiness penalty (owner constraint: no negative factor except Tax). Parking fees are tuned to keep occupancy at 70-85%."
+  },
+  "watchDistricts": [
+    {
+      "name": "east high-density (towers)",
+      "x0": 1000,
+      "x1": 1620,
+      "z0": -950,
+      "z1": 200,
+      "note": "owner's screenshot: garbage and hearse icons on every dense building"
+    },
+    {
+      "name": "south-east block",
+      "x0": 1700,
+      "x1": 2200,
+      "z0": -1650,
+      "z1": -1150
+    }
+  ],
+  "designStandard": {
+    "_note": "Owner's standing instruction: decide as the city's architect; the city must look good and function well. Recorded per decision in progress.md under 'Design decisions'. Checked by mcp/src/design.ts (audit and plan check).",
+    "decideWithoutAsking": [
+      "removing a few buildings for a trunk road",
+      "moving a park or a utility",
+      "rebuilding a block for a bridge or junction",
+      "parallel link or widening",
+      "where a facility goes",
+      "which road type"
+    ],
+    "askOwnerOnlyFor": [
+      "spending below the cash or net floor",
+      "raising taxes",
+      "anything on the forbidden list",
+      "expansion beyond what a fix needs",
+      "the order of development points",
+      "demolishing something large (a whole district, a major service building)"
+    ],
+    "function": [
+      "clear road hierarchy with continuous trunks and few conflict points",
+      "every district has two or more ways out",
+      "services sit inside the area they serve",
+      "transit on the main desire lines with stops at real destinations",
+      "freight kept apart from housing",
+      "nothing cut off by a river, a railway or a highway"
+    ],
+    "form": [
+      "a recognisable centre, district centres, clean edges",
+      "regular, well proportioned blocks; no slivers, stub roads, dead ends or orphaned lots",
+      "roads meet at clean angles; curves smooth and deliberate"
+    ],
+    "consistency": [
+      "one road type along a corridor; no lane drops or sudden width changes",
+      "consistent junction types along a route"
+    ],
+    "green": [
+      "tree-lined arterials and boulevards",
+      "parks and plazas as focal points and buffers",
+      "waterfronts as amenity (promenades, parks)",
+      "noise barriers or planted buffers along highways and railways"
+    ],
+    "density": [
+      "high density near the centre, transit stops and amenities; gradual step-down",
+      "schools, clinics and shops within walking distance",
+      "no towers behind a single road"
+    ],
+    "infrastructure": [
+      "bridges and underpasses aligned with their corridors",
+      "ramps of 6% or less where a longer one fits, never over 8%",
+      "utilities along roads, not across blocks",
+      "unsightly or noisy things go to Northgate"
+    ],
+    "repairAsYouGo": "when an area is touched: remove redundant stubs and double junctions, merge awkward node pairs, re-zone leftover strips, fill gaps with green",
+    "conflict": "function wins for safety-critical and service items; otherwise look for the design that gives both; a cleaner, lasting solution is preferred over a cheaper one",
+    "limits": {
+      "maxRampPct": 8,
+      "preferredRampPct": 6,
+      "minJunctionSpacingM": 30,
+      "stubMaxM": 60,
+      "singleAccessMinM": 800
+    }
+  },
+  "cashReserveNote": "owner, 2026-10-11 21:03: keep at least 20,000,000 in cash at all times; spend only the amount above it. The net floor (netFloor, +2,300,000 a month, fixed) is unchanged.",
+  "expansionRule": {
+    "atHappiness": 80,
+    "sustainedReviews": 2,
+    "exempt": [
+      "Tax"
+    ],
+    "trafficTolerance": 1,
+    "_note": "owner, 2026-10-11: below 80 improve mode stays (no expansion except what a fix needs). At 80+ over two reviews in a row, with every non-tax factor at 0 or better, the loop switches to grow-optimal: one district per step, paid from cash above cashReserve; after each district a review must still show 80+, no negative factor and traffic no worse, else back to improve and fix first. Code: mcp/src/expansion.ts (tests mcp/test/expansion.ts).",
+    "districtStandard": [
+      "best land: land value, no pollution or noise, good access",
+      "trunk road connections and two or more accesses first",
+      "transit: a tram or bus line and a stop within walking distance",
+      "services and utilities ahead of the residents (schools, clinic, fire, police, park, garbage and deathcare reach), by the always-over-needs rule",
+      "mixed uses so trips are short",
+      "a density that fits its place",
+      "trees and public space"
+    ]
+  },
+  "expansionOwner2026_10_13": {
+    "allowed": true,
+    "how": "by the grand plan only: districts are planned as a whole (layout, trunk roads, transit, services, parks, landmarks) in CITYPLAN-GRAND.md and built district by district by the player under the coordinator; the automatic loop does not lay its own grids (expansionRule stays as the loop's switch and is not the limit for planned districts)",
+    "style": "a beautiful city on a grand scale: districts with their own character, not plain grids; boulevards, squares, waterfronts, landmarks and tourist spots; use the natural land, water, contours and resources"
+  },
+  "factorLimit": {
+    "value": -2,
+    "exempt": [
+      "Tax"
+    ],
+    "note": "owner, 2026-10-13: no happiness factor worse than -2 except Tax; a factor worse than -2 is priority work ahead of expansion"
   }
- ],
- "designStandard": {
-  "_note": "Owner's standing instruction: decide as the city's architect; the city must look good and function well. Recorded per decision in progress.md under 'Design decisions'. Checked by mcp/src/design.ts (audit and plan check).",
-  "decideWithoutAsking": [
-   "removing a few buildings for a trunk road",
-   "moving a park or a utility",
-   "rebuilding a block for a bridge or junction",
-   "parallel link or widening",
-   "where a facility goes",
-   "which road type"
-  ],
-  "askOwnerOnlyFor": [
-   "spending below the cash or net floor",
-   "raising taxes",
-   "anything on the forbidden list",
-   "expansion beyond what a fix needs",
-   "the order of development points",
-   "demolishing something large (a whole district, a major service building)"
-  ],
-  "function": [
-   "clear road hierarchy with continuous trunks and few conflict points",
-   "every district has two or more ways out",
-   "services sit inside the area they serve",
-   "transit on the main desire lines with stops at real destinations",
-   "freight kept apart from housing",
-   "nothing cut off by a river, a railway or a highway"
-  ],
-  "form": [
-   "a recognisable centre, district centres, clean edges",
-   "regular, well proportioned blocks; no slivers, stub roads, dead ends or orphaned lots",
-   "roads meet at clean angles; curves smooth and deliberate"
-  ],
-  "consistency": [
-   "one road type along a corridor; no lane drops or sudden width changes",
-   "consistent junction types along a route"
-  ],
-  "green": [
-   "tree-lined arterials and boulevards",
-   "parks and plazas as focal points and buffers",
-   "waterfronts as amenity (promenades, parks)",
-   "noise barriers or planted buffers along highways and railways"
-  ],
-  "density": [
-   "high density near the centre, transit stops and amenities; gradual step-down",
-   "schools, clinics and shops within walking distance",
-   "no towers behind a single road"
-  ],
-  "infrastructure": [
-   "bridges and underpasses aligned with their corridors",
-   "ramps of 6% or less where a longer one fits, never over 8%",
-   "utilities along roads, not across blocks",
-   "unsightly or noisy things go to Northgate"
-  ],
-  "repairAsYouGo": "when an area is touched: remove redundant stubs and double junctions, merge awkward node pairs, re-zone leftover strips, fill gaps with green",
-  "conflict": "function wins for safety-critical and service items; otherwise look for the design that gives both; a cleaner, lasting solution is preferred over a cheaper one",
-  "limits": {
-   "maxRampPct": 8,
-   "preferredRampPct": 6,
-   "minJunctionSpacingM": 30,
-   "stubMaxM": 60,
-   "singleAccessMinM": 800
-  }
- },
- "cashReserveNote": "owner, 2026-10-11 21:03: keep at least 20,000,000 in cash at all times; spend only the amount above it. The net floor (netFloor, +2,300,000 a month, fixed) is unchanged.",
- "expansionRule": {
-  "atHappiness": 80,
-  "sustainedReviews": 2,
-  "exempt": [
-   "Tax"
-  ],
-  "trafficTolerance": 1,
-  "_note": "owner, 2026-10-11: below 80 improve mode stays (no expansion except what a fix needs). At 80+ over two reviews in a row, with every non-tax factor at 0 or better, the loop switches to grow-optimal: one district per step, paid from cash above cashReserve; after each district a review must still show 80+, no negative factor and traffic no worse, else back to improve and fix first. Code: mcp/src/expansion.ts (tests mcp/test/expansion.ts).",
-  "districtStandard": [
-   "best land: land value, no pollution or noise, good access",
-   "trunk road connections and two or more accesses first",
-   "transit: a tram or bus line and a stop within walking distance",
-   "services and utilities ahead of the residents (schools, clinic, fire, police, park, garbage and deathcare reach), by the always-over-needs rule",
-   "mixed uses so trips are short",
-   "a density that fits its place",
-   "trees and public space"
-  ]
- }
 }
