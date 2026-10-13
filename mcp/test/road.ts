@@ -9,4 +9,5 @@ const args: any = { prefabIndex: p.index, prefabVersion: p.version, start: a.sta
 const op = await call('build_road', args, 15);
 if (!op.ok) { console.log('REFUSED', op.error); process.exit(0); }
 const done = await waitOperation(op.result.id, 60);
-console.log(JSON.stringify({ status: done.status, error: done.error, cost: done.previewCost, reasons: [...new Set((done.placementErrors ?? []).flatMap((e: any) => e.reasons ?? []))], created: (done.createdRoads ?? []).length }));
+console.log(JSON.stringify({ status: done.status, error: done.error, cost: done.previewCost, reasons: [...new Set((done.placementErrors ?? []).flatMap((e: any) => e.reasons ?? []))], created: (done.createdRoads ?? []).length, blockers: (done.placementErrors ?? []).filter((e: any) => e.position).map((e: any) => ({ index: e.index, x: Math.round(e.position.x), z: Math.round(e.position.z) })) }));
+// blockers = the objects in the way (look them up with get_buildings {x,z,radius}); an OverlapExisting is usually a building, not an underground track.
