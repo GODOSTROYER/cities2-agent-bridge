@@ -5,6 +5,8 @@
 // "Post at 20% of capacity" read fine while the owner saw the service failing.
 // PURE: buildReport() takes plain data and the previous values and returns markdown.
 import { diagnose, rankRootCauses } from './diagnose.ts';
+import { STOP_QUEUE_BAD } from './report-extra.ts';
+import type { ExtraInput } from './report-extra.ts';
 export type Grade = 'critical' | 'bad' | 'ok' | 'good' | 'unknown';
 export interface SystemRow { system: string; status: Grade; outcome: string; capacity: string; coverage: string; trend: string; action: string; blocked: string; value: number | null; cause?: string; why?: string; fix?: string; raw?: Record<string, any> }
 interface Spec { system: string; factors?: string[]; table?: string[]; cov?: string; icons?: RegExp; need?: string; action: string; view?: string }
@@ -35,7 +37,21 @@ export const SYSTEMS: Spec[] = [
 ];
 // Infoviews the bridge does not read yet: listed so nothing is silently missing.
 // Names are the game's own InfoviewPrefab names (get_metrics.infoviews); parking has no infoview of its own.
-export const NOT_READ = ['Transport (no lines: locked in the game)', 'Bicycles', 'DisasterControl', 'Administration', 'OutsideConnections', 'Wealth', 'Level', 'Extractors', 'WaterPollution'];
+// Transport and Outside connections are read now (report-extra.ts): their own rows below.
+export const NOT_READ = ['Bicycles', 'DisasterControl', 'Administration', 'Wealth', 'Level', 'Extractors', 'WaterPollution'];
+// What each unread infoview needs from the mod (the row outcome says it, prefixed "needs a mod reader: ").
+const NEEDS: Record<string, string> = {
+  Bicycles: 'bicycle lanes, bicycle parking and bicycle trips per district',
+  DisasterControl: 'disaster response buildings and active disasters (fire, flood, earthquake) with their damage',
+  Administration: 'district administration buildings: capacity and coverage',
+  Wealth: 'citizen wealth classes and household income per district',
+  Level: 'city-wide building level counts (building_upgrades reads one building at a time)',
+  Extractors: 'extractor buildings (mines, oil, forestry, fishing): output, workers and pollution',
+  WaterPollution: 'water pollution per district or per water source (sample_terrain samples single points only)',
+};
+// Systems whose happiness factor is absent from the snapshot when it is small: absent means 0 (no effect), graded on icons.
+const ZERO_IF_ABSENT = new Set(['Telecom', 'Air pollution', 'Ground pollution', 'Noise pollution', 'Welfare', 'Homelessness']);
+const unread = (system: string, outcome: string, action = 'add a reader'): SystemRow => ({ system, status: 'unknown', outcome, capacity: '-', coverage: '-', trend: '', action, blocked: 'harness', value: null });
 
 const rank: Record<Grade, number> = { critical: 0, bad: 1, ok: 2, good: 3, unknown: 4 };
 const worst = (a: Grade, b: Grade): Grade => rank[a] <= rank[b] ? a : b;
@@ -54,6 +70,7 @@ export interface ReportInput {
   netFloor?: number; mode?: string; // improve mode: the floor net must not fall below
   vehicles?: Record<string, { busyPct?: number; efficiencyPct?: number; buildings?: number }>; // service_headroom.vehicles: stations with no vehicle free, efficiency
   outcomes?: Record<string, any>; // get_metrics.outcomes: mail and garbage waiting, crime, parking, land value, road wear, profitability, tourism
+  extra?: ExtraInput; // report-extra.ts: transit_lines, outside_connections and telecom headroom (read-only, failure-tolerant)
 }
 
 export function gradeOf(factor: number | null, tableStatus: string | null, uncoveredPct: number | null, extra: Grade = 'good'): Grade {
@@ -74,14 +91,19 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   const snap = i.snap; const factors = snap.happiness ?? {}; const icons = snap.icons ?? {}; const rows: SystemRow[] = []; const values: Record<string, number> = {};
   const add = (r: SystemRow) => { if (r.value !== null) values[r.system] = r.value; r.trend = arrow(r.value, i.prev?.[r.system]); rows.push(r); };
   for (const s of SYSTEMS) {
-    const fs = (s.factors ?? []).filter(f => factors[f] !== undefined).map(f => Number(factors[f])); const factor = fs.length ? Math.min(...fs) : null;
+    const fs = (s.factors ?? []).filter(f => factors[f] !== undefined).map(f => Number(factors[f]));
+    // Homelessness is graded on the count only when the census has it; the other zero-if-absent systems need a non-empty happiness list.
+    const hlKnown = s.system === 'Homelessness' && snap.jobs?.homeless !== undefined && Number(snap.city?.pop ?? 0) > 0;
+    const absent = ZERO_IF_ABSENT.has(s.system) && Object.keys(factors).length > 0 && fs.length === 0 && (s.system !== 'Homelessness' || hlKnown);
+    const listed = fs.length ? Math.min(...fs) : null; const factor = listed ?? (absent ? 0 : null);
     const ts = (s.table ?? []).map(k => i.table?.[k]).filter(Boolean) as { pct: number | null; projected: number | null; status: string }[];
     const t = ts.sort((a, b) => (b.projected ?? 0) - (a.projected ?? 0))[0] ?? null;
     const cov = s.cov && i.coverage?.[s.cov] !== undefined ? Number(i.coverage[s.cov]) : null;
     const iconCount = s.icons ? Object.entries(icons).filter(([k]) => s.icons!.test(k)).reduce((a, [, v]) => a + Number(v), 0) : 0;
     const need = s.need ? snap.needs?.[s.need] : null; const waiting = Number(need?.dead ?? 0) + Number(need?.sick ?? 0) + Number(need?.unserved ?? 0);
-    let extra: Grade = iconCount >= 20 ? 'bad' : 'good'; let outcome = [factor !== null ? `factor ${factor}` : '', iconCount ? `${iconCount} icons` : '', waiting ? `${waiting} waiting` : ''].filter(Boolean).join(', ');
+    let extra: Grade = iconCount >= 20 ? 'bad' : 'good'; let outcome = [factor !== null ? `factor ${factor}${listed === null ? ' (not listed: below 0.5, no effect)' : ''}` : '', iconCount ? `${iconCount} icons` : '', waiting ? `${waiting} waiting` : ''].filter(Boolean).join(', ');
     let value: number | null = factor;
+    if (s.system === 'Telecom' && i.extra?.telecom) outcome = [`${i.extra.telecom.buildings} telecom buildings, network capacity ${i.extra.telecom.capacity}`, outcome].filter(Boolean).join(', ');
     // Headline: flow weighted by vehicles (how fast the average vehicle moves against free speed).
     // The game's own citywide figure is an unweighted mean over road edges, in which an empty small
     // street reads about 45% and a free highway 93%: it cannot reach 75% in a street grid and it hides
@@ -102,8 +124,15 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
     if (s.system === 'Electricity' && oc.power) { const mix = oc.power.mix ?? {}; const dirty = Number(mix.coal?.n ?? 0) + Number(mix.gas?.n ?? 0); outcome = `clean share of use ${oc.power.cleanShareOfUsePct}% (${Object.entries(mix).map(([k, v]: [string, any]) => `${k} ${v.n}`).join(', ')})${Number(oc.power.heldBack ?? 0) ? `, ${oc.power.heldBack} producers held back` : ''}; ${outcome}`; extra = worst(extra, Number(oc.power.heldBack ?? 0) > 0 ? 'bad' : dirty > 0 ? 'ok' : 'good'); }
     if (s.system === 'Sewage' && oc.sewage) { outcome = `${oc.sewage.rawOutlets} raw outlets; ${outcome}`; extra = worst(extra, Number(oc.sewage.rawOutlets) > 0 ? 'ok' : 'good'); }
     if (s.system === 'Police' && oc.crime) { outcome = `high crime in ${oc.crime.highSharePct}% of buildings; ${outcome}`; extra = worst(extra, Number(oc.crime.highSharePct) >= 30 ? 'bad' : 'good'); }
+    // Homelessness: the census count against the population. Good at 0, ok when small, bad above 0.5% or when rising.
+    if (hlKnown) {
+      const hl = Number(snap.jobs.homeless), pop = Number(snap.city.pop), share = 100 * hl / pop, v = -share * 10;
+      const rising = i.prev?.[s.system] !== undefined && v < Number(i.prev[s.system]) - 0.2;
+      outcome = [`${hl} homeless (${share.toFixed(2)}% of ${pop})`, outcome].filter(Boolean).join(', ');
+      extra = worst(extra, share > 0.5 || rising ? 'bad' : share > 0 ? 'ok' : 'good'); value = v;
+    }
     const vk = (s.table ?? []).map(k => i.vehicles?.[k]).filter(Boolean)[0];
-    add({ raw: { capacityPct: t?.pct ?? null, projectedPct: t?.projected ?? null, uncoveredPct: cov, factor, busyPct: vk?.busyPct ?? null, efficiencyPct: vk?.efficiencyPct ?? null, icons: iconCount }, system: s.system, status: gradeOf(factor, t?.status ?? null, cov, extra), outcome: outcome || '-', capacity: t ? `${t.pct ?? '-'}%${t.projected !== null && t.projected !== t.pct ? ' -> ' + t.projected + '% planned' : ''}` : '-', coverage: cov === null ? '-' : `${cov}% homes uncovered`, trend: '', action: s.action, blocked: i.blocked?.[s.need ?? ''] ?? '', value: value ?? (t?.pct !== null && t?.pct !== undefined ? -t.pct / 20 : null) });
+    add({ raw: { capacityPct: t?.pct ?? null, projectedPct: t?.projected ?? null, uncoveredPct: cov, factor, busyPct: vk?.busyPct ?? null, efficiencyPct: vk?.efficiencyPct ?? null, icons: iconCount }, system: s.system, status: absent ? extra : gradeOf(factor, t?.status ?? null, cov, extra), outcome: outcome || '-', capacity: t ? `${t.pct ?? '-'}%${t.projected !== null && t.projected !== t.pct ? ' -> ' + t.projected + '% planned' : ''}` : '-', coverage: cov === null ? '-' : `${cov}% homes uncovered`, trend: '', action: s.action, blocked: i.blocked?.[s.need ?? ''] ?? '', value: value ?? (t?.pct !== null && t?.pct !== undefined ? -t.pct / 20 : null) });
   }
   const oc = i.outcomes;
   if (oc?.parking) { const full = Number(oc.parking.kerbLanesFullPct ?? 0); const g = Number(oc.parking.garageCapacity ?? 0) > 0 ? Math.round(100 * Number(oc.parking.garageCars) / Number(oc.parking.garageCapacity)) : null;
@@ -128,7 +157,26 @@ export function buildReport(i: ReportInput): { markdown: string; values: Record<
   const floor = Number(i.netFloor ?? 0);
   add({ system: 'Budget', status: net < 0 || (floor > 0 && net < floor) || (Number(i.reserve ?? 0) > 0 && cash < Number(i.reserve)) ? 'critical' : 'good', outcome: `${floor > 0 ? `net floor ${floor}, spendable upkeep ${net - floor}; ` : ''}${i.reserve ? `cash reserve ${i.reserve}, spendable cash ${cash - Number(i.reserve)}; ` : ''}cash ${cash}, net ${net}/month, taxes ${JSON.stringify(snap.tax ?? {})}, Tax factor ${factors.Tax ?? '-'} (exempt)`, capacity: '-', coverage: '-', trend: '', action: 'reserve 1,000,000; taxes pinned', blocked: '', value: net / 100000 });
   add({ system: 'Milestone', status: 'ok', outcome: `milestone ${snap.milestone?.achieved}, XP ${snap.milestone?.xp}/${snap.milestone?.nextXp}`, capacity: '-', coverage: '-', trend: '', action: 'grow population and happiness', blocked: '', value: Number(snap.milestone?.xp ?? 0) / 1000 });
-  for (const n of NOT_READ) rows.push({ system: n, status: 'unknown', outcome: 'not read by the bridge yet', capacity: '-', coverage: '-', trend: '', action: 'add a reader', blocked: 'harness', value: null });
+  // Public transport (transit_lines): a line with a segment that has no path, or a stop queue of 200+, is bad;
+  // half the lines running with nobody aboard or waiting is ok.
+  const tr = i.extra?.transit;
+  if (tr) {
+    const modes = Object.entries(tr.byMode).sort((a, b) => b[1].lines - a[1].lines).map(([m, v]) => `${m} ${v.lines}`).join(', ');
+    const emptyShare = tr.lines ? tr.empty / tr.lines : 0;
+    const status: Grade = tr.linesNoPath > 0 || tr.stopsQueued > 0 ? 'bad' : tr.lines > 0 && emptyShare >= 0.5 ? 'ok' : 'good';
+    add({ system: 'Public transport', status, outcome: `${tr.lines} lines (${modes || 'none'}), ${tr.vehicles} vehicles, ${tr.aboard} riders aboard, ${tr.waiting} waiting at line stops, ${tr.segmentsNoPath} segments without a path on ${tr.linesNoPath} line(s), ${tr.empty} lines carrying nobody, largest stop queue ${tr.maxStopWaiting}${tr.stopsQueued ? ` (${tr.stopsQueued} stop(s) at ${STOP_QUEUE_BAD}+)` : ''}`,
+      capacity: tr.seats > 0 ? `${tr.aboard} of ${tr.seats} seats used` : '-', coverage: '-', trend: '', action: 'lines with a segment without a path first (reroute or rebuild that line); a second stop or line where a stop queues 200+; cut or merge lines carrying nobody', blocked: '', value: -(tr.segmentsNoPath / 10 + tr.maxStopWaiting / 1000) });
+  } else rows.push(unread('Public transport', `not read: ${i.extra?.transitError ?? 'no transit reading in this report'}`, 'retry at the next review; if it repeats, check transit_lines in the mod'));
+  // Outside connections (outside_connections): no transport link is bad; a missing power or water link is ok.
+  // Use per connection is not read by the mod, so no connection is graded as unused.
+  const oc2 = i.extra?.outside;
+  if (oc2) {
+    const absent = ['road', 'train', 'ship', 'air'].filter(m => !oc2.byMode[m]);
+    const status: Grade = oc2.transport === 0 ? 'bad' : oc2.power === 0 || oc2.pipe === 0 ? 'ok' : 'good';
+    add({ system: 'Outside connections', status, outcome: `${oc2.transport} transport (road ${oc2.byMode.road ?? 0}, train ${oc2.byMode.train ?? 0}, ship ${oc2.byMode.ship ?? 0}, air ${oc2.byMode.air ?? 0}), ${oc2.power} power, ${oc2.pipe} water pipe; no link by ${absent.join(', ') || 'none'}; use per connection not read`,
+      capacity: '-', coverage: '-', trend: '', action: 'a road or rail link if transport is 0; a power or water link if the grid or water needs imports; per-connection use needs a mod reader (traffic on each outside road)', blocked: '', value: null });
+  } else rows.push(unread('Outside connections', `not read: ${i.extra?.outsideError ?? 'no outside connection reading in this report'}`, 'retry at the next review'));
+  for (const n of NOT_READ) rows.push(unread(n, `needs a mod reader: ${NEEDS[n]}`));
   // Diagnosis (Phase 4): the cause class of every bad row, and root causes before knock-on effects.
   const flowPct = Number.isFinite(Number(snap.cityFlow)) ? Number(snap.cityFlow) : null;
   for (const r of rows) { const d = diagnose({ system: r.system, status: r.status, blocked: r.blocked || null, flowPct, ...(r.raw ?? {}) }); r.cause = d.cause; r.why = d.why; r.fix = d.fix; }

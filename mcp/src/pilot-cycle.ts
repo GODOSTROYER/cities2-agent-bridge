@@ -10,6 +10,7 @@ import { promises as fs, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decide, learn, progressBlock, selfCheck } from './pilot.ts';
 import { buildReport } from './report.ts';
+import { readExtra } from './report-extra.ts';
 import { evaluate, effectsTable, effectsLines, undoCandidates, stopRepeating } from './effects.ts';
 import { netFloor, upkeepBudget, waitingFor } from './budget.ts';
 import { loadQueue, saveQueue, queueLine, queueDoing, queueAttention, stalled, nextCodeItem, applyCodeResult, queueMarkdown, feedDesignQueue, unblocked } from './queue.ts';
@@ -133,7 +134,8 @@ export async function runCycle(tool: ToolFn, repo: string): Promise<{ line: stri
       let design: any; try { design = await tool('design_audit', { top: 12 }); if (design?.ok) { st.design = { total: design.total, counts: design.counts, line: design.line }; const changed = feedDesignQueue(q.items, design.counts, design.worst ?? [], new Date().toISOString()); if (changed) await saveQueue(repo, q.items); } } catch (e: any) { await log({ event: 'design_audit_failed', error: String(e?.message ?? e) }); }
       // Prisons ahead of need (owner: use at 75-80% or lower): past 78% the loop queues one more prison in Northgate and builds it itself.
       if (prisonState && Number(prisonState.capacity) > 0 && Number(prisonState.prisoners) / Number(prisonState.capacity) >= 0.78 && !q.items.some(i => i.id === 'prison-capacity' && i.status !== 'done' && i.status !== 'dropped')) { const iso = new Date().toISOString(); q.items = q.items.filter(i => i.id !== 'prison-capacity'); q.items.push({ id: 'prison-capacity', title: `Prisons at ${Math.round(100 * prisonState.prisoners / prisonState.capacity)}% of places: one more Prison01 in Northgate (by the loop)`, priority: 2, status: 'queued', owner: 'code', created: iso, updated: iso, code: { tool: 'place_service', args: { prefab: 'Prison01', x: 1120, z: 1900, radius: 900 }, times: 1, done: 0 } }); await saveQueue(repo, q.items); }
-      const rep = buildReport({ snap, outcomes, design: design?.ok ? design : undefined, fees: st.feeLines, prisons: prisonState, vehicles, garbage: garbageState, sewageExport, worked, undo, reserve: Number(policy.cashReserve ?? 0), netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
+      const extra = await readExtra(tool); // transit, outside connections, telecom headroom: read-only, never throws
+      const rep = buildReport({ snap, outcomes, extra, design: design?.ok ? design : undefined, fees: st.feeLines, prisons: prisonState, vehicles, garbage: garbageState, sewageExport, worked, undo, reserve: Number(policy.cashReserve ?? 0), netFloor: snap.netFloor, mode: snap.pilotMode, table: memo.table, coverage: memo.coverage, blocked: memo.blocked, did: st.did, diagnosis: plan.diagnosis, when: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', prev: st.reportValues });
       const before = st.reportStatus ?? {}; const order = ['good', 'ok', 'unknown', 'bad', 'critical'];
       st.changes = rep.rows.filter(r => before[r.system] && before[r.system] !== r.status && r.status !== 'unknown').map(r => `${r.system}: ${before[r.system]} -> ${r.status}${order.indexOf(r.status) > order.indexOf(before[r.system]) ? ' (WORSE)' : ''}`);
       st.reportValues = rep.values; st.reportStatus = Object.fromEntries(rep.rows.map(r => [r.system, r.status]));

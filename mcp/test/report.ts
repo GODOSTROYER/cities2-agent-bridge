@@ -1,5 +1,6 @@
 // Offline checks for the city report (journals/REPORT.md).
 import { buildReport, gradeOf, NOT_READ } from '../src/report.ts';
+import { summarizeTransit, summarizeOutside, readExtra } from '../src/report-extra.ts';
 let failed = 0; const check = (ok: boolean, label: string) => { console.log((ok ? 'PASS: ' : 'FAIL: ') + label); if (!ok) failed++; };
 
 check(gradeOf(6.3, 'ok', 24) === 'ok', 'post with a good factor and spare capacity but 24% of homes uncovered is only ok');
@@ -48,4 +49,64 @@ const r3 = buildReport({ snap, table, netFloor: 1_100_000, mode: 'improve', when
 check(r3.markdown.includes('## Definition of done') && r3.markdown.includes('- [ ] every happiness factor except Tax at 0 or better: TrafficPenalty -3.8') && r3.markdown.includes('- [ ] net at or above the floor: net 1050000, floor 1100000') && r3.rows.find(x => x.system === 'Budget')!.status === 'critical', 'the definition of done is a checklist; net under the floor fails it and makes the budget critical');
 check(buildReport({ snap: { ...snap, happiness: { Tax: -5, Leisure: 2 }, icons: {}, cityFlow: 80 }, netFloor: 1_000_000, when: 'x' }).markdown.includes('- [x] every happiness factor except Tax at 0 or better'), 'Tax is exempt in the checklist');
 check(r.markdown.includes('| system | status | cause | outcome |') && Object.keys(r.values).length > 10, 'one table, and the values for the next trend are returned');
+// ---- data the bridge already reads (report-extra.ts) ----
+const rowOf = (rep: { rows: { system: string }[] }, name: string) => rep.rows.find(x => x.system === name) as any;
+// Shaped like the live transit_lines reply (lines: prefab, vehicles, aboard, waiting, segmentsWithoutPath; stops: kind, waiting).
+const tLines = [
+  { prefab: 'Bus Line', vehicles: 7, aboard: 98, waiting: 52, segmentsWithoutPath: 4 }, { prefab: 'Bus Line', vehicles: 8, aboard: 72, waiting: 37, segmentsWithoutPath: 0 },
+  { prefab: 'Bus Line', vehicles: 1, aboard: 0, waiting: 0, segmentsWithoutPath: 0 }, { prefab: 'Tram Line', vehicles: 10, aboard: 10, waiting: 207, segmentsWithoutPath: 4 },
+  { prefab: 'Tram Line', vehicles: 13, aboard: 220, waiting: 47, segmentsWithoutPath: 0 }, { prefab: 'Passenger Train Line', vehicles: 4, aboard: 78, waiting: 23, segmentsWithoutPath: 0 }];
+const tStops = [{ kind: 'bus', waiting: 5 }, { kind: 'tram', waiting: 207 }, { kind: 'train' }];
+const ts = summarizeTransit(tLines, tStops);
+check(ts.lines === 6 && ts.vehicles === 43 && ts.aboard === 478 && ts.waiting === 366 && ts.empty === 1 && ts.linesNoPath === 2 && ts.segmentsNoPath === 8 && ts.stopsQueued === 1 && ts.maxStopWaiting === 207, 'transit totals: 6 lines, 43 vehicles, 478 aboard, 2 lines with 8 segments without a path, 1 stop queued at 200+');
+check(ts.byMode.bus.lines === 3 && ts.byMode.tram.lines === 2 && ts.byMode.train.lines === 1, 'transit lines are counted by mode from the prefab name');
+const rt = rowOf(buildReport({ snap, extra: { transit: ts }, when: 'x' }), 'Public transport');
+check(rt.status === 'bad' && rt.outcome.includes('8 segments without a path on 2 line(s)') && rt.outcome.includes('bus 3, tram 2, train 1') && rt.outcome.includes('(1 stop(s) at 200+)'), 'public transport is bad with the real numbers: segments without a path and a stop queue of 200+');
+const tGood = summarizeTransit([{ prefab: 'Bus Line', vehicles: 2, aboard: 5, waiting: 1, segmentsWithoutPath: 0 }], [{ kind: 'bus', waiting: 30 }]);
+check(rowOf(buildReport({ snap, extra: { transit: tGood }, when: 'x' }), 'Public transport').status === 'good', 'public transport is good when every path is there, no queue of 200+ and riders are carried');
+const tEmpty = summarizeTransit([{ prefab: 'Bus Line', vehicles: 3, aboard: 0, waiting: 0, segmentsWithoutPath: 0 }, { prefab: 'Bus Line', vehicles: 2, aboard: 1, waiting: 0, segmentsWithoutPath: 0 }], []);
+check(rowOf(buildReport({ snap, extra: { transit: tEmpty }, when: 'x' }), 'Public transport').status === 'ok', 'half the lines carrying nobody is ok, not bad');
+const rtErr = rowOf(buildReport({ snap, extra: { transitError: 'bridge down' }, when: 'x' }), 'Public transport');
+check(rtErr.status === 'unknown' && rtErr.outcome.includes('bridge down'), 'a failed transit read leaves the row unknown with the error text');
+// Shaped like the live outside_connections reply: 4 road, 2 ship, 2 train, 4 airplane, 1 power, 1 water pipe.
+const oConns = [...Array(4).fill({ kind: 'transport', prefab: 'Road Outside Connection - Oneway' }), ...Array(2).fill({ kind: 'transport', prefab: 'Ship Outside Connection - Twoway' }), ...Array(2).fill({ kind: 'transport', prefab: 'Train Outside Connection - Twoway' }), ...Array(4).fill({ kind: 'transport', prefab: 'Airplane Outside Connection' }), { kind: 'power', prefab: 'Powerline Outside Connection' }, { kind: 'pipe', prefab: 'Water Outside Connection' }];
+const os = summarizeOutside(oConns);
+check(os.transport === 12 && os.power === 1 && os.pipe === 1 && os.byMode.road === 4 && os.byMode.air === 4, 'outside connections: 12 transport by mode, 1 power, 1 water pipe');
+const ro = rowOf(buildReport({ snap, extra: { outside: os }, when: 'x' }), 'Outside connections');
+check(ro.status === 'good' && ro.outcome.startsWith('12 transport (road 4, train 2, ship 2, air 4), 1 power, 1 water pipe; no link by none'), 'outside connections are good with every link type present, and the outcome says so with the numbers');
+check(rowOf(buildReport({ snap, extra: { outside: summarizeOutside([{ kind: 'power', prefab: 'P' }]) }, when: 'x' }), 'Outside connections').status === 'bad', 'no transport link at all is bad');
+const ro2 = rowOf(buildReport({ snap, extra: { outside: summarizeOutside([{ kind: 'transport', prefab: 'Road Outside Connection' }, { kind: 'pipe', prefab: 'W' }]) }, when: 'x' }), 'Outside connections');
+check(ro2.status === 'ok' && ro2.outcome.includes('no link by train, ship, air') && ro2.outcome.includes('power'), 'a missing power link is ok, and the missing transport modes are named');
+// Telecom and the pollution factors: absent from the list means 0 (no effect), graded on the icons, not unknown.
+check(rowOf(buildReport({ snap, when: 'x' }), 'Telecom').status === 'good' && rowOf(buildReport({ snap, when: 'x' }), 'Telecom').outcome.startsWith('factor 0 (not listed'), 'Telecom absent from the happiness list is good (factor 0), not unknown');
+check(rowOf(buildReport({ snap, when: 'x' }), 'Air pollution').status === 'good' && rowOf(buildReport({ snap, when: 'x' }), 'Ground pollution').status === 'good', 'air and ground pollution absent from the list are good');
+check(rowOf(buildReport({ snap: { ...snap, happiness: {} }, when: 'x' }), 'Telecom').status === 'unknown', 'no happiness list at all keeps Telecom unknown: absence is only 0 when the list was read');
+const rTel = rowOf(buildReport({ snap, extra: { telecom: { capacity: 31500, buildings: 9 } }, when: 'x' }), 'Telecom');
+check(rTel.outcome.startsWith('9 telecom buildings, network capacity 31500'), 'Telecom outcome carries the telecom headroom from get_metrics');
+check(rowOf(buildReport({ snap: { ...snap, happiness: { ...snap.happiness, Telecom: -5.5 } }, when: 'x' }), 'Telecom').status === 'critical' && rowOf(buildReport({ snap: { ...snap, happiness: { ...snap.happiness, Telecom: -4.2 } }, when: 'x' }), 'Telecom').status === 'bad', 'a listed Telecom factor is graded as before: -5.5 critical, -4.2 bad');
+// Homelessness: census count against the population. Good at 0, ok when small, bad above 0.5% or when rising.
+const withHl = (h: number) => ({ ...snap, jobs: { ...snap.jobs, homeless: h } });
+check(rowOf(buildReport({ snap: withHl(0), when: 'x' }), 'Homelessness').status === 'good', 'no homeless citizens is good');
+const hlSmall = rowOf(buildReport({ snap: withHl(40), when: 'x' }), 'Homelessness');
+check(hlSmall.status === 'ok' && hlSmall.outcome.startsWith('40 homeless (0.24% of 17000)'), 'a small homeless count (40 of 17000, 0.24%) is ok with the share shown');
+check(rowOf(buildReport({ snap: withHl(120), when: 'x' }), 'Homelessness').status === 'bad', 'above 0.5% of the population (120 of 17000) is bad');
+check(rowOf(buildReport({ snap: withHl(5), prev: { Homelessness: 0 }, when: 'x' }), 'Homelessness').status === 'bad', 'rising homelessness since the last report is bad even when small');
+check(rowOf(buildReport({ snap, when: 'x' }), 'Homelessness').status === 'unknown', 'no homeless count in the census keeps Homelessness unknown');
+// The rows that are still unread say what is missing.
+const unreadRows = buildReport({ snap, when: 'x' }).rows.filter(x => NOT_READ.includes(x.system));
+check(unreadRows.length === NOT_READ.length && unreadRows.every(x => x.status === 'unknown' && x.outcome.startsWith('needs a mod reader: ')), 'every unread infoview is unknown and names what the mod must read');
+check(!NOT_READ.includes('Transport (no lines: locked in the game)') && !NOT_READ.includes('OutsideConnections'), 'transport and outside connections are no longer listed as unread');
+// readExtra: failure-tolerant, one read per source, unwraps paged replies.
+const allFail = await readExtra(async () => { throw new Error('bridge down'); });
+check(allFail.transitError === 'bridge down' && allFail.outsideError === 'bridge down' && allFail.telecom === undefined, 'readExtra never throws: each failed read records its error');
+const fakeOk = async (_name: string, args: Record<string, any> = {}) => {
+  if (args.command === 'transit_lines') return args.fields[0] === 'lines.prefab' ? { lines: tLines } : { result: { stops: tStops } };
+  if (args.command === 'outside_connections') return { pipes: 1, connections: oConns };
+  if (args.command === 'get_metrics') return { headroom: { telecom: { capacity: 31500, buildings: 9 } } };
+  return {};
+};
+const extraOk = await readExtra(fakeOk);
+check(extraOk.transit?.linesNoPath === 2 && extraOk.transit?.stopsQueued === 1 && extraOk.outside?.transport === 12 && extraOk.telecom?.buildings === 9 && !extraOk.transitError, 'readExtra reads transit (lines and stops, unwrapping a result), outside connections and telecom');
+const extraCut = await readExtra(async (_n, args = {}) => args.command === 'transit_lines' ? { truncated: true, returned: 40, total: 162, result: { stops: [] } } : { connections: [] });
+check(/was cut|no lines/.test(String(extraCut.transitError)) && extraCut.outside?.transport === 0, 'a cut transit reply is an error for that read only; the other read still lands');
 process.exit(failed ? 1 : 0);
