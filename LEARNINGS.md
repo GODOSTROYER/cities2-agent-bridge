@@ -142,6 +142,7 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - GPU/driver trouble or a hang (FAILURES #43): save, quit, report; do not keep relaunching. The trigger is not established.
 
 ## Player notes (Haiku)
+- 22:45 UTC, 18 October 2026: tram depot sites are refused near homes (the depot is a noise source): plan tram depots in non-residential frontage when a tram line is built. find_roadside_lots for TramDepot01 returned 0 candidates in the west (noise rule); the only free lots were far east.
 - 2026-10-13 00:50 UTC: place_service (site finder) cannot see cleared lots; it returns no_roadside_site even where a park fits. Use placeany with the exact point: `node test/placeany.ts '{"prefab":"TennisCourt01","x":-340,"z":-1210,"rotation":0}'` (dry run, then `build`); the game snaps it to the nearest road and block.ts shows `road <edge>`. OverlapExisting at a point means a home's footprint reaches it; remove the nearest home (demolish.ts) and retry.
 - 2026-10-13: zone.ts has no clear option; dezone.ts build clears zoning on cleared cells (it may need two runs).
 - 2026-10-13: linepolicy.ts does not read the slider back; re-read the line list after 15 minutes to confirm a VehicleInterval change.

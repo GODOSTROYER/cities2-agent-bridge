@@ -128,7 +128,7 @@ namespace CitiesIIAgentBridge
                     if (!Inside(t)) continue;
                     var mp = em.GetComponentData<MailProducer>(e);
                     // Residential = carries a HouseholdCitizen buffer (households live there); everything else is "other".
-                    recs.Add((e, t.m_Position.x, t.m_Position.z, mp.m_SendingMail + mp.m_ReceivingMail, em.HasBuffer<Game.Citizens.HouseholdCitizen>(e)));
+                    recs.Add((e, t.m_Position.x, t.m_Position.z, (mp.m_SendingMail & 0x7FFF) + (mp.m_ReceivingMail & 0x7FFF), em.HasBuffer<Game.Citizens.HouseholdCitizen>(e)));
                 }
             });
             Probe(errors, "statistics", () =>

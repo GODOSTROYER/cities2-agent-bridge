@@ -69,6 +69,8 @@ namespace CitiesIIAgentBridge
             // the tens of thousands per building even when the service is fine (FAILURES #105).
             int mailLimit = 50, garbageLimit = 1000; float crimeLimit = 15000;
             using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PostConfigurationData>())) if (!q.IsEmptyIgnoreFilter) mailLimit = Math.Max(1, q.GetSingleton<PostConfigurationData>().m_MailAccumulationTolerance);
+            // The game penalises citizens only above m_NegligibleMail (20), not at the accumulation tolerance (5).
+            using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<CitizenHappinessParameterData>())) if (!q.IsEmptyIgnoreFilter) mailLimit = Math.Max(mailLimit, q.GetSingleton<CitizenHappinessParameterData>().m_NegligibleMail);
             using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<GarbageParameterData>())) if (!q.IsEmptyIgnoreFilter) garbageLimit = Math.Max(1, q.GetSingleton<GarbageParameterData>().m_WarningGarbageLimit);
             using (var q = em.CreateEntityQuery(ComponentType.ReadOnly<PoliceConfigurationData>())) if (!q.IsEmptyIgnoreFilter) crimeLimit = Math.Max(1, q.GetSingleton<PoliceConfigurationData>().m_CrimeAccumulationTolerance);
             o["limits"] = new JObject { ["mail"] = mailLimit, ["garbage"] = garbageLimit, ["crime"] = Math.Round(crimeLimit) };
@@ -78,7 +80,7 @@ namespace CitiesIIAgentBridge
             {
                 if (em.HasComponent<PrefabData>(e) || !em.HasComponent<Game.Objects.Transform>(e)) continue;
                 var pos = em.GetComponentData<Game.Objects.Transform>(e).m_Position;
-                if (em.HasComponent<MailProducer>(e)) { var mp = em.GetComponentData<MailProducer>(e); int total = mp.m_SendingMail + mp.m_ReceivingMail; mail += total; mailBuildings++; if (total > mailLimit) { mailWaiting++; mailWhere.Add((pos.x, pos.z)); } }
+                if (em.HasComponent<MailProducer>(e)) { var mp = em.GetComponentData<MailProducer>(e); int total = (mp.m_SendingMail & 0x7FFF) + (mp.m_ReceivingMail & 0x7FFF); /* the top bit of each UInt16 is a game flag, not mail */ mail += total; mailBuildings++; if (total > mailLimit) { mailWaiting++; mailWhere.Add((pos.x, pos.z)); } }
                 if (em.HasComponent<GarbageProducer>(e)) { int g = em.GetComponentData<GarbageProducer>(e).m_Garbage; garbage += g; garbageBuildings++; if (g > garbageLimit) { garbagePiling++; garbageWhere.Add((pos.x, pos.z)); } }
                 if (em.HasComponent<CrimeProducer>(e)) { float c = em.GetComponentData<CrimeProducer>(e).m_Crime; crimeSum += c; crimeBuildings++; if (c > crimeLimit) crimeHigh++; }
             }
