@@ -50,7 +50,9 @@
   "forbiddenNote": "name parts; no placement path may build these (owner: zero raw sewage, clean power only, recycling only - no landfill, no incinerator)",
   "quality": {
     "bestAvailable": true,
-    "note": "owner standing order: always the best available version of every service building (hospital over clinic, large police, fire and school types), and parks of varied types. Candidates are ordered best first in mcp/src/services.ts (BEST_AVAILABLE); a locked or missing type falls through to the next. Forbidden types are still never placed."
+    "note": "owner standing order: always the best available version of every service building (hospital over clinic, large police, fire and school types), and parks of varied types. Candidates are ordered best first in mcp/src/services.ts (BEST_AVAILABLE); a locked or missing type falls through to the next. Forbidden types are still never placed.",
+    "maxOutUpgrades": true,
+    "noteMaxOut": "owner standing order 19 Oct: every service and resource building, existing and new, gets ALL available upgrades and extensions (mcp/test/maxout.ts); new buildings are maxed when placed, existing ones on every pass, within the cash reserve and net floor."
   },
   "allowedCleanPower": [
     "WindTurbine",
@@ -190,5 +192,6 @@
       "Tax"
     ],
     "note": "owner, 2026-10-13: no happiness factor worse than -2 except Tax; a factor worse than -2 is priority work ahead of expansion"
-  }
+  },
+  "goalOwner2026_10_19": "megalopolis: a huge, beautiful, amazing city; grow district by district under CITYPLAN-GRAND.md (boulevards, squares, waterfronts, landmarks, parks everywhere, best roads), every service maxed out, no happiness factor worse than -2 except Tax, money floors unchanged."
 }
