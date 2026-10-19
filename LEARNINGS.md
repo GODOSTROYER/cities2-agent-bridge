@@ -142,6 +142,8 @@ Agents: start with PLAY.md and `play.ps1` (token-efficient). This file explains 
 - GPU/driver trouble or a hang (FAILURES #43): save, quit, report; do not keep relaunching. The trigger is not established.
 
 ## Player notes (Haiku)
+- 2026-10-19 02:51 UTC: there is no storage or warehouse zone in this game version (the zone list has res, resmed, resmid, reshigh, mixed, com, ind, off and offhigh; a prefab lookup for Storage and Warehouse names found nothing). Storage demand reads 10 at times; it cannot be met by zoning.
+- 2026-10-19 02:51 UTC: a Medium road that ends 100 m short of a junction can be refused InvalidShape; split it into two pieces through a midpoint node and both preview clean (done at (1500,2504) to (1600,2504) via x 1550).
 - 22:45 UTC, 18 October 2026: tram depot sites are refused near homes (the depot is a noise source): plan tram depots in non-residential frontage when a tram line is built. find_roadside_lots for TramDepot01 returned 0 candidates in the west (noise rule); the only free lots were far east.
 - 2026-10-13 00:50 UTC: place_service (site finder) cannot see cleared lots; it returns no_roadside_site even where a park fits. Use placeany with the exact point: `node test/placeany.ts '{"prefab":"TennisCourt01","x":-340,"z":-1210,"rotation":0}'` (dry run, then `build`); the game snaps it to the nearest road and block.ts shows `road <edge>`. OverlapExisting at a point means a home's footprint reaches it; remove the nearest home (demolish.ts) and retry.
 - 2026-10-13: zone.ts has no clear option; dezone.ts build clears zoning on cleared cells (it may need two runs).
